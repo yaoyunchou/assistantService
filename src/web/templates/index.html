@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}首页 - {{ config.APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>欢迎使用 {{ config.APP_NAME }}</h2>
+    <p class="subtitle">集成多种实用工具的桌面应用</p>
+</div>
+
+<div class="tools-grid">
+    {% for tool in tools %}
+    <div class="tool-card">
+        <div class="tool-icon">{{ tool.icon or '🔧' }}</div>
+        <h3 class="tool-name">{{ tool.display_name }}</h3>
+        <p class="tool-description">{{ tool.description }}</p>
+        <a href="{{ url_for('tool_page', tool_name=tool.name) }}" class="tool-link">
+            使用工具 →
+        </a>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="info-section">
+    <h3>使用说明</h3>
+    <ul>
+        <li>点击左侧导航栏或上方工具卡片进入相应工具</li>
+        <li>所有工具都支持通过API调用</li>
+        <li>应用会在系统托盘显示图标，右键可进行相关操作</li>
+    </ul>
+</div>
+{% endblock %}

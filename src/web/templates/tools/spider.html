@@ -1,0 +1,484 @@
+{% extends "base.html" %}
+
+{% block title %}{{ tool.display_name }} - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+/* Tab切换样式 */
+.tab-container {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+    width: 100%;
+    max-width: none;
+}
+
+.tab-header {
+    display: flex;
+    width: 100%;
+    border-bottom: 2px solid #e0e0e0;
+    background: #f8f9fa;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    gap: 0;
+    align-items: stretch;
+}
+
+.tab-button {
+    padding: 16px 32px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 500;
+    color: #7f8c8d;
+    transition: all 0.3s ease;
+    position: relative;
+    border-bottom: 3px solid transparent;
+    margin: 0;
+    outline: none;
+    text-align: center;
+    min-height: 56px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+    min-width: 140px;
+    flex-shrink: 0;
+}
+
+.tab-button::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background: transparent;
+    transition: all 0.3s ease;
+}
+
+.tab-button:hover {
+    background: rgba(52, 152, 219, 0.08);
+    color: #3498db;
+}
+
+.tab-button:hover::after {
+    background: rgba(52, 152, 219, 0.3);
+}
+
+.tab-button.active {
+    color: #3498db;
+    background: white;
+    font-weight: 600;
+    border-bottom-color: #3498db;
+}
+
+.tab-button.active::after {
+    background: #3498db;
+}
+
+.tab-content {
+    display: none;
+    padding: 30px;
+    animation: fadeIn 0.3s ease;
+    min-height: 200px;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.tab-content .query-section {
+    margin-bottom: 0;
+}
+
+.tab-content .query-section h3 {
+    display: none; /* 隐藏原来的h3标题，因为tab已经显示了 */
+}
+
+/* 批量查询结果展开/收起样式 */
+.batch-results {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.batch-result-card {
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 20px;
+    background: white;
+    transition: all 0.3s ease;
+}
+
+.batch-result-card:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.batch-result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+}
+
+.batch-result-header h4 {
+    margin: 0;
+    color: #2c3e50;
+    font-size: 16px;
+}
+
+.batch-result-meta {
+    display: flex;
+    gap: 20px;
+    margin-top: 8px;
+    font-size: 14px;
+    color: #7f8c8d;
+}
+
+.expand-toggle {
+    background: #3498db;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.expand-toggle:hover {
+    background: #2980b9;
+    transform: scale(1.05);
+}
+
+.expand-toggle .icon {
+    transition: transform 0.3s ease;
+    font-size: 14px;
+}
+
+.expand-toggle.expanded .icon {
+    transform: rotate(180deg);
+}
+
+.batch-logistics-list {
+    margin-top: 15px;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.4s ease, opacity 0.3s ease;
+    opacity: 0;
+}
+
+.batch-logistics-list.expanded {
+    max-height: 2000px;
+    opacity: 1;
+}
+
+.batch-logistics-list ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.batch-logistics-list li {
+    padding: 12px 0;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.batch-logistics-list li:last-child {
+    border-bottom: none;
+}
+
+.batch-logistics-list li:first-child {
+    padding-top: 0;
+}
+
+.logistics-preview {
+    padding: 12px 0;
+    border-bottom: 1px solid #f0f0f0;
+    color: #2c3e50;
+}
+
+.logistics-preview .logistics-time {
+    font-weight: 600;
+    color: #3498db;
+    margin-bottom: 4px;
+}
+
+.logistics-preview .logistics-context {
+    color: #34495e;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>{{ tool.display_name }}</h2>
+    <p class="subtitle">{{ tool.description }}</p>
+</div>
+
+<div class="tab-container">
+    <!-- Tab头部 -->
+    <div class="tab-header">
+        <button class="tab-button active" data-tab="single">单个查询</button>
+        <button class="tab-button" data-tab="batch">批量查询</button>
+    </div>
+    
+    <!-- Tab内容 -->
+    <!-- 单个查询Tab -->
+    <div id="tab-single" class="tab-content active">
+        <div class="query-section">
+            <div class="query-form">
+                <input type="text" id="single-waybill" class="waybill-input" placeholder="请输入快递单号">
+                <button id="query-single-btn" class="query-btn">查询</button>
+            </div>
+            <div id="single-result" class="result-area"></div>
+        </div>
+    </div>
+    
+    <!-- 批量查询Tab -->
+    <div id="tab-batch" class="tab-content">
+        <div class="query-section">
+            <div class="query-form" style="flex-direction: column;">
+                <textarea id="batch-waybills" class="waybill-textarea" placeholder="请输入快递单号，每行一个"></textarea>
+                <button id="query-batch-btn" class="query-btn" style="align-self: flex-start;">批量查询</button>
+            </div>
+            <div id="batch-result" class="result-area"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Tab切换功能
+document.addEventListener('DOMContentLoaded', function() {
+    const tabButtons = document.querySelectorAll('.tab-button');
+    const tabContents = document.querySelectorAll('.tab-content');
+    
+    tabButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            const targetTab = this.getAttribute('data-tab');
+            
+            // 移除所有active类
+            tabButtons.forEach(btn => btn.classList.remove('active'));
+            tabContents.forEach(content => content.classList.remove('active'));
+            
+            // 添加active类到当前tab
+            this.classList.add('active');
+            document.getElementById(`tab-${targetTab}`).classList.add('active');
+        });
+    });
+});
+
+// 单个查询
+document.getElementById('query-single-btn').addEventListener('click', async function() {
+    const waybill = document.getElementById('single-waybill').value.trim();
+    if (!waybill) {
+        alert('请输入快递单号');
+        return;
+    }
+    
+    const resultDiv = document.getElementById('single-result');
+    resultDiv.innerHTML = '<p>查询中...</p>';
+    
+    try {
+        const response = await fetch(`/query?waybill=${encodeURIComponent(waybill)}`);
+        const data = await response.json();
+        displayResult(resultDiv, data, waybill);
+    } catch (error) {
+        resultDiv.innerHTML = `<p class="error">查询失败: ${error.message}</p>`;
+    }
+});
+
+// 批量查询
+document.getElementById('query-batch-btn').addEventListener('click', async function() {
+    const textarea = document.getElementById('batch-waybills');
+    const waybills = textarea.value.trim().split('\n').filter(w => w.trim());
+    
+    if (waybills.length === 0) {
+        alert('请输入至少一个快递单号');
+        return;
+    }
+    
+    const resultDiv = document.getElementById('batch-result');
+    resultDiv.innerHTML = '<p>查询中，请稍候...</p>';
+    
+    try {
+        const response = await fetch('/batch', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ waybills: waybills })
+        });
+        const data = await response.json();
+        displayBatchResult(resultDiv, data);
+    } catch (error) {
+        resultDiv.innerHTML = `<p class="error">查询失败: ${error.message}</p>`;
+    }
+});
+
+// 显示单个查询结果
+function displayResult(container, data, waybill) {
+    if (!data.success || !data.data.success) {
+        container.innerHTML = `<p class="error">查询失败: ${data.data.error || '未知错误'}</p>`;
+        return;
+    }
+    
+    const result = data.data;
+    let html = `<div class="result-card">
+        <h4>快递单号: ${waybill}</h4>
+        <p><strong>快递公司:</strong> ${result.company || '未知'}</p>
+        <p><strong>状态:</strong> ${getStateText(result.state)}</p>
+        <div class="logistics-list">`;
+    
+    if (result.data && result.data.length > 0) {
+        html += '<h5>物流信息:</h5><ul>';
+        result.data.forEach(item => {
+            html += `<li>
+                <div class="logistics-time">${item.time || ''}</div>
+                <div class="logistics-context">${item.context || ''}</div>
+                ${item.location ? `<div class="logistics-location">${item.location}</div>` : ''}
+            </li>`;
+        });
+        html += '</ul>';
+    } else {
+        html += '<p>暂无物流信息</p>';
+    }
+    
+    html += '</div></div>';
+    container.innerHTML = html;
+}
+
+// 显示批量查询结果
+function displayBatchResult(container, data) {
+    if (!data.success) {
+        container.innerHTML = `<p class="error">查询失败: ${data.error || '未知错误'}</p>`;
+        return;
+    }
+    
+    let html = '<div class="batch-results">';
+    let cardIndex = 0;
+    
+    for (const [waybill, result] of Object.entries(data.data)) {
+        if (result && result.success) {
+            const hasLogistics = result.data && result.data.length > 0;
+            const logisticsCount = hasLogistics ? result.data.length : 0;
+            const cardId = `batch-card-${cardIndex}`;
+            
+            html += `<div class="batch-result-card" id="${cardId}">
+                <div class="batch-result-header" onclick="toggleBatchLogistics('${cardId}')">
+                    <div>
+                        <h4>快递单号: ${waybill}</h4>
+                        <div class="batch-result-meta">
+                            <span><strong>快递公司:</strong> ${result.company || '未知'}</span>
+                            <span><strong>状态:</strong> ${getStateText(result.state)}</span>
+                            ${logisticsCount > 0 ? `<span><strong>物流记录:</strong> ${logisticsCount} 条</span>` : ''}
+                        </div>
+                    </div>
+                    ${logisticsCount > 1 ? `<button class="expand-toggle" id="toggle-${cardId}">
+                        <span class="icon">▼</span>
+                        <span class="toggle-text">展开</span>
+                    </button>` : ''}
+                </div>`;
+            
+            // 显示物流详情
+            if (hasLogistics) {
+                // 第一条作为预览（始终显示）
+                const firstItem = result.data[0];
+                html += `<div class="logistics-preview">
+                    <div class="logistics-time">${firstItem.time || ''}</div>
+                    <div class="logistics-context">${firstItem.context || ''}</div>
+                    ${firstItem.location ? `<div class="logistics-location">${firstItem.location}</div>` : ''}
+                </div>`;
+                
+                // 其余物流信息（可展开/收起）
+                if (result.data.length > 1) {
+                    html += `<div class="batch-logistics-list" id="logistics-${cardId}">
+                        <ul>`;
+                    // 从第二条开始显示
+                    for (let i = 1; i < result.data.length; i++) {
+                        const item = result.data[i];
+                        html += `<li>
+                            <div class="logistics-time">${item.time || ''}</div>
+                            <div class="logistics-context">${item.context || ''}</div>
+                            ${item.location ? `<div class="logistics-location">${item.location}</div>` : ''}
+                        </li>`;
+                    }
+                    html += '</ul></div>';
+                }
+            } else {
+                html += '<p style="margin-top: 15px; color: #7f8c8d;">暂无物流信息</p>';
+            }
+            
+            html += '</div>';
+            cardIndex++;
+        } else {
+            html += `<div class="batch-result-card error">
+                <h4>${waybill}</h4>
+                <p class="error">查询失败: ${result.error || '未知错误'}</p>
+            </div>`;
+        }
+    }
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+// 切换批量查询结果的展开/收起
+function toggleBatchLogistics(cardId) {
+    const logisticsList = document.getElementById(`logistics-${cardId}`);
+    const toggleBtn = document.getElementById(`toggle-${cardId}`);
+    
+    if (!logisticsList || !toggleBtn) return;
+    
+    const isExpanded = logisticsList.classList.contains('expanded');
+    const toggleText = toggleBtn.querySelector('.toggle-text');
+    
+    if (isExpanded) {
+        logisticsList.classList.remove('expanded');
+        toggleBtn.classList.remove('expanded');
+        toggleText.textContent = '展开';
+    } else {
+        logisticsList.classList.add('expanded');
+        toggleBtn.classList.add('expanded');
+        toggleText.textContent = '收起';
+    }
+}
+
+// 获取状态文本
+function getStateText(state) {
+    const stateMap = {
+        '0': '在途',
+        '1': '揽收',
+        '2': '疑难',
+        '3': '已签收',
+        '4': '已退回'
+    };
+    return stateMap[state] || '未知';
+}
+
+// 回车键查询
+document.getElementById('single-waybill').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+        document.getElementById('query-single-btn').click();
+    }
+});
+</script>
+{% endblock %}
