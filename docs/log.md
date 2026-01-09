@@ -1,5 +1,71 @@
 # 变更日志
 
+## 2026-01-XX - 项目改造：蕉内工具箱 → 如意助手
+
+### 重大更新
+
+**改造内容**:
+- 项目名称从"蕉内工具箱"改为"如意助手"
+- 版本号更新为 2.0.0
+- 实现功能模块配置系统，支持模块的启用/禁用和启动时机控制
+- 新增Python脚本执行功能
+- 优化资源占用，实现浏览器池延迟加载和空闲超时自动关闭
+- 将快递查询功能改为可选模块（默认禁用）
+
+**新增功能**:
+1. **功能模块配置系统** (`src/config/modules.py`, `src/utils/module_manager.py`):
+   - 支持模块的启用/禁用配置
+   - 支持启动时初始化控制
+   - 支持配置持久化（JSON文件）
+   - 支持模块依赖检查
+
+2. **Python脚本执行工具** (`src/tools/script_tool.py`):
+   - 支持执行Python脚本
+   - 支持参数传递和结果返回
+   - 支持执行超时控制
+   - 支持沙箱模式（限制危险操作）
+
+3. **脚本管理器** (`src/utils/script_manager.py`):
+   - 脚本文件管理（保存、读取、删除）
+   - 脚本分类管理
+   - 脚本执行历史记录
+
+4. **脚本执行API** (`src/api/routes.py`):
+   - `POST /api/script/execute` - 执行脚本
+   - `GET /api/script/list` - 获取脚本列表
+   - `POST /api/script/save` - 保存脚本
+   - `GET/DELETE /api/script/<script_id>` - 获取/删除脚本
+   - `GET /api/script/<script_id>/history` - 获取执行历史
+   - `GET /api/script/categories` - 获取分类列表
+
+**优化内容**:
+1. **浏览器池延迟加载** (`src/spider/query_manager.py`):
+   - 改为按需初始化（首次使用时才创建）
+   - 添加空闲超时自动关闭机制（默认300秒）
+   - 添加最后使用时间跟踪
+
+2. **工具初始化优化** (`src/app.py`, `src/tools/manager.py`):
+   - 根据模块配置决定初始化哪些工具
+   - 启动时只初始化 `init_on_startup=True` 的模块
+   - 支持工具的延迟加载和动态注册
+
+3. **快递查询功能改为可选**:
+   - 通过模块配置系统控制
+   - 默认配置：`enabled=False, init_on_startup=False`
+   - 用户可以通过配置文件或API启用
+
+**文件变更**:
+- 新增：`src/config/modules.py` - 模块配置定义
+- 新增：`src/utils/module_manager.py` - 模块管理器
+- 新增：`src/tools/script_tool.py` - 脚本执行工具
+- 新增：`src/utils/script_manager.py` - 脚本管理器
+- 修改：`src/config.py` - 添加模块配置相关配置项和函数
+- 修改：`src/app.py` - 优化工具初始化逻辑，支持模块配置
+- 修改：`src/tools/manager.py` - 添加延迟加载支持
+- 修改：`src/spider/query_manager.py` - 添加延迟初始化和空闲超时机制
+- 修改：`src/api/routes.py` - 添加脚本执行相关API
+- 修改：`src/main.py` - 更新浏览器池初始化逻辑
+
 ## 2026-01-08 - 修复日志文件权限问题，解决开机自启失败
 
 ### Bug修复

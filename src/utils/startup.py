@@ -8,7 +8,7 @@ from pathlib import Path
 
 # 启动项注册表键名
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-STARTUP_APP_NAME = "JNTools"
+STARTUP_APP_NAME = "RuyiAssistant"  # 如意助手
 
 
 def get_exe_path():

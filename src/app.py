@@ -24,6 +24,8 @@ from config import Config
 from api.routes import register_routes as register_api_routes
 from tools.manager import ToolManager
 from tools.spider_tool import SpiderTool
+from tools.script_tool import ScriptTool
+from utils.module_manager import get_module_manager
 
 
 def create_app() -> Flask:
@@ -85,13 +87,22 @@ def create_app() -> Flask:
     return app
 
 
-def init_browser_pool() -> BrowserPool:
+def init_browser_pool() -> Optional[BrowserPool]:
     """
-    初始化浏览器池
+    初始化浏览器池（按需初始化）
     
     Returns:
-        浏览器池实例
+        浏览器池实例，如果不需要则返回None
     """
+    # 检查是否有模块需要浏览器
+    module_manager = get_module_manager()
+    modules_requiring_browser = module_manager.get_modules_requiring_browser()
+    
+    if not modules_requiring_browser:
+        print("[App] 没有启用的模块需要浏览器，跳过浏览器池初始化")
+        return None
+    
+    print(f"[App] 以下模块需要浏览器: {', '.join(modules_requiring_browser)}")
     print("正在初始化浏览器池（2个专用页面：JD页面和百度页面）...")
     print(f"headless={Config.HEADLESS} (True=后台运行，False=显示浏览器窗口，调试时使用False)")
     
@@ -132,36 +143,86 @@ def init_browser_pool() -> BrowserPool:
         raise
 
 
-def init_tools(browser_pool: BrowserPool) -> ToolManager:
+def init_tools(browser_pool: Optional[BrowserPool] = None) -> ToolManager:
     """
-    初始化工具管理器并注册工具
+    初始化工具管理器并注册工具（根据模块配置）
     
     Args:
-        browser_pool: 浏览器池实例
+        browser_pool: 浏览器池实例（可选）
         
     Returns:
         工具管理器实例
     """
     tool_manager = ToolManager()
+    module_manager = get_module_manager()
     
-    # 注册爬虫工具
-    spider_tool = SpiderTool()
-    tool_manager.register_tool(spider_tool)
+    # 获取启动时需要初始化的模块
+    startup_modules = module_manager.get_startup_modules()
+    print(f"[App] 启动时需要初始化的模块: {startup_modules if startup_modules else '无'}")
     
-    # 初始化所有工具
-    init_results = tool_manager.initialize_all(browser_pool=browser_pool)
+    # 根据模块配置注册工具
+    # 快递查询工具（logistics模块）
+    if module_manager.is_module_enabled('logistics'):
+        try:
+            spider_tool = SpiderTool()
+            tool_manager.register_tool(spider_tool)
+            module_manager.register_module_instance('logistics', spider_tool)
+            print(f"[App] 已注册工具: {spider_tool.display_name}")
+        except Exception as e:
+            print(f"[App] 注册快递查询工具失败: {e}")
+    
+    # 脚本执行工具（script_executor模块）
+    if module_manager.is_module_enabled('script_executor'):
+        try:
+            script_tool = ScriptTool()
+            tool_manager.register_tool(script_tool)
+            module_manager.register_module_instance('script_executor', script_tool)
+            print(f"[App] 已注册工具: {script_tool.display_name}")
+        except Exception as e:
+            print(f"[App] 注册脚本执行工具失败: {e}")
+    
+    # 只初始化启动时需要初始化的工具
+    tools_to_init = []
+    if 'logistics' in startup_modules:
+        spider_tool = tool_manager.get_tool('spider')
+        if spider_tool:
+            tools_to_init.append(('spider', spider_tool))
+    
+    if 'script_executor' in startup_modules:
+        script_tool = tool_manager.get_tool('script_executor')
+        if script_tool:
+            tools_to_init.append(('script_executor', script_tool))
+    
+    # 初始化工具
+    init_results = {}
+    for tool_name, tool in tools_to_init:
+        try:
+            # 如果工具需要浏览器，确保浏览器池已初始化
+            if tool_name == 'spider' and browser_pool is None:
+                print(f"[App] 工具 {tool_name} 需要浏览器，但浏览器池未初始化，跳过初始化")
+                init_results[tool_name] = False
+                continue
+            
+            init_results[tool_name] = tool.initialize(browser_pool=browser_pool)
+            if init_results[tool_name]:
+                print(f"[App] 工具 {tool_name} 初始化成功")
+            else:
+                print(f"[App] 工具 {tool_name} 初始化失败")
+        except Exception as e:
+            print(f"[App] 工具 {tool_name} 初始化异常: {e}")
+            init_results[tool_name] = False
     
     # 检查初始化结果
     failed_tools = [name for name, success in init_results.items() if not success]
     if failed_tools:
         print(f"[App] 警告: 以下工具初始化失败: {', '.join(failed_tools)}")
     else:
-        print("[App] 所有工具初始化成功")
+        print("[App] 启动时工具初始化完成")
     
     return tool_manager
 
 
-def setup_app(app: Flask, browser_pool: BrowserPool, tool_manager: ToolManager):
+def setup_app(app: Flask, browser_pool: Optional[BrowserPool], tool_manager: ToolManager):
     """
     设置Flask应用（注册路由等）
     

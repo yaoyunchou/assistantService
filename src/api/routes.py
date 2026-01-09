@@ -6,6 +6,9 @@ from spider.query_manager import query_with_retry, batch_query_waybill_numbers
 from config import Config
 from utils.startup import is_startup_enabled, get_exe_path, add_to_startup, remove_from_startup
 from utils.logger import get_logger
+from utils.script_manager import get_script_manager
+from tools.script_tool import ScriptTool
+import uuid
 
 # 获取logger
 routes_logger = get_logger('Routes')
@@ -339,3 +342,236 @@ def register_routes(app, browser_pool):
             'success': False,
             'error': '服务器内部错误'
         }), 500
+    
+    # 脚本执行相关API
+    script_tool = ScriptTool()
+    script_manager = get_script_manager()
+    
+    @app.route('/api/script/execute', methods=['POST'])
+    def execute_script():
+        """执行Python脚本
+        
+        请求体格式:
+        {
+            "code": "print('Hello, World!')",
+            "timeout": 30,
+            "args": {"x": 1, "y": 2},
+            "sandbox": true
+        }
+        """
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({
+                    'success': False,
+                    'error': '请求体不能为空'
+                }), 400
+            
+            code = data.get('code', '')
+            if not code:
+                return jsonify({
+                    'success': False,
+                    'error': '缺少必需参数: code'
+                }), 400
+            
+            timeout = data.get('timeout', 30)
+            args = data.get('args', {})
+            sandbox = data.get('sandbox', True)
+            script_id = data.get('script_id')  # 可选，如果提供则记录历史
+            
+            # 执行脚本
+            result = script_tool.execute_script(
+                code=code,
+                timeout=timeout,
+                args=args,
+                sandbox=sandbox
+            )
+            
+            # 记录执行历史
+            if script_id:
+                script_manager.add_execution_history(
+                    script_id=script_id,
+                    success=result['success'],
+                    output=result.get('output', ''),
+                    error=str(result.get('error', {}).get('message', '')) if result.get('error') else None,
+                    elapsed_time=result.get('elapsed_time', 0)
+                )
+            
+            return jsonify({
+                'success': True,
+                'data': result
+            }), 200
+            
+        except Exception as e:
+            routes_logger.error(f"执行脚本异常: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': f'服务器内部错误: {str(e)}'
+            }), 500
+    
+    @app.route('/api/script/list', methods=['GET'])
+    def list_scripts():
+        """获取脚本列表
+        
+        查询参数:
+        - category: 分类过滤（可选）
+        """
+        try:
+            category = request.args.get('category')
+            scripts = script_manager.list_scripts(category=category)
+            return jsonify({
+                'success': True,
+                'data': scripts
+            }), 200
+        except Exception as e:
+            routes_logger.error(f"获取脚本列表异常: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': f'服务器内部错误: {str(e)}'
+            }), 500
+    
+    @app.route('/api/script/save', methods=['POST'])
+    def save_script():
+        """保存脚本
+        
+        请求体格式:
+        {
+            "script_id": "script_123" (可选，不提供则自动生成),
+            "code": "print('Hello')",
+            "name": "测试脚本",
+            "category": "test",
+            "description": "这是一个测试脚本"
+        }
+        """
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({
+                    'success': False,
+                    'error': '请求体不能为空'
+                }), 400
+            
+            code = data.get('code', '')
+            if not code:
+                return jsonify({
+                    'success': False,
+                    'error': '缺少必需参数: code'
+                }), 400
+            
+            script_id = data.get('script_id') or str(uuid.uuid4())
+            name = data.get('name', script_id)
+            category = data.get('category', 'default')
+            description = data.get('description', '')
+            
+            if script_manager.save_script(
+                script_id=script_id,
+                code=code,
+                name=name,
+                category=category,
+                description=description
+            ):
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'script_id': script_id,
+                        'name': name
+                    }
+                }), 200
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': '保存脚本失败'
+                }), 500
+                
+        except Exception as e:
+            routes_logger.error(f"保存脚本异常: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': f'服务器内部错误: {str(e)}'
+            }), 500
+    
+    @app.route('/api/script/<script_id>', methods=['GET', 'DELETE'])
+    def manage_script(script_id):
+        """管理脚本
+        
+        GET: 获取脚本代码和信息
+        DELETE: 删除脚本
+        """
+        try:
+            if request.method == 'GET':
+                # 获取脚本代码
+                code = script_manager.load_script(script_id)
+                if code is None:
+                    return jsonify({
+                        'success': False,
+                        'error': '脚本不存在'
+                    }), 404
+                
+                # 获取脚本信息
+                info = script_manager.get_script_info(script_id)
+                
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'script_id': script_id,
+                        'code': code,
+                        'info': info
+                    }
+                }), 200
+            
+            elif request.method == 'DELETE':
+                # 删除脚本
+                if script_manager.delete_script(script_id):
+                    return jsonify({
+                        'success': True,
+                        'message': '脚本已删除'
+                    }), 200
+                else:
+                    return jsonify({
+                        'success': False,
+                        'error': '删除脚本失败'
+                    }), 500
+                    
+        except Exception as e:
+            routes_logger.error(f"管理脚本异常: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': f'服务器内部错误: {str(e)}'
+            }), 500
+    
+    @app.route('/api/script/<script_id>/history', methods=['GET'])
+    def get_script_history(script_id):
+        """获取脚本执行历史
+        
+        查询参数:
+        - limit: 返回记录数量限制（默认20）
+        """
+        try:
+            limit = int(request.args.get('limit', 20))
+            history = script_manager.get_execution_history(script_id, limit=limit)
+            return jsonify({
+                'success': True,
+                'data': history
+            }), 200
+        except Exception as e:
+            routes_logger.error(f"获取执行历史异常: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': f'服务器内部错误: {str(e)}'
+            }), 500
+    
+    @app.route('/api/script/categories', methods=['GET'])
+    def get_script_categories():
+        """获取所有脚本分类"""
+        try:
+            categories = script_manager.get_categories()
+            return jsonify({
+                'success': True,
+                'data': categories
+            }), 200
+        except Exception as e:
+            routes_logger.error(f"获取分类异常: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': f'服务器内部错误: {str(e)}'
+            }), 500

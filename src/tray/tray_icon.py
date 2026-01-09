@@ -151,9 +151,9 @@ class TrayIcon:
             icon_image = self._create_icon_image()
         
         self.icon = pystray.Icon(
-            "快递工具",
+            Config.APP_NAME,
             icon_image,
-            "快递查询工具",
+            Config.APP_NAME,
             self._create_menu()
         )
         

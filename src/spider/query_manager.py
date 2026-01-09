@@ -10,6 +10,8 @@ import random
 import time
 import sys
 import os
+import threading
+from config import Config
 
 # 获取 chrome.exe 路径（从 utils.browser_path 模块获取）
 def get_chrome_executable_path():
@@ -61,6 +63,10 @@ class BrowserPool:
         self.baidu_page = None  # 其他运单号专用页面（百度搜索）
         self._initialized = False
         self._baidu_page_initialized = False  # 百度页面是否已初始化（是否已访问过搜索页面）
+        self._last_used_time = None  # 最后使用时间
+        self._idle_timer = None  # 空闲定时器
+        self._idle_timeout = getattr(Config, 'BROWSER_IDLE_TIMEOUT', 300)  # 空闲超时时间（秒）
+        self._lock = threading.Lock()  # 线程锁
     
     def initialize(self):
         """初始化浏览器和2个专用页面"""
@@ -310,6 +316,8 @@ class BrowserPool:
         # 浏览器和上下文已创建成功，立即标记为已初始化
         # 这样即使后续步骤失败，浏览器池仍然可以使用
         self._initialized = True
+        self._update_last_used_time()
+        self._start_idle_timer()
         print("浏览器和上下文已创建，浏览器池已初始化")
         
         # 创建2个专用页面
@@ -510,7 +518,12 @@ class BrowserPool:
             注意：百度页面已在初始化时完成初始化，所以 is_first_time 始终为 False
         """
         if not self._initialized:
-            return None, False
+            # 尝试延迟初始化
+            if not self.ensure_initialized():
+                return None, False
+        
+        # 更新最后使用时间
+        self._update_last_used_time()
         
         waybill_upper = waybill_number.upper()
         
@@ -536,8 +549,65 @@ class BrowserPool:
         # 默认返回百度页面（向后兼容）
         return self.baidu_page
     
+    def _update_last_used_time(self):
+        """更新最后使用时间"""
+        with self._lock:
+            self._last_used_time = time.time()
+    
+    def _start_idle_timer(self):
+        """启动空闲定时器"""
+        self._stop_idle_timer()
+        
+        def check_idle():
+            with self._lock:
+                if not self._initialized:
+                    return
+                
+                if self._last_used_time is None:
+                    return
+                
+                idle_time = time.time() - self._last_used_time
+                if idle_time >= self._idle_timeout:
+                    print(f"[BrowserPool] 浏览器空闲超过 {self._idle_timeout} 秒，自动关闭")
+                    self.close()
+                else:
+                    # 继续检查
+                    self._idle_timer = threading.Timer(60.0, check_idle)  # 每60秒检查一次
+                    self._idle_timer.daemon = True
+                    self._idle_timer.start()
+        
+        self._idle_timer = threading.Timer(60.0, check_idle)
+        self._idle_timer.daemon = True
+        self._idle_timer.start()
+    
+    def _stop_idle_timer(self):
+        """停止空闲定时器"""
+        if self._idle_timer:
+            self._idle_timer.cancel()
+            self._idle_timer = None
+    
+    def ensure_initialized(self):
+        """
+        确保浏览器已初始化（延迟初始化）
+        
+        Returns:
+            是否成功初始化
+        """
+        if self._initialized:
+            self._update_last_used_time()
+            return True
+        
+        try:
+            self.initialize()
+            return True
+        except Exception as e:
+            print(f"[BrowserPool] 延迟初始化失败: {e}")
+            return False
+    
     def close(self):
         """关闭浏览器实例"""
+        self._stop_idle_timer()
+        
         if self.browser:
             try:
                 self.browser.close()
@@ -553,6 +623,7 @@ class BrowserPool:
         self._initialized = False
         self.jd_page = None
         self.baidu_page = None
+        self._last_used_time = None
         print("已关闭浏览器实例和所有页面")
 
 

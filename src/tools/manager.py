@@ -20,6 +20,7 @@ class ToolManager:
     def __init__(self):
         if not self._initialized:
             self._tools: Dict[str, BaseTool] = {}
+            self._lazy_tools: Dict[str, callable] = {}  # 延迟加载的工具工厂函数
             self._initialized = True
     
     def register_tool(self, tool: BaseTool):
@@ -90,6 +91,71 @@ class ToolManager:
                 print(f"[ToolManager] 工具 {name} 初始化异常: {e}")
                 results[name] = False
         return results
+    
+    def register_lazy_tool(self, name: str, factory: callable):
+        """
+        注册延迟加载工具
+        
+        Args:
+            name: 工具名称
+            factory: 工具工厂函数，返回工具实例
+        """
+        self._lazy_tools[name] = factory
+        print(f"[ToolManager] 已注册延迟加载工具: {name}")
+    
+    def load_lazy_tool(self, name: str, **kwargs) -> Optional[BaseTool]:
+        """
+        加载延迟工具
+        
+        Args:
+            name: 工具名称
+            **kwargs: 初始化参数
+            
+        Returns:
+            工具实例，如果不存在或加载失败返回None
+        """
+        if name in self._tools:
+            return self._tools[name]
+        
+        if name not in self._lazy_tools:
+            return None
+        
+        try:
+            factory = self._lazy_tools[name]
+            tool = factory()
+            if tool:
+                self._tools[name] = tool
+                # 尝试初始化
+                if hasattr(tool, 'initialize'):
+                    tool.initialize(**kwargs)
+                print(f"[ToolManager] 延迟加载工具 {name} 成功")
+                return tool
+        except Exception as e:
+            print(f"[ToolManager] 延迟加载工具 {name} 失败: {e}")
+        
+        return None
+    
+    def unregister_tool(self, name: str) -> bool:
+        """
+        注销工具
+        
+        Args:
+            name: 工具名称
+            
+        Returns:
+            是否成功
+        """
+        if name in self._tools:
+            tool = self._tools[name]
+            try:
+                if hasattr(tool, 'cleanup'):
+                    tool.cleanup()
+            except Exception as e:
+                print(f"[ToolManager] 清理工具 {name} 时出错: {e}")
+            del self._tools[name]
+            print(f"[ToolManager] 已注销工具: {name}")
+            return True
+        return False
     
     def cleanup_all(self):
         """清理所有工具资源"""

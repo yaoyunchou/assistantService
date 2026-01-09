@@ -425,8 +425,11 @@ def run_flask_app():
         flask_logger.info("正在Flask线程中初始化浏览器池...")
         from app import init_browser_pool, init_tools
         browser_pool = init_browser_pool()
-        flask_logger.info(f"浏览器池对象ID: {id(browser_pool)}")
-        flask_logger.info(f"浏览器池._initialized: {getattr(browser_pool, '_initialized', 'N/A')}")
+        if browser_pool:
+            flask_logger.info(f"浏览器池对象ID: {id(browser_pool)}")
+            flask_logger.info(f"浏览器池._initialized: {getattr(browser_pool, '_initialized', 'N/A')}")
+        else:
+            flask_logger.info("浏览器池未初始化（没有启用的模块需要浏览器）")
         
         # 在Flask线程中初始化工具管理器
         flask_logger.info("正在Flask线程中初始化工具管理器...")
@@ -434,11 +437,13 @@ def run_flask_app():
         
         # 注册Flask应用的路由（使用新初始化的browser_pool和tool_manager）
         from app import setup_app
-        flask_logger.info(f"注册路由前，browser_pool对象ID: {id(browser_pool)}")
-        flask_logger.info(f"注册路由前，browser_pool._initialized: {getattr(browser_pool, '_initialized', 'N/A')}")
+        if browser_pool:
+            flask_logger.info(f"注册路由前，browser_pool对象ID: {id(browser_pool)}")
+            flask_logger.info(f"注册路由前，browser_pool._initialized: {getattr(browser_pool, '_initialized', 'N/A')}")
         setup_app(app, browser_pool, tool_manager)
-        flask_logger.info(f"注册路由后，browser_pool对象ID: {id(browser_pool)}")
-        flask_logger.info(f"注册路由后，browser_pool._initialized: {getattr(browser_pool, '_initialized', 'N/A')}")
+        if browser_pool:
+            flask_logger.info(f"注册路由后，browser_pool对象ID: {id(browser_pool)}")
+            flask_logger.info(f"注册路由后，browser_pool._initialized: {getattr(browser_pool, '_initialized', 'N/A')}")
         
         flask_logger.info("Flask服务启动中...")
         flask_logger.info(f"服务地址: http://{Config.HOST}:{Config.PORT}")
