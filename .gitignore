@@ -48,3 +48,4 @@ logs/
 
 # Batch scripts (optional, uncomment if you don't want to track them)
 # *.bat
+*.exe
