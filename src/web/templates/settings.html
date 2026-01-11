@@ -1,0 +1,542 @@
+{% extends "base.html" %}
+
+{% block title %}配置 - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .settings-container {
+        max-width: 1000px;
+        margin: 0 auto;
+        padding: 30px;
+    }
+
+    .page-header {
+        margin-bottom: 30px;
+    }
+
+    .page-header h2 {
+        font-size: 28px;
+        color: #2c3e50;
+        margin-bottom: 10px;
+    }
+
+    .page-header p {
+        color: #7f8c8d;
+        font-size: 14px;
+    }
+
+    .settings-section {
+        background: white;
+        border-radius: 8px;
+        padding: 25px;
+        margin-bottom: 25px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .settings-section h3 {
+        font-size: 20px;
+        color: #2c3e50;
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid #ecf0f1;
+    }
+
+    .settings-section p {
+        color: #7f8c8d;
+        font-size: 14px;
+        margin-bottom: 20px;
+    }
+
+    .form-group {
+        margin-bottom: 20px;
+    }
+
+    .form-group label {
+        display: block;
+        font-weight: 500;
+        color: #2c3e50;
+        margin-bottom: 8px;
+        font-size: 14px;
+    }
+
+    .form-group label .required {
+        color: #e74c3c;
+        margin-left: 3px;
+    }
+
+    .form-group input[type="text"],
+    .form-group input[type="number"],
+    .form-group select {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 14px;
+        transition: border-color 0.3s;
+    }
+
+    .form-group input[type="text"]:focus,
+    .form-group input[type="number"]:focus,
+    .form-group select:focus {
+        outline: none;
+        border-color: #3498db;
+    }
+
+    .form-group .help-text {
+        font-size: 12px;
+        color: #95a5a6;
+        margin-top: 5px;
+    }
+
+    .checkbox-group {
+        display: flex;
+        align-items: center;
+        margin-bottom: 15px;
+    }
+
+    .checkbox-group input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        margin-right: 10px;
+        cursor: pointer;
+    }
+
+    .checkbox-group label {
+        margin: 0;
+        cursor: pointer;
+        font-weight: normal;
+    }
+
+    .module-item {
+        background: #f8f9fa;
+        border: 1px solid #e9ecef;
+        border-radius: 6px;
+        padding: 15px;
+        margin-bottom: 15px;
+    }
+
+    .module-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+    }
+
+    .module-title {
+        display: flex;
+        align-items: center;
+        font-weight: 600;
+        color: #2c3e50;
+    }
+
+    .module-icon {
+        font-size: 20px;
+        margin-right: 10px;
+    }
+
+    .module-description {
+        font-size: 13px;
+        color: #7f8c8d;
+        margin-bottom: 15px;
+    }
+
+    .module-options {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+    }
+
+    .button-group {
+        display: flex;
+        gap: 15px;
+        margin-top: 30px;
+        padding-top: 20px;
+        border-top: 1px solid #ecf0f1;
+    }
+
+    .btn {
+        padding: 12px 24px;
+        border: none;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+
+    .btn-primary {
+        background: #3498db;
+        color: white;
+    }
+
+    .btn-primary:hover {
+        background: #2980b9;
+    }
+
+    .btn-secondary {
+        background: #95a5a6;
+        color: white;
+    }
+
+    .btn-secondary:hover {
+        background: #7f8c8d;
+    }
+
+    .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .message {
+        padding: 12px 16px;
+        border-radius: 6px;
+        margin-bottom: 20px;
+        font-size: 14px;
+    }
+
+    .message-success {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+    }
+
+    .message-error {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+    }
+
+    .message-info {
+        background: #d1ecf1;
+        color: #0c5460;
+        border: 1px solid #bee5eb;
+    }
+
+    .loading {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        border: 2px solid #f3f3f3;
+        border-top: 2px solid #3498db;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-left: 10px;
+    }
+
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    .form-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+    }
+
+    @media (max-width: 768px) {
+        .form-row {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="settings-container">
+    <div class="page-header">
+        <h2>应用配置</h2>
+        <p>管理应用设置和功能模块配置</p>
+    </div>
+
+    <div id="message-container"></div>
+
+    <!-- 应用基础配置 -->
+    <div class="settings-section">
+        <h3>基础配置</h3>
+        <p>配置应用的基本运行参数</p>
+        
+        <div class="form-row">
+            <div class="form-group">
+                <label>服务地址 <span class="required">*</span></label>
+                <input type="text" id="host" value="{{ config.HOST }}" placeholder="127.0.0.1">
+                <div class="help-text">HTTP服务监听地址</div>
+            </div>
+            
+            <div class="form-group">
+                <label>服务端口 <span class="required">*</span></label>
+                <input type="number" id="port" value="{{ config.PORT }}" placeholder="8889" min="1024" max="65535">
+                <div class="help-text">HTTP服务监听端口（1024-65535）</div>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label>窗口宽度</label>
+                <input type="number" id="window_width" value="{{ config.WINDOW_WIDTH }}" placeholder="1200" min="800">
+                <div class="help-text">原生窗口宽度（像素）</div>
+            </div>
+            
+            <div class="form-group">
+                <label>窗口高度</label>
+                <input type="number" id="window_height" value="{{ config.WINDOW_HEIGHT }}" placeholder="800" min="600">
+                <div class="help-text">原生窗口高度（像素）</div>
+            </div>
+        </div>
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="headless" {% if config.HEADLESS %}checked{% endif %}>
+            <label for="headless">浏览器无头模式（后台运行，不显示浏览器窗口）</label>
+        </div>
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="tray_enabled" {% if config.TRAY_ENABLED %}checked{% endif %}>
+            <label for="tray_enabled">启用系统托盘图标</label>
+        </div>
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="use_native_window" {% if config.USE_NATIVE_WINDOW %}checked{% endif %}>
+            <label for="use_native_window">使用原生窗口（否则使用浏览器）</label>
+        </div>
+    </div>
+
+    <!-- 模块配置 -->
+    <div class="settings-section">
+        <h3>功能模块配置</h3>
+        <p>启用或禁用功能模块，控制模块的启动时机</p>
+        
+        <div id="modules-container">
+            <!-- 模块配置将通过JavaScript动态加载 -->
+        </div>
+    </div>
+
+    <!-- 操作按钮 -->
+    <div class="button-group">
+        <button class="btn btn-primary" id="save-btn" onclick="saveSettings()">
+            <span id="save-btn-text">保存配置</span>
+        </button>
+        <button class="btn btn-secondary" id="reset-btn" onclick="resetSettings()">
+            重置为默认值
+        </button>
+        <button class="btn btn-secondary" id="reload-btn" onclick="reloadSettings()">
+            重新加载
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let modulesConfig = {};
+
+    // 页面加载时初始化
+    document.addEventListener('DOMContentLoaded', function() {
+        loadSettings();
+    });
+
+    // 加载配置
+    async function loadSettings() {
+        try {
+            showMessage('正在加载配置...', 'info');
+            
+            // 加载模块配置
+            const response = await fetch('/api/settings/modules');
+            if (response.ok) {
+                const result = await response.json();
+                if (result.success) {
+                    modulesConfig = result.data;
+                    renderModules();
+                } else {
+                    showMessage('加载模块配置失败: ' + result.error, 'error');
+                }
+            } else {
+                showMessage('加载配置失败', 'error');
+            }
+        } catch (error) {
+            showMessage('加载配置时出错: ' + error.message, 'error');
+        }
+    }
+
+    // 渲染模块配置
+    function renderModules() {
+        const container = document.getElementById('modules-container');
+        container.innerHTML = '';
+
+        for (const [moduleName, moduleConfig] of Object.entries(modulesConfig)) {
+            const moduleItem = document.createElement('div');
+            moduleItem.className = 'module-item';
+            
+            moduleItem.innerHTML = `
+                <div class="module-header">
+                    <div class="module-title">
+                        <span class="module-icon">${moduleConfig.icon || '🔧'}</span>
+                        <span>${moduleConfig.display_name || moduleName}</span>
+                    </div>
+                </div>
+                <div class="module-description">${moduleConfig.description || ''}</div>
+                <div class="module-options">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="module_${moduleName}_enabled" 
+                               ${moduleConfig.enabled ? 'checked' : ''}
+                               onchange="updateModuleConfig('${moduleName}', 'enabled', this.checked)">
+                        <label for="module_${moduleName}_enabled">启用模块</label>
+                    </div>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="module_${moduleName}_init_on_startup" 
+                               ${moduleConfig.init_on_startup ? 'checked' : ''}
+                               ${!moduleConfig.enabled ? 'disabled' : ''}
+                               onchange="updateModuleConfig('${moduleName}', 'init_on_startup', this.checked)">
+                        <label for="module_${moduleName}_init_on_startup">启动时初始化</label>
+                    </div>
+                </div>
+            `;
+            
+            container.appendChild(moduleItem);
+        }
+    }
+
+    // 更新模块配置
+    function updateModuleConfig(moduleName, key, value) {
+        if (!modulesConfig[moduleName]) {
+            modulesConfig[moduleName] = {};
+        }
+        modulesConfig[moduleName][key] = value;
+
+        // 如果禁用模块，自动取消"启动时初始化"
+        if (key === 'enabled' && !value) {
+            modulesConfig[moduleName]['init_on_startup'] = false;
+            const initCheckbox = document.getElementById(`module_${moduleName}_init_on_startup`);
+            if (initCheckbox) {
+                initCheckbox.checked = false;
+                initCheckbox.disabled = true;
+            }
+        } else if (key === 'enabled' && value) {
+            // 启用模块时，允许设置"启动时初始化"
+            const initCheckbox = document.getElementById(`module_${moduleName}_init_on_startup`);
+            if (initCheckbox) {
+                initCheckbox.disabled = false;
+            }
+        }
+    }
+
+    // 保存配置
+    async function saveSettings() {
+        try {
+            const saveBtn = document.getElementById('save-btn');
+            const saveBtnText = document.getElementById('save-btn-text');
+            
+            saveBtn.disabled = true;
+            saveBtnText.innerHTML = '保存中... <span class="loading"></span>';
+
+            // 收集应用配置
+            const appConfig = {
+                host: document.getElementById('host').value,
+                port: parseInt(document.getElementById('port').value),
+                window_width: parseInt(document.getElementById('window_width').value),
+                window_height: parseInt(document.getElementById('window_height').value),
+                headless: document.getElementById('headless').checked,
+                tray_enabled: document.getElementById('tray_enabled').checked,
+                use_native_window: document.getElementById('use_native_window').checked
+            };
+
+            // 验证配置
+            if (!appConfig.host || !appConfig.port) {
+                showMessage('请填写完整的配置信息', 'error');
+                saveBtn.disabled = false;
+                saveBtnText.textContent = '保存配置';
+                return;
+            }
+
+            if (appConfig.port < 1024 || appConfig.port > 65535) {
+                showMessage('端口号必须在1024-65535之间', 'error');
+                saveBtn.disabled = false;
+                saveBtnText.textContent = '保存配置';
+                return;
+            }
+
+            // 保存模块配置
+            const modulesResponse = await fetch('/api/settings/modules', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(modulesConfig)
+            });
+
+            if (!modulesResponse.ok) {
+                const result = await modulesResponse.json();
+                throw new Error(result.error || '保存模块配置失败');
+            }
+
+            showMessage('配置保存成功！部分配置需要重启应用才能生效。', 'success');
+            
+            // 延迟恢复按钮状态
+            setTimeout(() => {
+                saveBtn.disabled = false;
+                saveBtnText.textContent = '保存配置';
+            }, 1000);
+
+        } catch (error) {
+            showMessage('保存配置失败: ' + error.message, 'error');
+            const saveBtn = document.getElementById('save-btn');
+            const saveBtnText = document.getElementById('save-btn-text');
+            saveBtn.disabled = false;
+            saveBtnText.textContent = '保存配置';
+        }
+    }
+
+    // 重置配置
+    async function resetSettings() {
+        if (!confirm('确定要重置所有配置为默认值吗？此操作不可撤销！')) {
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/settings/reset', {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                if (result.success) {
+                    showMessage('配置已重置为默认值', 'success');
+                    setTimeout(() => {
+                        location.reload();
+                    }, 1000);
+                } else {
+                    showMessage('重置配置失败: ' + result.error, 'error');
+                }
+            } else {
+                showMessage('重置配置失败', 'error');
+            }
+        } catch (error) {
+            showMessage('重置配置时出错: ' + error.message, 'error');
+        }
+    }
+
+    // 重新加载配置
+    function reloadSettings() {
+        if (confirm('确定要重新加载配置吗？未保存的更改将丢失。')) {
+            location.reload();
+        }
+    }
+
+    // 显示消息
+    function showMessage(message, type) {
+        const container = document.getElementById('message-container');
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message message-${type}`;
+        messageDiv.textContent = message;
+        
+        container.innerHTML = '';
+        container.appendChild(messageDiv);
+
+        // 3秒后自动隐藏成功和提示消息
+        if (type === 'success' || type === 'info') {
+            setTimeout(() => {
+                messageDiv.remove();
+            }, 3000);
+        }
+    }
+</script>
+{% endblock %}

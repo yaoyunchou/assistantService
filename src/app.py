@@ -4,6 +4,7 @@ Flask应用整合
 """
 import sys
 from pathlib import Path
+from typing import Optional
 from flask import Flask
 
 # 在导入其他模块前查找浏览器路径

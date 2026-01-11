@@ -1,0 +1,546 @@
+{% extends "base.html" %}
+
+{% block title %}{{ tool.display_name }} - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.script-container {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 30px;
+    margin-bottom: 20px;
+}
+
+.script-editor-container {
+    margin-bottom: 20px;
+}
+
+.script-editor {
+    width: 100%;
+    min-height: 400px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 14px;
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    resize: vertical;
+    background: #f8f9fa;
+    line-height: 1.6;
+}
+
+.script-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+.btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+.btn-primary {
+    background: #3498db;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #2980b9;
+}
+
+.btn-secondary {
+    background: #95a5a6;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: #7f8c8d;
+}
+
+.btn-success {
+    background: #27ae60;
+    color: white;
+}
+
+.btn-success:hover {
+    background: #229954;
+}
+
+.btn-danger {
+    background: #e74c3c;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #c0392b;
+}
+
+.result-container {
+    margin-top: 20px;
+    padding: 20px;
+    border-radius: 8px;
+    background: #f8f9fa;
+    border: 1px solid #e0e0e0;
+}
+
+.result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #e0e0e0;
+}
+
+.result-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.result-status {
+    padding: 5px 15px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.result-status.success {
+    background: #d4edda;
+    color: #155724;
+}
+
+.result-status.error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.result-output {
+    background: #2c3e50;
+    color: #ecf0f1;
+    padding: 15px;
+    border-radius: 6px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+    margin-bottom: 10px;
+}
+
+.result-error {
+    background: #f8d7da;
+    color: #721c24;
+    padding: 15px;
+    border-radius: 6px;
+    border-left: 4px solid #dc3545;
+    margin-top: 10px;
+}
+
+.result-info {
+    display: flex;
+    gap: 20px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: #7f8c8d;
+}
+
+.script-options {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 20px;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    flex-wrap: wrap;
+}
+
+.option-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.option-group label {
+    font-weight: 500;
+    color: #2c3e50;
+}
+
+.option-group input[type="number"] {
+    width: 80px;
+    padding: 5px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.option-group input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+.history-container {
+    margin-top: 30px;
+}
+
+.history-item {
+    padding: 15px;
+    margin-bottom: 10px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid #3498db;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.history-item:hover {
+    background: #e9ecef;
+    transform: translateX(5px);
+}
+
+.history-item.success {
+    border-left-color: #27ae60;
+}
+
+.history-item.error {
+    border-left-color: #e74c3c;
+}
+
+.history-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 5px;
+}
+
+.history-time {
+    font-size: 12px;
+    color: #7f8c8d;
+}
+
+.history-code {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 12px;
+    color: #2c3e50;
+    margin-top: 5px;
+    max-height: 60px;
+    overflow: hidden;
+}
+
+.loading {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 3px solid #f3f3f3;
+    border-top: 3px solid #3498db;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-left: 10px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.hidden {
+    display: none;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>{{ tool.display_name }}</h2>
+    <p class="subtitle">{{ tool.description }}</p>
+</div>
+
+<div class="script-container">
+    <div class="script-editor-container">
+        <label for="script-code" style="display: block; margin-bottom: 10px; font-weight: 600; color: #2c3e50;">
+            Python 代码：
+        </label>
+        <textarea id="script-code" class="script-editor" placeholder="在这里输入Python代码...&#10;&#10;示例：&#10;result = 'Hello, World!'&#10;print(result)"></textarea>
+    </div>
+
+    <div class="script-options">
+        <div class="option-group">
+            <label for="script-timeout">超时时间（秒）：</label>
+            <input type="number" id="script-timeout" value="30" min="1" max="300">
+        </div>
+        <div class="option-group">
+            <label for="script-sandbox">
+                <input type="checkbox" id="script-sandbox" checked>
+                沙箱模式（限制危险操作）
+            </label>
+        </div>
+    </div>
+
+    <div class="script-controls">
+        <button class="btn btn-primary" onclick="executeScript()">
+            执行脚本
+            <span id="execute-loading" class="loading hidden"></span>
+        </button>
+        <button class="btn btn-success" onclick="saveScript()">保存脚本</button>
+        <button class="btn btn-secondary" onclick="loadScriptList()">加载脚本</button>
+        <button class="btn btn-secondary" onclick="clearEditor()">清空编辑器</button>
+    </div>
+
+    <div id="result-container" class="result-container hidden">
+        <div class="result-header">
+            <div class="result-title">执行结果</div>
+            <div id="result-status" class="result-status"></div>
+        </div>
+        <div id="result-output" class="result-output"></div>
+        <div id="result-error" class="result-error hidden"></div>
+        <div class="result-info">
+            <span id="result-time"></span>
+            <span id="result-length"></span>
+        </div>
+    </div>
+</div>
+
+<div class="script-container history-container">
+    <h3 style="margin-bottom: 20px; color: #2c3e50;">执行历史</h3>
+    <div id="history-list">
+        <p style="color: #7f8c8d; text-align: center; padding: 20px;">暂无执行历史</p>
+    </div>
+</div>
+
+<script>
+let currentScriptId = null;
+
+function executeScript() {
+    const code = document.getElementById('script-code').value.trim();
+    if (!code) {
+        alert('请输入Python代码');
+        return;
+    }
+
+    const timeout = parseInt(document.getElementById('script-timeout').value) || 30;
+    const sandbox = document.getElementById('script-sandbox').checked;
+    const loadingEl = document.getElementById('execute-loading');
+    const resultContainer = document.getElementById('result-container');
+
+    // 显示加载状态
+    loadingEl.classList.remove('hidden');
+    resultContainer.classList.add('hidden');
+
+    const data = {
+        code: code,
+        timeout: timeout,
+        sandbox: sandbox
+    };
+
+    if (currentScriptId) {
+        data.script_id = currentScriptId;
+    }
+
+    fetch('/api/script/execute', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        loadingEl.classList.add('hidden');
+        resultContainer.classList.remove('hidden');
+
+        const statusEl = document.getElementById('result-status');
+        const outputEl = document.getElementById('result-output');
+        const errorEl = document.getElementById('result-error');
+        const timeEl = document.getElementById('result-time');
+        const lengthEl = document.getElementById('result-length');
+
+        if (data.success && data.data.success) {
+            statusEl.textContent = '执行成功';
+            statusEl.className = 'result-status success';
+            outputEl.textContent = data.data.output || '(无输出)';
+            errorEl.classList.add('hidden');
+        } else {
+            statusEl.textContent = '执行失败';
+            statusEl.className = 'result-status error';
+            outputEl.textContent = data.data.output || '';
+            
+            if (data.data.error) {
+                errorEl.classList.remove('hidden');
+                errorEl.innerHTML = `<strong>错误类型：</strong>${data.data.error.type || 'Unknown'}<br>` +
+                                   `<strong>错误信息：</strong>${data.data.error.message || 'Unknown error'}`;
+                if (data.data.error.traceback) {
+                    errorEl.innerHTML += `<br><br><strong>堆栈跟踪：</strong><pre style="margin-top: 10px; white-space: pre-wrap;">${data.data.error.traceback}</pre>`;
+                }
+            } else {
+                errorEl.classList.add('hidden');
+            }
+        }
+
+        timeEl.textContent = `执行时间: ${(data.data.elapsed_time || 0).toFixed(3)}秒`;
+        lengthEl.textContent = `输出长度: ${(data.data.output || '').length} 字符`;
+
+        // 刷新历史记录
+        loadHistory();
+    })
+    .catch(error => {
+        loadingEl.classList.add('hidden');
+        resultContainer.classList.remove('hidden');
+        
+        const statusEl = document.getElementById('result-status');
+        const outputEl = document.getElementById('result-output');
+        statusEl.textContent = '请求失败';
+        statusEl.className = 'result-status error';
+        outputEl.textContent = '请求执行脚本时出错: ' + error.message;
+    });
+}
+
+function saveScript() {
+    const code = document.getElementById('script-code').value.trim();
+    if (!code) {
+        alert('请输入要保存的Python代码');
+        return;
+    }
+
+    const name = prompt('请输入脚本名称（可选）:', '未命名脚本');
+    if (name === null) return;
+
+    const category = prompt('请输入脚本分类（可选，默认: default）:', 'default') || 'default';
+    const description = prompt('请输入脚本描述（可选）:', '') || '';
+
+    const data = {
+        code: code,
+        name: name || '未命名脚本',
+        category: category,
+        description: description
+    };
+
+    if (currentScriptId) {
+        data.script_id = currentScriptId;
+    }
+
+    fetch('/api/script/save', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            currentScriptId = data.data.script_id;
+            alert('脚本保存成功！');
+            loadScriptList();
+        } else {
+            alert('保存失败: ' + (data.error || '未知错误'));
+        }
+    })
+    .catch(error => {
+        alert('保存脚本时出错: ' + error.message);
+    });
+}
+
+function loadScriptList() {
+    fetch('/api/script/list')
+    .then(response => response.json())
+    .then(data => {
+        if (data.success && data.data.length > 0) {
+            const scriptList = data.data.map(script => 
+                `${script.name} (${script.category}) - ${script.id}`
+            ).join('\n');
+            
+            const scriptId = prompt('请输入要加载的脚本ID:\n\n可用脚本:\n' + 
+                data.data.map(s => `${s.name} - ${s.id}`).join('\n'), '');
+            
+            if (scriptId) {
+                loadScript(scriptId);
+            }
+        } else {
+            alert('没有已保存的脚本');
+        }
+    })
+    .catch(error => {
+        alert('加载脚本列表时出错: ' + error.message);
+    });
+}
+
+function loadScript(scriptId) {
+    fetch(`/api/script/${scriptId}`)
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            document.getElementById('script-code').value = data.data.code;
+            currentScriptId = scriptId;
+            alert('脚本加载成功！');
+        } else {
+            alert('加载失败: ' + (data.error || '未知错误'));
+        }
+    })
+    .catch(error => {
+        alert('加载脚本时出错: ' + error.message);
+    });
+}
+
+function clearEditor() {
+    if (confirm('确定要清空编辑器吗？')) {
+        document.getElementById('script-code').value = '';
+        currentScriptId = null;
+        document.getElementById('result-container').classList.add('hidden');
+    }
+}
+
+function loadHistory() {
+    if (!currentScriptId) {
+        return;
+    }
+
+    fetch(`/api/script/${currentScriptId}/history?limit=10`)
+    .then(response => response.json())
+    .then(data => {
+        if (data.success && data.data.length > 0) {
+            const historyList = document.getElementById('history-list');
+            historyList.innerHTML = data.data.map(item => {
+                const date = new Date(item.timestamp);
+                const statusClass = item.success ? 'success' : 'error';
+                return `
+                    <div class="history-item ${statusClass}" onclick="loadHistoryItem('${item.timestamp}')">
+                        <div class="history-header">
+                            <span style="font-weight: 600;">${item.success ? '✓ 成功' : '✗ 失败'}</span>
+                            <span class="history-time">${date.toLocaleString()}</span>
+                        </div>
+                        <div class="history-code">执行时间: ${(item.elapsed_time || 0).toFixed(3)}秒 | 输出长度: ${item.output_length || 0} 字符</div>
+                    </div>
+                `;
+            }).join('');
+        }
+    })
+    .catch(error => {
+        console.error('加载历史记录失败:', error);
+    });
+}
+
+function loadHistoryItem(timestamp) {
+    // 可以扩展为加载历史记录的详细信息
+    console.log('加载历史记录:', timestamp);
+}
+
+// 页面加载时，如果有脚本ID，加载历史记录
+window.addEventListener('DOMContentLoaded', function() {
+    // 可以从URL参数获取脚本ID
+    const urlParams = new URLSearchParams(window.location.search);
+    const scriptId = urlParams.get('script_id');
+    if (scriptId) {
+        loadScript(scriptId);
+    }
+});
+</script>
+{% endblock %}

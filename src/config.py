@@ -3,6 +3,7 @@
 """
 import os
 import json
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -11,7 +12,7 @@ class Config:
     """应用配置类"""
     # HTTP服务配置
     HOST = '127.0.0.1'
-    PORT = 888888
+    PORT = 8887  # 端口范围：1024-65535
     
     # 浏览器配置
     HEADLESS = True  # 是否使用无头模式
@@ -53,6 +54,54 @@ class Config:
     MAX_MEMORY_MB = 200  # 最大内存限制（MB）
 
 
+# 在Config类定义后，尝试从配置文件加载配置
+def _load_config_from_file():
+    """从配置文件加载配置（如果存在）"""
+    try:
+        # 延迟导入避免循环导入
+        from utils.config_manager import get_config_manager
+        config_manager = get_config_manager()
+        saved_config = config_manager.load_config()
+        
+        # 应用已保存的配置
+        if saved_config:
+            if 'host' in saved_config:
+                Config.HOST = str(saved_config['host'])
+            if 'port' in saved_config:
+                port = int(saved_config['port'])
+                if 1024 <= port <= 65535:
+                    Config.PORT = port
+            if 'headless' in saved_config:
+                Config.HEADLESS = bool(saved_config['headless'])
+            if 'window_width' in saved_config:
+                Config.WINDOW_WIDTH = int(saved_config['window_width'])
+            if 'window_height' in saved_config:
+                Config.WINDOW_HEIGHT = int(saved_config['window_height'])
+            if 'tray_enabled' in saved_config:
+                Config.TRAY_ENABLED = bool(saved_config['tray_enabled'])
+            if 'use_native_window' in saved_config:
+                Config.USE_NATIVE_WINDOW = bool(saved_config['use_native_window'])
+            if 'log_level' in saved_config:
+                Config.LOG_LEVEL = str(saved_config['log_level'])
+            if 'browser_lazy_init' in saved_config:
+                Config.BROWSER_LAZY_INIT = bool(saved_config['browser_lazy_init'])
+            if 'browser_idle_timeout' in saved_config:
+                Config.BROWSER_IDLE_TIMEOUT = int(saved_config['browser_idle_timeout'])
+            if 'enable_resource_monitor' in saved_config:
+                Config.ENABLE_RESOURCE_MONITOR = bool(saved_config['enable_resource_monitor'])
+            if 'max_memory_mb' in saved_config:
+                Config.MAX_MEMORY_MB = int(saved_config['max_memory_mb'])
+    except Exception:
+        # 如果加载失败，使用默认配置
+        pass
+
+# 延迟加载，避免循环导入
+try:
+    _load_config_from_file()
+except:
+    pass
+
+
 def get_module_config_file_path() -> Path:
     """
     获取模块配置文件路径
@@ -81,6 +130,7 @@ def load_module_config() -> Dict[str, Dict[str, Any]]:
     Returns:
         模块配置字典
     """
+    # 延迟导入避免循环导入
     from config.modules import get_default_module_config
     
     # 获取默认配置

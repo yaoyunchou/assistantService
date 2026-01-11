@@ -1,0 +1,32 @@
+{
+  "logistics": {
+    "category": "tools",
+    "description": "快递查询工具",
+    "display_name": "快递查询",
+    "enabled": true,
+    "icon": "📦",
+    "init_on_startup": true,
+    "memory_mb": 150,
+    "requires_browser": true
+  },
+  "resource_monitor": {
+    "category": "system",
+    "description": "资源监控",
+    "display_name": "资源监控",
+    "enabled": true,
+    "icon": "📊",
+    "init_on_startup": true,
+    "memory_mb": 10,
+    "requires_browser": false
+  },
+  "script_executor": {
+    "category": "tools",
+    "description": "Python脚本执行器",
+    "display_name": "脚本执行",
+    "enabled": true,
+    "icon": "🐍",
+    "init_on_startup": true,
+    "memory_mb": 20,
+    "requires_browser": false
+  }
+}

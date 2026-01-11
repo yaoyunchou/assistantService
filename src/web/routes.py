@@ -108,6 +108,17 @@ def register_web_routes(app, tool_manager: ToolManager):
         routes_logger.info("/hello 路由被访问")
         return "<h1>Hello World! Flask 正常工作！</h1><a href='/'>返回首页</a>"
     
+    @app.route('/settings')
+    def settings():
+        """配置页面"""
+        try:
+            tools_info = tool_manager.get_tools_info()
+            routes_logger.info("配置页面访问")
+            return render_template('settings.html', tools=tools_info, config=Config)
+        except Exception as e:
+            routes_logger.error(f"配置页面渲染错误: {e}", exc_info=True)
+            return render_template('error.html', message='配置页面加载失败', tools=tool_manager.get_tools_info(), config=Config), 500
+    
     @app.before_request
     def log_request_info():
         """记录每个请求"""

@@ -8,6 +8,7 @@ from utils.startup import is_startup_enabled, get_exe_path, add_to_startup, remo
 from utils.logger import get_logger
 from utils.script_manager import get_script_manager
 from tools.script_tool import ScriptTool
+from utils.config_manager import get_config_manager
 import uuid
 
 # 获取logger
@@ -571,6 +572,200 @@ def register_routes(app, browser_pool):
             }), 200
         except Exception as e:
             routes_logger.error(f"获取分类异常: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': f'服务器内部错误: {str(e)}'
+            }), 500
+    
+    # 配置管理相关API
+    @app.route('/api/settings/modules', methods=['GET', 'POST'])
+    def manage_module_config():
+        """管理模块配置
+        
+        GET: 获取模块配置
+        POST: 保存模块配置
+        """
+        try:
+            from utils.module_manager import get_module_manager
+            from config import save_module_config
+            
+            module_manager = get_module_manager()
+            
+            if request.method == 'GET':
+                # 获取模块配置
+                config = module_manager.get_config()
+                return jsonify({
+                    'success': True,
+                    'data': config
+                }), 200
+            
+            elif request.method == 'POST':
+                # 保存模块配置
+                data = request.get_json()
+                if not data:
+                    return jsonify({
+                        'success': False,
+                        'error': '请求体不能为空'
+                    }), 400
+                
+                # 验证配置格式
+                from config.modules import validate_module_config
+                for module_name, module_config in data.items():
+                    if not validate_module_config(module_config):
+                        return jsonify({
+                            'success': False,
+                            'error': f'模块 {module_name} 的配置格式无效'
+                        }), 400
+                
+                # 保存配置
+                if save_module_config(data):
+                    # 重新加载配置
+                    module_manager.reload_config()
+                    return jsonify({
+                        'success': True,
+                        'message': '模块配置已保存'
+                    }), 200
+                else:
+                    return jsonify({
+                        'success': False,
+                        'error': '保存模块配置失败'
+                    }), 500
+                    
+        except Exception as e:
+            routes_logger.error(f"管理模块配置异常: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': f'服务器内部错误: {str(e)}'
+            }), 500
+    
+    @app.route('/api/settings/reset', methods=['POST'])
+    def reset_settings():
+        """重置配置为默认值"""
+        try:
+            from config.modules import get_default_module_config
+            from config import save_module_config
+            from utils.module_manager import get_module_manager
+            
+            # 获取默认配置
+            default_config = get_default_module_config()
+            
+            # 保存默认配置
+            if save_module_config(default_config):
+                # 重新加载配置
+                module_manager = get_module_manager()
+                module_manager.reload_config()
+                
+                return jsonify({
+                    'success': True,
+                    'message': '配置已重置为默认值'
+                }), 200
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': '重置配置失败'
+                }), 500
+                
+        except Exception as e:
+            routes_logger.error(f"重置配置异常: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': f'服务器内部错误: {str(e)}'
+            }), 500
+    
+    # 应用配置管理API
+    config_manager = get_config_manager()
+    
+    @app.route('/api/settings/app', methods=['GET', 'POST'])
+    def manage_app_config():
+        """管理应用配置
+        
+        GET: 获取当前配置
+        POST: 保存和应用配置
+        """
+        try:
+            if request.method == 'GET':
+                # 获取当前配置
+                config = config_manager.get_config()
+                return jsonify({
+                    'success': True,
+                    'data': config
+                }), 200
+            
+            elif request.method == 'POST':
+                # 保存和应用配置
+                data = request.get_json()
+                if not data:
+                    return jsonify({
+                        'success': False,
+                        'error': '请求体不能为空'
+                    }), 400
+                
+                # 验证端口号
+                if 'port' in data:
+                    port = int(data['port'])
+                    if port < 1024 or port > 65535:
+                        return jsonify({
+                            'success': False,
+                            'error': f'端口号必须在1024-65535之间，当前值: {port}'
+                        }), 400
+                
+                # 保存配置到文件
+                if not config_manager.save_config(data):
+                    return jsonify({
+                        'success': False,
+                        'error': '保存配置失败'
+                    }), 500
+                
+                # 尝试应用配置（热重载）
+                result = config_manager.apply_config(data)
+                
+                response_data = {
+                    'success': True,
+                    'message': '配置已保存',
+                    'applied': result['applied'],
+                    'need_restart': result['need_restart'],
+                    'require_restart': result['require_restart']
+                }
+                
+                if result['require_restart']:
+                    response_data['message'] = '配置已保存，但需要重启应用才能生效（端口或主机配置已更改）'
+                else:
+                    response_data['message'] = '配置已保存并应用（无需重启）'
+                
+                return jsonify(response_data), 200
+                
+        except ValueError as e:
+            return jsonify({
+                'success': False,
+                'error': f'配置验证失败: {str(e)}'
+            }), 400
+        except Exception as e:
+            routes_logger.error(f"管理应用配置异常: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': f'服务器内部错误: {str(e)}'
+            }), 500
+    
+    @app.route('/api/settings/reload', methods=['POST'])
+    def reload_config():
+        """重新加载配置文件"""
+        try:
+            # 重新加载模块配置
+            from utils.module_manager import get_module_manager
+            module_manager = get_module_manager()
+            module_reload_success = module_manager.reload_config()
+            
+            # 重新加载应用配置
+            app_reload_success = config_manager.reload_from_file()
+            
+            return jsonify({
+                'success': module_reload_success or app_reload_success,
+                'module_reloaded': module_reload_success,
+                'app_reloaded': app_reload_success,
+                'message': '配置已重新加载'
+            }), 200
+        except Exception as e:
+            routes_logger.error(f"重新加载配置异常: {e}", exc_info=True)
             return jsonify({
                 'success': False,
                 'error': f'服务器内部错误: {str(e)}'
