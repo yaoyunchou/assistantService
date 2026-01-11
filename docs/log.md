@@ -1,32 +1,48 @@
 # 变更日志
 
-## 2026-01-09 - 从 Git 仓库中删除已提交的 exe 文件
+## 2026-01-09 - 从 Git 历史中完全删除大文件（解决 GitHub 推送限制）
 
 ### 代码清理
 
 **清理内容**:
-- 从 Git 仓库中删除了 `JNTools_Setup_v1.0.1.exe` 文件
-- 该文件是编译后的安装包，不应该被版本控制跟踪
-- 文件已从 Git 索引中移除，但本地文件仍然保留
+- 从整个 Git 历史中完全删除了 `JNTools_Setup_v1.0.1.exe` 文件（145.70 MB）
+- 该文件超过了 GitHub 的 100 MB 文件大小限制，导致推送失败
+- 文件已从所有历史提交中移除，本地文件仍然保留
 
 **问题原因**:
-- `JNTools_Setup_v1.0.1.exe` 是打包生成的安装程序文件
+- `JNTools_Setup_v1.0.1.exe` 是打包生成的安装程序文件，大小为 145.70 MB
 - 虽然 `.gitignore` 中已配置 `*.exe` 忽略规则，但该文件在添加忽略规则之前就已经被提交
-- 二进制文件不应该被 Git 跟踪，会增加仓库大小
+- GitHub 拒绝推送超过 100 MB 的文件，即使文件已经从当前提交中删除，历史记录中仍然存在
+- 错误信息：`GH001: Large files detected. You may want to try Git Large File Storage`
 
 **技术实现**:
-- 使用 `git rm --cached JNTools_Setup_v1.0.1.exe` 命令
-- 该命令只从 Git 索引中删除文件，不会删除本地文件
-- 文件现在处于暂存状态，需要提交才能完成删除操作
+1. **从 Git 索引中删除**：
+   - 使用 `git rm --cached JNTools_Setup_v1.0.1.exe` 从当前索引中移除
+
+2. **从整个历史中删除**：
+   - 使用 `git filter-branch --force --index-filter "git rm --cached --ignore-unmatch JNTools_Setup_v1.0.1.exe" --prune-empty --tag-name-filter cat -- --all`
+   - 重写了所有历史提交，从每个提交中移除了该文件
+   - 重写了 5 个提交记录
+
+3. **清理和优化**：
+   - 删除备份引用：`Remove-Item .git\refs\original -Recurse -Force`
+   - 清理 reflog：`git reflog expire --expire=now --all`
+   - 强制垃圾回收：`git gc --prune=now --aggressive`
+   - 彻底从 Git 对象数据库中删除文件
+
+**验证结果**:
+- `git log --all --full-history --oneline -- JNTools_Setup_v1.0.1.exe` 无输出（文件已从历史中完全删除）
+- `git rev-list --objects --all | Select-String "JNTools_Setup_v1.0.1.exe"` 无输出（文件已从对象数据库中删除）
 
 **后续操作**:
-- 需要执行 `git commit` 提交删除操作
-- 提交后，该文件将从 Git 历史中移除（但本地文件仍然存在）
+- 由于重写了 Git 历史，推送时需要强制推送：`git push --force`
+- ⚠️ **警告**：强制推送会重写远程仓库的历史，如果其他开发者正在使用该仓库，需要通知他们重新克隆或重置本地仓库
 - 由于 `.gitignore` 已配置 `*.exe`，后续生成的 exe 文件不会被自动跟踪
 
 **注意事项**:
-- 如果其他开发者已经拉取了包含该文件的版本，他们需要执行 `git pull` 来同步删除操作
 - 本地文件不会被删除，如果需要删除本地文件，需要手动删除
+- 如果这是共享仓库，建议通知所有协作者，他们需要重新克隆仓库或执行 `git fetch origin` 和 `git reset --hard origin/main`
+- 仓库大小已显著减小，现在可以正常推送到 GitHub
 
 ## 2026-01-09 - 新增配置页面功能
 
