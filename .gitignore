@@ -46,6 +46,18 @@ build
 logs/
 *.log
 
+# Environment variables
+.env
+# But allow .env.example
+!.env.example
+
+# Cookies and sensitive data
+cookies/
+
+# User configuration
+module_config.json
+
 # Batch scripts (optional, uncomment if you don't want to track them)
 # *.bat
 *.exe
+browser_data

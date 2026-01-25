@@ -16,7 +16,7 @@
     "enabled": true,
     "icon": "🛒",
     "init_on_startup": false,
-    "memory_mb": 100,
+    "memory_mb": 200,
     "requires_browser": true
   },
   "resource_monitor": {

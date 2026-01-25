@@ -7,6 +7,29 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+# 加载环境变量
+try:
+    from dotenv import load_dotenv
+    # 获取项目根目录
+    if getattr(sys, 'frozen', False):
+        # 打包后的exe环境
+        root_dir = Path(sys.executable).parent
+    else:
+        # 开发环境
+        root_dir = Path(__file__).parent.parent
+    
+    # 加载.env文件
+    env_file = root_dir / '.env'
+    if env_file.exists():
+        load_dotenv(env_file)
+        print(f"[Config] 已加载环境变量文件: {env_file}")
+    else:
+        print(f"[Config] 未找到.env文件: {env_file}")
+except ImportError:
+    print("[Config] python-dotenv 未安装，跳过环境变量加载")
+except Exception as e:
+    print(f"[Config] 加载环境变量失败: {e}")
+
 
 class Config:
     """应用配置类"""
@@ -15,7 +38,9 @@ class Config:
     PORT = 8887  # 端口范围：1024-65535
     
     # 浏览器配置
-    HEADLESS = True  # 是否使用无头模式
+    # HEADLESS = True  # 是否使用无头模式
+    HEADLESS = False  # 是否使用无头模式
+
     
     # 查询配置
     MAX_RETRY = 3  # 最大重试次数
@@ -52,6 +77,17 @@ class Config:
     BROWSER_IDLE_TIMEOUT = 300  # 浏览器空闲超时（秒）
     ENABLE_RESOURCE_MONITOR = True  # 启用资源监控
     MAX_MEMORY_MB = 200  # 最大内存限制（MB）
+    
+    # 拼多多配置
+    # Cookie和状态文件将保存在用户数据目录，避免权限问题
+    PINDUODUO_COOKIE_PATH = None  # None表示使用默认的用户数据目录
+    PINDUODUO_STATUS_PATH = None  # None表示使用默认的用户数据目录
+    # PINDUODUO_TARGET_URL = 'https://mms.pinduoduo.com/home'
+    PINDUODUO_TARGET_URL = 'https://www.doubao.com/chat/28899721294850?open_from_ext=1'
+
+    
+    # 飞书配置
+    FEISHU_ENABLED = True  # 是否启用飞书通知
 
 
 # 在Config类定义后，尝试从配置文件加载配置

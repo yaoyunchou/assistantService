@@ -24,7 +24,6 @@ from spider.query_manager import BrowserPool
 from config import Config
 from api.routes import register_routes as register_api_routes
 from tools.manager import ToolManager
-from tools.spider_tool import SpiderTool
 from tools.script_tool import ScriptTool
 from utils.module_manager import get_module_manager
 
@@ -104,7 +103,7 @@ def init_browser_pool() -> Optional[BrowserPool]:
         return None
     
     print(f"[App] 以下模块需要浏览器: {', '.join(modules_requiring_browser)}")
-    print("正在初始化浏览器池（2个专用页面：JD页面和百度页面）...")
+    print("正在初始化浏览器池...")
     print(f"headless={Config.HEADLESS} (True=后台运行，False=显示浏览器窗口，调试时使用False)")
     
     # 确保浏览器路径已找到
@@ -120,9 +119,12 @@ def init_browser_pool() -> Optional[BrowserPool]:
             print("      或者运行: playwright install chromium 安装系统级浏览器驱动")
     
     try:
-        browser_pool = BrowserPool(headless=Config.HEADLESS)
-        browser_pool.initialize()
-        print("浏览器池初始化完成")
+        browser_pool = BrowserPool(
+            headless=Config.HEADLESS,
+            idle_timeout=600,      # 10分钟空闲后关闭
+            max_instances=5        # 最多5个浏览器实例（渐进式扩展）
+        )
+        print("浏览器池创建完成（使用上下文管理器模式，每次调用时才创建浏览器）")
         return browser_pool
     except Exception as e:
         error_msg = str(e)
@@ -162,16 +164,6 @@ def init_tools(browser_pool: Optional[BrowserPool] = None) -> ToolManager:
     print(f"[App] 启动时需要初始化的模块: {startup_modules if startup_modules else '无'}")
     
     # 根据模块配置注册工具
-    # 快递查询工具（logistics模块）
-    if module_manager.is_module_enabled('logistics'):
-        try:
-            spider_tool = SpiderTool()
-            tool_manager.register_tool(spider_tool)
-            module_manager.register_module_instance('logistics', spider_tool)
-            print(f"[App] 已注册工具: {spider_tool.display_name}")
-        except Exception as e:
-            print(f"[App] 注册快递查询工具失败: {e}")
-    
     # 脚本执行工具（script_executor模块）
     if module_manager.is_module_enabled('script_executor'):
         try:
@@ -182,12 +174,26 @@ def init_tools(browser_pool: Optional[BrowserPool] = None) -> ToolManager:
         except Exception as e:
             print(f"[App] 注册脚本执行工具失败: {e}")
     
+    # 拼多多工具（pinduoduo模块）
+    # 默认启用，不需要检查模块配置（因为配置文件中可能还没有这个模块）
+    try:
+        from tools.pinduoduo_tool import PinduoduoTool
+        pinduoduo_tool = PinduoduoTool()
+        tool_manager.register_tool(pinduoduo_tool)
+        print(f"[App] 已注册工具: {pinduoduo_tool.display_name}")
+        
+        # 初始化拼多多工具（传递浏览器池）
+        if pinduoduo_tool.initialize(browser_pool=browser_pool):
+            print(f"[App] 工具 pinduoduo 初始化成功")
+        else:
+            print(f"[App] 工具 pinduoduo 初始化失败")
+    except Exception as e:
+        print(f"[App] 注册拼多多工具失败: {e}")
+        import traceback
+        traceback.print_exc()
+    
     # 只初始化启动时需要初始化的工具
     tools_to_init = []
-    if 'logistics' in startup_modules:
-        spider_tool = tool_manager.get_tool('spider')
-        if spider_tool:
-            tools_to_init.append(('spider', spider_tool))
     
     if 'script_executor' in startup_modules:
         script_tool = tool_manager.get_tool('script_executor')

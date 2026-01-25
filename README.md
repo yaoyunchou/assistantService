@@ -6,6 +6,7 @@
 
 - 🖥️ **现代化Web界面** - 基于Flask的响应式Web界面，美观易用
 - 🐍 **Python脚本执行** - 支持执行Python脚本，支持参数传递和结果返回
+- 🛒 **拼多多助手** - 拼多多商家后台自动化工具，支持登录管理和飞书通知
 - ⚙️ **模块化配置** - 支持通过配置控制功能模块的启用/禁用和启动时机
 - 🔧 **可扩展架构** - 工具管理器设计，方便添加新工具
 - 📊 **资源监控** - 实时监控内存和CPU使用情况
@@ -80,6 +81,38 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
+6. **配置环境变量（可选，用于拼多多助手）**
+
+如果需要使用拼多多助手的飞书通知功能，需要配置环境变量：
+
+```bash
+# 复制环境变量模板
+copy .env.example .env
+
+# 编辑 .env 文件，填入飞书应用配置
+# FEISHU_APP_ID=your_app_id
+# FEISHU_APP_SECRET=your_app_secret
+# FEISHU_USER_ID=your_user_id
+```
+
+飞书应用配置获取方式：
+- 访问 https://open.feishu.cn/app 创建应用
+- 获取 App ID 和 App Secret
+- 获取接收消息的用户ID
+
+7. **配置模块（可选）**
+
+如果需要自定义启用的模块，可以配置模块：
+
+```bash
+# 复制模块配置模板
+copy module_config.json.example module_config.json
+
+# 编辑 module_config.json 文件，启用/禁用需要的模块
+```
+
+默认情况下，只启用了脚本执行和拼多多助手，快递查询模块已禁用。
+
 ### 运行应用
 
 ```bash
@@ -100,6 +133,47 @@ python src/main.py
 3. 点击工具名称进入相应工具页面
 4. 在工具页面使用相应功能
 
+### 拼多多助手
+
+拼多多助手提供商家后台自动化管理功能，支持登录管理和飞书通知。
+
+**功能特点**：
+- 🔐 **登录管理** - 支持扫码登录，Cookie持久化保存
+- 📢 **飞书通知** - 登录失效时自动发送飞书消息提醒
+- 💾 **状态记录** - 记录最后执行状态，基于执行结果判断登录有效性
+- 🔄 **自动化执行** - 执行时自动检测登录状态，被拦截时发送通知
+- 🔒 **安全存储** - Cookie和状态文件自动保存到用户数据目录，避免权限问题
+
+**使用步骤**：
+
+1. **配置飞书通知**（可选）
+   - 创建飞书应用并获取凭证
+   - 在 `.env` 文件中配置飞书应用信息
+   - 如不配置，工具仍可使用，但不会发送通知
+
+2. **首次登录**
+   - 打开拼多多助手页面
+   - 点击"重新登录"按钮
+   - 扫描显示的二维码
+   - 登录成功后Cookie自动保存
+
+3. **查看状态**
+   - 页面显示最后执行状态
+   - 显示最后成功/失败时间
+   - 绿色表示登录有效，红色表示需要重新登录
+
+4. **自动化操作**（后续扩展）
+   - 执行自动化操作时会自动检测登录状态
+   - 如被拦截到登录页面，自动发送飞书通知
+   - 需要重新登录后才能继续使用
+
+**API接口**：
+- `GET /api/pinduoduo/status` - 获取最后执行状态
+- `POST /api/pinduoduo/login` - 启动登录流程
+- `GET /api/pinduoduo/check_login_complete` - 检查登录完成
+- `POST /api/pinduoduo/logout` - 清除登录状态
+- `POST /api/pinduoduo/execute` - 执行自动化操作（TODO）
+
 ### 系统托盘
 
 - **双击图标**: 打开Web界面
@@ -114,6 +188,7 @@ python src/main.py
 详细开发指南请参考：
 - [开发指南.md](docs/开发指南.md) - 完整开发技术文档
 - [配置说明.md](docs/配置说明.md) - 配置问题快速查找（系统托盘、开机自启动、打包配置）
+- [浏览器超时配置说明.md](docs/浏览器超时配置说明.md) - 浏览器操作超时控制详细说明
 
 主要接口：
 - `GET /health` - 健康检查
@@ -186,6 +261,140 @@ tool_manager.register_tool(tool)
 3. **创建工具页面模板**，在 `web/templates/tools/my_tool.html`
 
 4. **添加API路由**（如需要），在 `api/routes.py` 中
+
+### 本地数据保存注意事项
+
+**⚠️ 重要：所有需要保存到本地的数据文件必须使用安全路径处理**
+
+#### 为什么需要安全路径
+
+应用可能被安装在需要管理员权限的目录（如 `C:\Program Files`），直接在安装目录保存数据会导致权限错误。因此，**所有本地数据保存都必须使用安全路径工具**。
+
+#### 使用方法
+
+项目提供了 `src/utils/path_helper.py` 工具模块，所有需要保存本地数据的功能都应使用该工具：
+
+```python
+from utils.path_helper import get_safe_data_path, get_user_data_dir
+
+# 方式1: 获取安全的数据文件路径（推荐）
+# 会自动选择有写入权限的目录
+file_path = get_safe_data_path('data/my_data.json')
+
+# 方式2: 直接获取用户数据目录
+user_dir = get_user_data_dir('JNTools')
+file_path = user_dir / 'data' / 'my_data.json'
+```
+
+#### 路径选择逻辑
+
+`get_safe_data_path()` 会自动选择安全的路径：
+
+1. **开发环境且有权限**：使用项目根目录（便于开发调试）
+2. **生产环境或无权限**：使用用户数据目录
+   - Windows: `%LOCALAPPDATA%\JNTools\`（如 `C:\Users\用户名\AppData\Local\JNTools\`）
+   - Linux: `~/.local/share/JNTools/`
+   - Mac: `~/.local/share/JNTools/`
+
+#### 应用场景
+
+所有需要写入本地文件的场景都应使用安全路径：
+
+- ✅ Cookie 文件
+- ✅ 状态记录文件
+- ✅ 缓存文件
+- ✅ 配置文件（用户级）
+- ✅ 数据库文件
+- ✅ 临时文件
+- ✅ 日志文件
+
+#### 示例代码
+
+```python
+from pathlib import Path
+from utils.path_helper import get_safe_data_path
+import json
+
+class MyTool:
+    def __init__(self):
+        # 获取安全的数据文件路径
+        self.data_file = get_safe_data_path('my_tool/data.json')
+        self.cache_file = get_safe_data_path('my_tool/cache.json')
+        
+        # 确保目录存在
+        self.data_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    def save_data(self, data):
+        """保存数据到本地"""
+        try:
+            with open(self.data_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            print(f"保存数据失败: {e}")
+            return False
+    
+    def load_data(self):
+        """从本地加载数据"""
+        if not self.data_file.exists():
+            return None
+        
+        try:
+            with open(self.data_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"加载数据失败: {e}")
+            return None
+```
+
+#### 参考实现
+
+可以参考以下模块的实现：
+
+- `src/utils/logger.py` - 日志文件的安全路径处理
+- `src/spider/pinduoduo/client.py` - Cookie 和状态文件的安全路径处理
+
+### 性能优化 - 延迟初始化
+
+**⚠️ 建议：资源密集型组件应使用延迟初始化**
+
+对于占用资源较多的组件（如浏览器客户端、数据库连接等），建议使用延迟初始化策略，只在实际使用时才创建实例。
+
+#### 延迟初始化示例
+
+```python
+from typing import Optional
+
+class MyTool:
+    def __init__(self):
+        self._client = None  # 不立即创建实例
+    
+    def get_client(self):
+        """延迟初始化：首次调用时才创建实例"""
+        if self._client is None:
+            self._client = HeavyResourceClient()
+        return self._client
+    
+    # 或者使用 @property 装饰器
+    @property
+    def client(self):
+        """使用属性方式实现延迟初始化"""
+        if self._client is None:
+            self._client = HeavyResourceClient()
+        return self._client
+```
+
+#### 延迟初始化的优势
+
+1. **启动更快** - 应用启动时不创建未使用的资源
+2. **节省内存** - 只创建真正需要的实例
+3. **避免错误** - 延迟到使用时才处理可能的初始化错误
+4. **按需加载** - 多用户环境下资源利用更高效
+
+#### 参考实现
+
+- `src/tools/pinduoduo_tool.py` - 拼多多客户端的延迟初始化
+- `src/spider/pinduoduo/client.py` - 飞书发送器的延迟初始化（使用 `@property`）
 
 ## 配置说明
 

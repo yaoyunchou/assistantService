@@ -36,11 +36,10 @@ def init_browser_pool():
     """初始化浏览器池"""
     global browser_pool
     if browser_pool is None:
-        print("正在初始化浏览器池...")
+        print("正在创建浏览器池...")
         try:
             browser_pool = BrowserPool(headless=Config.HEADLESS)
-            browser_pool.initialize()
-            print("浏览器池初始化完成")
+            print("浏览器池创建完成（使用上下文管理器模式）")
         except Exception as e:
             error_msg = str(e)
             if "Executable doesn't exist" in error_msg or "playwright" in error_msg.lower():
@@ -107,8 +106,7 @@ def main():
         global browser_pool
         try:
             browser_pool = BrowserPool(headless=Config.HEADLESS)
-            browser_pool.initialize()
-            print("浏览器池初始化完成")
+            print("浏览器池创建完成（使用上下文管理器模式）")
         except Exception as e:
             error_msg = str(e)
             print(f"\n{'='*60}")

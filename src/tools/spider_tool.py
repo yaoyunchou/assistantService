@@ -47,7 +47,6 @@ class SpiderTool(BaseTool):
             else:
                 # 如果没有提供浏览器池，创建一个新的
                 self.browser_pool = BrowserPool(headless=Config.HEADLESS)
-                self.browser_pool.initialize()
             
             return True
         except Exception as e:

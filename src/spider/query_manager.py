@@ -1,28 +1,33 @@
 """
-查询管理器模块 - 重试机制和浏览器实例管理（单线程顺序处理）
+浏览器池管理模块
+提供线程安全的浏览器实例池，支持动态扩展和自动清理
 """
-from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
+from playwright.sync_api import sync_playwright, BrowserContext, Page, Playwright
 from typing import List, Dict, Optional
-from spider.logistics_query import get_logistics_info
-from config import Config
 from pathlib import Path
+from utils.path_helper import get_safe_data_path
 import random
 import time
 import sys
 import os
 import threading
-from config import Config
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
+
+
+class BrowserTimeoutError(Exception):
+    """浏览器操作超时异常"""
+    pass
 
 # 获取 chrome.exe 路径（从 utils.browser_path 模块获取）
 def get_chrome_executable_path():
     """获取 chrome.exe 可执行文件路径"""
     try:
         # 方法1：直接从 utils.browser_path 模块获取（推荐，线程安全）
-        # 这个模块在主线程中已经初始化了 CHROME_EXECUTABLE_PATH
         try:
             from utils.browser_path import CHROME_EXECUTABLE_PATH
             if CHROME_EXECUTABLE_PATH:
-                print(f"[BrowserPool] 使用浏览器路径（utils.browser_path）: {CHROME_EXECUTABLE_PATH}")
                 return CHROME_EXECUTABLE_PATH
         except ImportError:
             pass
@@ -30,7 +35,6 @@ def get_chrome_executable_path():
         # 方法2：尝试从环境变量获取（如果设置了）
         env_path = os.environ.get('PLAYWRIGHT_CHROME_EXECUTABLE_PATH')
         if env_path and Path(env_path).exists():
-            print(f"[BrowserPool] 使用环境变量指定的浏览器路径: {env_path}")
             return env_path
         
         # 方法3：尝试从 __main__ 模块获取（打包后的exe，如果设置了）
@@ -39,713 +43,559 @@ def get_chrome_executable_path():
             if hasattr(main_module, 'CHROME_EXECUTABLE_PATH'):
                 path = main_module.CHROME_EXECUTABLE_PATH
                 if path:
-                    print(f"[BrowserPool] 使用指定的浏览器路径（__main__）: {path}")
                     return path
                     
     except Exception as e:
         print(f"[BrowserPool] 获取浏览器路径时出错: {e}")
         import traceback
         traceback.print_exc()
+        return None
     
-    print("[BrowserPool] 警告: 未找到指定的浏览器路径，将使用 Playwright 默认路径")
     return None
+
+
+@dataclass
+class BrowserInstance:
+    """浏览器实例"""
+    playwright: Playwright
+    context: BrowserContext
+    page: Page
+    is_busy: bool = False
+    last_used_time: datetime = None
+    thread_id: int = None
+    timeout_timer: threading.Timer = None  # 超时定时器
+    is_timeout: bool = False  # 是否超时
+    should_close: bool = False  # 是否应该关闭（由清理线程标记）
+    
+    def __post_init__(self):
+        if self.last_used_time is None:
+            self.last_used_time = datetime.now()
 
 
 class BrowserPool:
-    """浏览器实例池（维护2个专用页面：JD和百度）"""
+    """
+    浏览器实例池（智能复用模式）
     
-    def __init__(self, headless: bool = True):
-        self.headless = headless
-        self.playwright = None
-        self.browser = None
-        self.context = None
-        self.jd_page = None  # JD 运单号专用页面（快递100）
-        self.baidu_page = None  # 其他运单号专用页面（百度搜索）
-        self._initialized = False
-        self._baidu_page_initialized = False  # 百度页面是否已初始化（是否已访问过搜索页面）
-        self._last_used_time = None  # 最后使用时间
-        self._idle_timer = None  # 空闲定时器
-        self._idle_timeout = getattr(Config, 'BROWSER_IDLE_TIMEOUT', 300)  # 空闲超时时间（秒）
-        self._lock = threading.Lock()  # 线程锁
+    特性：
+    - 浏览器使用完后标记为空闲状态，可被其他请求复用
+    - 空闲超过10分钟的浏览器自动关闭释放资源
+    - 所有浏览器共享同一个持久化用户数据目录，确保登录状态共享
+    - 线程安全，支持并发访问
+    """
     
-    def initialize(self):
-        """初始化浏览器和2个专用页面"""
-        if self._initialized:
-            return
-        
-        self.playwright = sync_playwright().start()
-        
-        # 获取 chrome.exe 路径
-        chrome_executable_path = get_chrome_executable_path()
-        
-        # 准备 launch 参数
-        launch_args = {
-            'headless': self.headless,
-            'args': [
-                '--disable-blink-features=AutomationControlled',  # 隐藏自动化特征
-                '--disable-dev-shm-usage',
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-web-security',  # 禁用CORS检查，解决跨域资源加载问题
-                '--disable-features=VizDisplayCompositor',  # 禁用某些可能导致问题的特性
-                '--disable-site-isolation-trials',  # 禁用站点隔离，允许跨域资源加载
-                '--disable-infobars',  # 禁用信息栏
-                '--disable-notifications',  # 禁用通知
-                '--disable-popup-blocking',  # 禁用弹窗阻止
-                '--start-maximized',  # 启动时最大化
-            ]
-        }
-        
-        # 如果指定了 chrome.exe 路径，使用它
-        if chrome_executable_path:
-            from pathlib import Path
-            chrome_path = Path(chrome_executable_path)
-            if chrome_path.exists():
-                launch_args['executable_path'] = str(chrome_path.absolute())
-                print(f"[BrowserPool] 启动浏览器，使用路径: {launch_args['executable_path']}")
-            else:
-                print(f"[BrowserPool] 警告: 指定的浏览器路径不存在: {chrome_executable_path}")
-                print(f"[BrowserPool] 将使用 Playwright 默认路径")
-        else:
-            print("[BrowserPool] 未指定浏览器路径，使用 Playwright 默认路径")
-        
-        # 只创建1个浏览器和1个上下文
-        self.browser = self.playwright.chromium.launch(**launch_args)
-        
-        # 随机化 viewport 尺寸（模拟不同屏幕）
-        viewport_widths = [1920, 1366, 1440, 1536, 1600]
-        viewport_heights = [1080, 768, 900, 864, 1024]
-        viewport_width = random.choice(viewport_widths)
-        viewport_height = random.choice(viewport_heights)
-        
-        # 使用更新的 User-Agent（Chrome 最新版本）
-        user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
-        ]
-        user_agent = random.choice(user_agents)
-        
-        # 创建上下文时设置更真实的浏览器指纹
-        self.context = self.browser.new_context(
-            viewport={'width': viewport_width, 'height': viewport_height},
-            user_agent=user_agent,
-            locale='zh-CN',
-            timezone_id='Asia/Shanghai',
-            # 添加更多浏览器特征
-            permissions=['geolocation', 'notifications'],
-            geolocation={'latitude': 39.9042 + random.uniform(-0.1, 0.1), 'longitude': 116.4074 + random.uniform(-0.1, 0.1)},  # 北京坐标（稍微随机化）
-            color_scheme='light',
-            # 忽略 HTTPS 错误
-            ignore_https_errors=True,
-            # 添加额外的 HTTP 头
-            extra_http_headers={
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Accept-Encoding': 'gzip, deflate, br, zstd',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Cache-Control': 'max-age=0',
-            },
-        )
-        
-        # 反爬虫措施: 注入脚本隐藏 webdriver 特征和增强浏览器指纹
-        self.context.add_init_script("""
-            // 1. 隐藏 webdriver 特征
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            
-            // 2. 覆盖 plugins 属性（模拟真实浏览器插件）
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => {
-                    return [
-                        {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer'},
-                        {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai'},
-                        {name: 'Native Client', filename: 'internal-nacl-plugin'}
-                    ];
-                }
-            });
-            
-            // 3. 覆盖 languages 属性
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['zh-CN', 'zh', 'en-US', 'en']
-            });
-            
-            // 4. 覆盖 chrome 属性（完整的 Chrome 对象）
-            window.chrome = {
-                runtime: {},
-                loadTimes: function() {},
-                csi: function() {},
-                app: {}
-            };
-            
-            // 5. 覆盖 permissions 属性
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                    Promise.resolve({ state: Notification.permission }) :
-                    originalQuery(parameters)
-            );
-            
-            // 6. 覆盖 platform 属性
-            Object.defineProperty(navigator, 'platform', {
-                get: () => 'Win32'
-            });
-            
-            // 7. 覆盖 hardwareConcurrency（CPU核心数）
-            Object.defineProperty(navigator, 'hardwareConcurrency', {
-                get: () => 8
-            });
-            
-            // 8. 覆盖 deviceMemory（内存大小，GB）
-            Object.defineProperty(navigator, 'deviceMemory', {
-                get: () => 8
-            });
-            
-            // 9. 覆盖 connection（网络连接信息）
-            Object.defineProperty(navigator, 'connection', {
-                get: () => ({
-                    effectiveType: '4g',
-                    rtt: 50,
-                    downlink: 10,
-                    saveData: false
-                })
-            });
-            
-            // 10. 覆盖 getBattery（电池信息，桌面浏览器返回 null）
-            navigator.getBattery = () => Promise.resolve({
-                charging: true,
-                chargingTime: 0,
-                dischargingTime: Infinity,
-                level: 1
-            });
-            
-            // 11. 覆盖 vendor 和 vendorSub
-            Object.defineProperty(navigator, 'vendor', {
-                get: () => 'Google Inc.'
-            });
-            
-            // 12. 确保 XMLHttpRequest 和 fetch 正常工作
-            const OriginalXHR = window.XMLHttpRequest;
-            window.XMLHttpRequest = function() {
-                const xhr = new OriginalXHR();
-                return xhr;
-            };
-            
-            const OriginalFetch = window.fetch;
-            window.fetch = function(...args) {
-                return OriginalFetch.apply(this, args);
-            };
-            
-            // 13. 覆盖 toString 方法，防止检测
-            const getParameter = WebGLRenderingContext.prototype.getParameter;
-            WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                if (parameter === 37445) {
-                    return 'Intel Inc.';
-                }
-                if (parameter === 37446) {
-                    return 'Intel Iris OpenGL Engine';
-                }
-                return getParameter.call(this, parameter);
-            };
-            
-            // 14. 覆盖 canvas 指纹
-            const toBlob = HTMLCanvasElement.prototype.toBlob;
-            const toDataURL = HTMLCanvasElement.prototype.toDataURL;
-            const getImageData = CanvasRenderingContext2D.prototype.getImageData;
-            
-            // 15. 忽略 CORS 错误和字体加载错误（在控制台）
-            const originalError = console.error;
-            const originalWarn = console.warn;
-            const originalLog = console.log;
-            
-            console.error = function(...args) {
-                const msg = args[0] ? String(args[0]).toLowerCase() : '';
-                if (msg.includes('cors') || 
-                    msg.includes('blocked by cors policy') ||
-                    msg.includes('font') ||
-                    msg.includes('ttf') ||
-                    msg.includes('woff') ||
-                    msg.includes('preflight') ||
-                    msg.includes('automation') ||
-                    msg.includes('webdriver')) {
-                    return;
-                }
-                originalError.apply(console, args);
-            };
-            
-            console.warn = function(...args) {
-                const msg = args[0] ? String(args[0]).toLowerCase() : '';
-                if (msg.includes('cors') || 
-                    msg.includes('font') ||
-                    msg.includes('ttf') ||
-                    msg.includes('woff') ||
-                    msg.includes('automation') ||
-                    msg.includes('webdriver')) {
-                    return;
-                }
-                originalWarn.apply(console, args);
-            };
-            
-            // 16. 覆盖 Notification 权限
-            if (window.Notification) {
-                Object.defineProperty(Notification, 'permission', {
-                    get: () => 'default'
-                });
-            }
-            
-            // 17. 添加真实的浏览器特征
-            Object.defineProperty(navigator, 'maxTouchPoints', {
-                get: () => 0
-            });
-            
-            // 18. 覆盖 screen 属性
-            Object.defineProperty(screen, 'availWidth', {
-                get: () => window.innerWidth || 1920
-            });
-            Object.defineProperty(screen, 'availHeight', {
-                get: () => window.innerHeight || 1080
-            });
-        """)
-        
-        # 浏览器和上下文已创建成功，立即标记为已初始化
-        # 这样即使后续步骤失败，浏览器池仍然可以使用
-        self._initialized = True
-        self._update_last_used_time()
-        self._start_idle_timer()
-        print("浏览器和上下文已创建，浏览器池已初始化")
-        
-        # 创建2个专用页面
-        try:
-            self.jd_page = self._create_page_with_listeners()
-            self.baidu_page = self._create_page_with_listeners()
-            print("已创建2个专用页面（JD页面和百度页面）")
-        except Exception as e:
-            print(f"创建页面时出错: {e}")
-            import traceback
-            traceback.print_exc()
-            print("警告: 页面创建失败，但浏览器池已初始化，可以尝试创建新页面")
-            return
-        
-        # 初始化百度页面（访问首页和搜索页面，建立会话）
-        print("正在初始化百度页面（访问首页和搜索页面）...")
-        try:
-            self._initialize_baidu_page()
-        except Exception as e:
-            print(f"初始化百度页面时出错: {e}")
-            import traceback
-            traceback.print_exc()
-            print("警告: 百度页面初始化失败，但浏览器池已初始化，可以尝试使用")
-        
-        print("浏览器池初始化完成")
-    
-    def _initialize_baidu_page(self):
-        """初始化百度页面：访问首页和搜索页面，建立会话"""
-        if not self.baidu_page:
-            return
-        
-        try:
-            # 反爬虫措施1: 设置更真实的浏览器指纹
-            # 添加额外的 HTTP 头，模拟真实浏览器
-            self.baidu_page.set_extra_http_headers({
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-            })
-            
-            # 反爬虫措施2: 先访问百度首页，建立会话（更真实的访问流程）
-            print(f"[百度查询] 正在访问百度首页建立会话...")
-            try:
-                self.baidu_page.goto('https://www.baidu.com', wait_until='domcontentloaded', timeout=2000)
-                # 模拟鼠标移动和点击（更真实的交互）
-                try:
-                    # 随机移动鼠标
-                    for _ in range(random.randint(1, 2)):
-                        x = random.randint(100, 800)
-                        y = random.randint(100, 600)
-                        self.baidu_page.mouse.move(x, y)
-                        time.sleep(random.uniform(0.2, 0.5))
-                    
-                    # 模拟点击搜索框（但不输入）
-                    try:
-                        search_box = self.baidu_page.locator('#kw').first
-                        if search_box.count() > 0:
-                            search_box.hover()
-                            time.sleep(random.uniform(0.3, 0.6))
-                    except:
-                        pass
-                except:
-                    pass
-                    
-            except Exception as e:
-                print(f"[百度查询] 首页加载警告: {e}，尝试继续...")
-                time.sleep(random.uniform(2, 3))
-            
-            
-            # 构建百度搜索URL（不包含订单号，只访问搜索页面）
-            base_url = "https://www.baidu.com/s?ie=utf-8&f=8&rsv_bp=1&rsv_idx=1&tn=baidu&wd=百度快递查詢"
-            
-            # 打开搜索页面（使用更真实的导航方式）
-            print(f"[百度查询] 正在打开搜索页面...")
-            
-            # 先检查是否有 hitAntibot 拦截
-            try:
-                response = self.baidu_page.goto(base_url, wait_until='domcontentloaded', timeout=30000)
-                
-                # 检查响应内容是否包含 hitAntibot
-                try:
-                    content = self.baidu_page.content()
-                    if 'hitAntibot' in content or '"hitAntibot":"1"' in content:
-                        print(f"[百度查询] 检测到反爬虫拦截，等待更长时间后重试...")
-                        time.sleep(random.uniform(1, 2))  # 等待更长时间
-                        
-                        # 尝试刷新页面
-                        self.baidu_page.reload(wait_until='domcontentloaded', timeout=20000)
-                        time.sleep(random.uniform(1, 2))
-                        
-                        # 再次检查
-                        content = self.baidu_page.content()
-                        if 'hitAntibot' in content or '"hitAntibot":"1"' in content:
-                            print(f"[百度查询] 仍然被拦截，初始化失败")
-                            return
-                except:
-                    pass
-                    
-                print(f"[百度查询] 搜索页面加载完成")
-            except Exception as e:
-                print(f"[百度查询] 页面加载警告: {e}，尝试继续...")
-                time.sleep(random.uniform(2, 3))
-            
-            # 等待页面 JavaScript 执行完成（增加延迟）
-            print(f"[百度查询] 等待页面 JavaScript 初始化...")
-            time.sleep(random.uniform(3, 5))  # 增加延迟，让页面完全加载
-            
-            # 模拟真实用户行为：滚动和鼠标移动
-            try:
-                # 缓慢滚动页面
-                for scroll_pos in [200, 400, 600, 300, 0]:
-                    self.baidu_page.evaluate(f'window.scrollTo(0, {scroll_pos})')
-                    time.sleep(random.uniform(0.3, 0.6))
-                
-                # 随机鼠标移动
-                for _ in range(random.randint(2, 4)):
-                    x = random.randint(200, 1000)
-                    y = random.randint(200, 700)
-                    self.baidu_page.mouse.move(x, y)
-                    time.sleep(random.uniform(0.2, 0.4))
-            except:
-                pass
-            
-            time.sleep(random.uniform(1, 2))  # 额外延迟
-            
-            # 标记百度页面已初始化
-            self._baidu_page_initialized = True
-            print("[百度查询] 百度页面初始化完成")
-            
-        except Exception as e:
-            print(f"[百度查询] 初始化过程中出现错误: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    def _create_page_with_listeners(self) -> Page:
-        """创建页面并设置监听器"""
-        page = self.context.new_page()
-        
-        # 监听控制台消息，过滤 CORS 错误、字体加载错误和资源加载失败
-        def handle_console(msg):
-            msg_text = msg.text.lower()
-            if any(keyword in msg_text for keyword in [
-                'cors', 
-                'blocked by cors policy',
-                'font',
-                'ttf',
-                'woff',
-                'preflight request',
-                'access control check',
-                'net::err_failed',
-                'failed to load resource',
-                'all_async_search',
-                'bdstatic.com',
-                'pss.bdstatic.com'
-            ]):
-                return
-        
-        page.on('console', handle_console)
-        
-        # 监听页面错误
-        def handle_page_error(error):
-            error_text = error.message.lower() if hasattr(error, 'message') else str(error).lower()
-            if any(keyword in error_text for keyword in [
-                'cors',
-                'blocked by cors policy',
-                'font',
-                'ttf',
-                'woff',
-                'preflight',
-                'net::err_failed',
-                'failed to load',
-                'bdstatic.com'
-            ]):
-                return
-        
-        page.on('pageerror', handle_page_error)
-        
-        # 监听请求失败事件
-        def handle_request_failed(request):
-            url = request.url.lower()
-            if 'all_async_search' in url or 'search' in url:
-                print(f"[警告] 关键资源加载失败: {request.url}，可能会影响搜索功能")
-        
-        page.on('requestfailed', handle_request_failed)
-        
-        return page
-    
-    def get_page_for_waybill(self, waybill_number: str) -> tuple[Optional[Page], bool]:
+    def __init__(self, headless: bool = True, idle_timeout: int = 600, max_instances: int = 5):
         """
-        根据运单号类型返回对应的页面实例和是否首次使用标志
+        初始化浏览器池
         
         Args:
-            waybill_number: 运单号
+            headless: 是否使用无头模式
+            idle_timeout: 空闲超时时间（秒），默认600秒（10分钟）
+            max_instances: 最大浏览器实例数，默认5个
+        """
+        self.headless = headless
+        self.idle_timeout = idle_timeout
+        self.max_instances = max_instances
+        
+        # 渐进式扩展阈值配置
+        # 格式：{实例数: 触发阈值}
+        self.scale_thresholds = {
+            2: 5,    # 排队 > 5 个，扩展到2个实例
+            3: 20,   # 排队 > 20 个，扩展到3个实例
+            4: 30,   # 排队 > 30 个，扩展到4个实例
+            5: 40    # 排队 > 40 个，扩展到5个实例
+        }
+        
+        # 共享的用户数据目录（所有浏览器使用同一个目录，确保登录状态共享）
+        self._shared_user_data_dir = get_safe_data_path('browser_data', app_name='JNTools')
+        
+        # 浏览器实例池
+        self._instances: List[BrowserInstance] = []
+        
+        # 池锁（保护实例列表）
+        self._pool_lock = threading.Lock()
+        
+        # 用户数据目录锁（确保同一时间只有一个浏览器在创建）
+        # Playwright 不允许多个实例同时使用同一个用户数据目录
+        self._user_data_dir_lock = threading.Lock()
+        
+        # 等待队列计数（用于动态扩展决策）
+        self._waiting_count = 0
+        
+        # 启动清理线程
+        self._cleanup_thread = None
+        self._cleanup_running = False
+        self._start_cleanup_thread()
+    
+    @property
+    def _initialized(self):
+        """兼容性属性：浏览器池始终处于"已初始化"状态"""
+        return True
+    
+    def _start_cleanup_thread(self):
+        """启动后台清理线程"""
+        if self._cleanup_thread is None or not self._cleanup_thread.is_alive():
+            self._cleanup_running = True
+            self._cleanup_thread = threading.Thread(
+                target=self._cleanup_idle_browsers,
+                name="BrowserPoolCleanup",
+                daemon=True
+            )
+            self._cleanup_thread.start()
+            print("[BrowserPool] 清理线程已启动")
+    
+    def _cleanup_idle_browsers(self):
+        """后台清理空闲超时的浏览器（只标记，不直接关闭）"""
+        while self._cleanup_running:
+            try:
+                time.sleep(30)  # 每30秒检查一次
+                
+                now = datetime.now()
+                marked_count = 0
+                
+                with self._pool_lock:
+                    for instance in self._instances:
+                        # 检查是否空闲且超时
+                        if not instance.is_busy and not instance.should_close:
+                            idle_time = (now - instance.last_used_time).total_seconds()
+                            if idle_time > self.idle_timeout:
+                                # 只标记为待关闭，不直接关闭（避免跨线程问题）
+                                instance.should_close = True
+                                marked_count += 1
+                                print(f"[BrowserPool] 标记浏览器实例待关闭（空闲 {idle_time:.1f} 秒，线程ID: {instance.thread_id}）")
+                
+                if marked_count > 0:
+                    print(f"[BrowserPool] 已标记 {marked_count} 个浏览器实例待关闭（将在下次使用时由创建线程关闭）")
+                    
+            except Exception as e:
+                print(f"[BrowserPool] 清理线程异常: {e}")
+                import traceback
+                traceback.print_exc()
+    
+    def _close_instance(self, instance: BrowserInstance):
+        """关闭单个浏览器实例"""
+        try:
+            if instance.context:
+                instance.context.close()
+                print("[BrowserPool] 浏览器上下文已关闭")
+            if instance.playwright:
+                instance.playwright.stop()
+                print("[BrowserPool] Playwright 已停止")
+        except Exception as e:
+            print(f"[BrowserPool] 关闭浏览器实例时出错: {e}")
+    
+    def _create_new_instance(self) -> BrowserInstance:
+        """创建新的浏览器实例"""
+        thread_name = threading.current_thread().name
+        print(f"[BrowserPool] 线程 {thread_name} 创建新的浏览器实例...")
+        
+        # 使用锁确保同一时间只有一个线程在创建浏览器
+        with self._user_data_dir_lock:
+            # 启动 Playwright
+            playwright = sync_playwright().start()
+            
+            # 获取 chrome.exe 路径
+            chrome_executable_path = get_chrome_executable_path()
+            
+            # 使用共享的用户数据目录
+            user_data_dir = self._shared_user_data_dir
+            user_data_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 随机化 viewport 尺寸（模拟不同屏幕）
+            viewport_widths = [1920, 1366, 1440, 1536, 1600]
+            viewport_heights = [1080, 768, 900, 864, 1024]
+            viewport_width = random.choice(viewport_widths)
+            viewport_height = random.choice(viewport_heights)
+            
+            # 使用更新的 User-Agent
+            user_agents = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+            ]
+            user_agent = random.choice(user_agents)
+            
+            # 准备持久化上下文参数
+            context_args = {
+                'user_data_dir': str(user_data_dir),
+                'headless': self.headless,
+                'viewport': {'width': viewport_width, 'height': viewport_height},
+                'user_agent': user_agent,
+                'locale': 'zh-CN',
+                'timezone_id': 'Asia/Shanghai',
+                'permissions': ['geolocation', 'notifications'],
+                'geolocation': {'latitude': 39.9042 + random.uniform(-0.1, 0.1), 'longitude': 116.4074 + random.uniform(-0.1, 0.1)},
+                'color_scheme': 'light',
+                'ignore_https_errors': True,
+                'extra_http_headers': {
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'Accept-Encoding': 'gzip, deflate, br, zstd',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                },
+                'args': [
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-web-security',
+                    '--disable-features=VizDisplayCompositor',
+                    '--disable-site-isolation-trials',
+                    '--disable-infobars',
+                    '--disable-notifications',
+                    '--disable-popup-blocking',
+                    '--start-maximized',
+                ]
+            }
+            
+            # 如果指定了 chrome.exe 路径，使用它
+            if chrome_executable_path:
+                chrome_path = Path(chrome_executable_path)
+                if chrome_path.exists() and chrome_path.is_file():
+                    context_args['executable_path'] = str(chrome_path.absolute())
+            
+            # 创建持久化上下文（会自动保存和恢复登录状态）
+            context = playwright.chromium.launch_persistent_context(**context_args)
+            
+            # 注入反爬虫脚本
+            context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+            """)
+            
+            # 创建新页面
+            page = context.new_page()
+            
+            print(f"[BrowserPool] 线程 {thread_name} 浏览器实例创建成功")
+            
+            return BrowserInstance(
+                playwright=playwright,
+                context=context,
+                page=page,
+                is_busy=False,
+                last_used_time=datetime.now(),
+                thread_id=threading.get_ident()
+            )
+    
+    def _get_or_create_instance(self) -> BrowserInstance:
+        """
+        获取或创建浏览器实例（支持动态扩展）
+        
+        策略：
+        1. 优先复用当前线程的空闲实例
+        2. 如果没有，尝试复用其他线程的空闲实例（如果等待队列不长）
+        3. 如果等待队列过长或实例数未达上限，创建新实例
+        4. 最多创建 max_instances 个实例
+        
+        注意：由于 Playwright 同步 API 不支持跨线程使用，
+        复用其他线程的实例时需要重新创建 Page
+        """
+        current_thread_id = threading.get_ident()
+        
+        # 先清理当前线程中被标记为待关闭的实例
+        self._cleanup_marked_instances(current_thread_id)
+        
+        with self._pool_lock:
+            # 增加等待计数
+            self._waiting_count += 1
+            waiting = self._waiting_count
+            total_instances = len(self._instances)
+            idle_instances = sum(1 for i in self._instances if not i.is_busy and not i.should_close)
+            
+            print(f"[BrowserPool] 请求到达：等待队列 {waiting}，总实例 {total_instances}，空闲 {idle_instances}")
+            
+            # 策略1：优先复用当前线程的空闲实例
+            for instance in self._instances:
+                if not instance.is_busy and instance.thread_id == current_thread_id and not instance.should_close:
+                    instance.is_busy = True
+                    instance.last_used_time = datetime.now()
+                    self._waiting_count -= 1
+                    print(f"[BrowserPool] ✓ 复用当前线程的空闲实例")
+                    return instance
+            
+            # 策略2：如果有其他线程的空闲实例，复用它们
+            # 注意：复用时需要转移所有权到当前线程
+            if idle_instances > 0:
+                for instance in self._instances:
+                    if not instance.is_busy and not instance.should_close:
+                        instance.is_busy = True
+                        instance.last_used_time = datetime.now()
+                        instance.thread_id = current_thread_id  # 转移所有权到当前线程
+                        self._waiting_count -= 1
+                        print(f"[BrowserPool] ✓ 复用其他线程的空闲实例（转移所有权到当前线程）")
+                        return instance
+            
+            # 策略3：渐进式动态扩展
+            # 根据等待队列长度，决定需要的实例数
+            should_create_new = False
+            target_instances = self._calculate_target_instances(waiting)
+            
+            if total_instances < target_instances and total_instances < self.max_instances:
+                print(f"[BrowserPool] ⚡ 渐进式扩展触发：等待队列 {waiting}，当前实例 {total_instances}，目标实例 {target_instances}")
+                should_create_new = True
+            elif total_instances == 0:
+                # 如果池中没有任何实例，创建第一个
+                print(f"[BrowserPool] 创建首个浏览器实例")
+                should_create_new = True
+            elif total_instances >= self.max_instances:
+                # 已达上限，必须等待
+                print(f"[BrowserPool] ⚠️ 已达最大实例数限制（{self.max_instances}），等待空闲实例...")
+                should_create_new = False
+                self._waiting_count -= 1
+            else:
+                # 有实例但都在忙，等待空闲
+                print(f"[BrowserPool] 所有实例繁忙，等待空闲实例...")
+                should_create_new = False
+                self._waiting_count -= 1
+        
+        # 在锁外创建实例（避免长时间持锁）
+        if should_create_new:
+            try:
+                instance = self._create_new_instance()
+                instance.is_busy = True
+                instance.thread_id = current_thread_id
+                
+                # 添加到池中
+                with self._pool_lock:
+                    self._instances.append(instance)
+                    self._waiting_count -= 1
+                    print(f"[BrowserPool] ✓ 新浏览器已加入池（池中共 {len(self._instances)} 个实例）")
+                
+                return instance
+            except Exception as e:
+                with self._pool_lock:
+                    self._waiting_count -= 1
+                raise
+        else:
+            # 需要等待，递归重试（简单实现）
+            time.sleep(0.5)  # 等待500ms
+            return self._get_or_create_instance()
+    
+    def _calculate_target_instances(self, waiting_count: int) -> int:
+        """
+        根据等待队列长度计算目标实例数（渐进式扩展）
+        
+        扩展策略：
+        - 排队 > 5 个：需要 2 个实例
+        - 排队 > 20 个：需要 3 个实例
+        - 排队 > 30 个：需要 4 个实例
+        - 排队 > 40 个：需要 5 个实例
+        
+        Args:
+            waiting_count: 等待队列长度
             
         Returns:
-            (页面实例, 是否首次使用)，SF运单号返回(None, False)
-            注意：百度页面已在初始化时完成初始化，所以 is_first_time 始终为 False
+            目标实例数
         """
-        if not self._initialized:
-            # 尝试延迟初始化
-            if not self.ensure_initialized():
-                return None, False
+        # 按照阈值从大到小检查
+        for instances, threshold in sorted(self.scale_thresholds.items(), reverse=True):
+            if waiting_count > threshold:
+                return min(instances, self.max_instances)
         
-        # 更新最后使用时间
-        self._update_last_used_time()
+        # 如果都不满足，返回1个实例
+        return 1
+    
+    def _cleanup_marked_instances(self, thread_id: int):
+        """
+        清理当前线程中被标记为待关闭的实例
+        这个方法由创建实例的线程调用，避免跨线程关闭问题
         
-        waybill_upper = waybill_number.upper()
+        Args:
+            thread_id: 当前线程ID
+        """
+        instances_to_close = []
         
-        if 'SF' in waybill_upper:
-            # SF 不需要查询
-            return None, False
-        elif waybill_upper.startswith('JD'):
-            # JD 运单号使用快递100页面
-            return self.jd_page, False
+        with self._pool_lock:
+            # 查找当前线程中被标记为待关闭的实例
+            for instance in self._instances[:]:
+                if instance.thread_id == thread_id and instance.should_close and not instance.is_busy:
+                    instances_to_close.append(instance)
+                    self._instances.remove(instance)
+        
+        # 在锁外关闭（由当前线程关闭自己创建的实例）
+        for instance in instances_to_close:
+            thread_name = threading.current_thread().name
+            print(f"[BrowserPool] 线程 {thread_name} 关闭自己创建的空闲浏览器实例")
+            self._close_instance(instance)
+    
+    def _release_instance(self, instance: BrowserInstance, timeout_occurred: bool = False):
+        """
+        释放浏览器实例（标记为空闲，或关闭如果被标记为待关闭）
+        
+        Args:
+            instance: 浏览器实例
+            timeout_occurred: 是否因超时释放
+        """
+        # 取消超时定时器（如果存在）
+        if instance.timeout_timer:
+            instance.timeout_timer.cancel()
+            instance.timeout_timer = None
+        
+        # 重置超时标志
+        instance.is_timeout = False
+        
+        # 检查是否被标记为待关闭
+        if instance.should_close:
+            # 需要关闭此实例
+            with self._pool_lock:
+                if instance in self._instances:
+                    self._instances.remove(instance)
+            
+            # 关闭实例（在当前线程中，即创建它的线程）
+            thread_name = threading.current_thread().name
+            print(f"[BrowserPool] 线程 {thread_name} 关闭被标记的浏览器实例")
+            self._close_instance(instance)
         else:
-            # 其他运单号使用百度搜索页面
-            # 百度页面已在初始化时完成初始化，所以 is_first_time 始终为 False
-            return self.baidu_page, False
-    
-    def get_page(self) -> Optional[Page]:
-        """
-        从池中获取一个页面实例（轮询方式）
-        保留此方法以保持向后兼容，但建议使用 get_page_for_waybill
-        """
-        if not self._initialized:
-            return None
-        
-        # 默认返回百度页面（向后兼容）
-        return self.baidu_page
-    
-    def _update_last_used_time(self):
-        """更新最后使用时间"""
-        with self._lock:
-            self._last_used_time = time.time()
-    
-    def _start_idle_timer(self):
-        """启动空闲定时器"""
-        self._stop_idle_timer()
-        
-        def check_idle():
-            with self._lock:
-                if not self._initialized:
-                    return
+            # 标记为空闲，可被复用
+            with self._pool_lock:
+                instance.is_busy = False
+                instance.last_used_time = datetime.now()
                 
-                if self._last_used_time is None:
-                    return
-                
-                idle_time = time.time() - self._last_used_time
-                if idle_time >= self._idle_timeout:
-                    print(f"[BrowserPool] 浏览器空闲超过 {self._idle_timeout} 秒，自动关闭")
-                    self.close()
+                if timeout_occurred:
+                    print(f"[BrowserPool] 浏览器实例因超时被释放（池中共 {len(self._instances)} 个实例）")
                 else:
-                    # 继续检查
-                    self._idle_timer = threading.Timer(60.0, check_idle)  # 每60秒检查一次
-                    self._idle_timer.daemon = True
-                    self._idle_timer.start()
-        
-        self._idle_timer = threading.Timer(60.0, check_idle)
-        self._idle_timer.daemon = True
-        self._idle_timer.start()
+                    print(f"[BrowserPool] 浏览器实例已标记为空闲（池中共 {len(self._instances)} 个实例）")
     
-    def _stop_idle_timer(self):
-        """停止空闲定时器"""
-        if self._idle_timer:
-            self._idle_timer.cancel()
-            self._idle_timer = None
-    
-    def ensure_initialized(self):
+    def _on_timeout(self, instance: BrowserInstance, timeout_seconds: float):
         """
-        确保浏览器已初始化（延迟初始化）
+        超时回调函数
         
-        Returns:
-            是否成功初始化
+        Args:
+            instance: 浏览器实例
+            timeout_seconds: 超时时间（秒）
         """
-        if self._initialized:
-            self._update_last_used_time()
-            return True
+        thread_name = threading.current_thread().name
+        print(f"[BrowserPool] ⚠️ 警告：线程 {thread_name} 的浏览器操作超时（超过 {timeout_seconds} 秒）")
+        
+        # 标记为超时状态
+        instance.is_timeout = True
+        
+        # 注意：不在这里释放实例，而是在 finally 块中检查超时标志后释放
+        # 这样可以确保调用者的代码能够正确退出
+    
+    @contextmanager
+    def get_page(self, timeout: float = 60.0):
+        """
+        获取一个浏览器页面（上下文管理器）
+        
+        使用方法：
+            with browser_pool.get_page(timeout=30) as page:
+                page.goto('https://example.com')
+                # 使用 page 进行操作
+            # 离开 with 块后，浏览器标记为空闲，可被其他请求复用
+        
+        Args:
+            timeout: 超时时间（秒），默认60秒。超时后会记录日志并强制释放浏览器
+        
+        Yields:
+            Page 对象
+            
+        Raises:
+            BrowserTimeoutError: 如果操作超时
+        """
+        instance = None
+        timeout_occurred = False
+        start_time = time.time()
         
         try:
-            self.initialize()
-            return True
+            # 获取或创建浏览器实例
+            instance = self._get_or_create_instance()
+            
+            # 启动超时定时器
+            if timeout > 0:
+                instance.timeout_timer = threading.Timer(
+                    timeout, 
+                    self._on_timeout, 
+                    args=(instance, timeout)
+                )
+                instance.timeout_timer.daemon = True
+                instance.timeout_timer.start()
+                print(f"[BrowserPool] 启动超时定时器，超时时间: {timeout} 秒")
+            
+            # yield page 给调用者使用
+            yield instance.page
+            
+            # 检查是否超时
+            if instance.is_timeout:
+                timeout_occurred = True
+                elapsed = time.time() - start_time
+                thread_name = threading.current_thread().name
+                print(f"[BrowserPool] ❌ 线程 {thread_name} 的浏览器操作已超时（耗时 {elapsed:.2f} 秒，超时限制 {timeout} 秒）")
+                raise BrowserTimeoutError(f"浏览器操作超时（超过 {timeout} 秒）")
+            
+        except BrowserTimeoutError:
+            # 超时异常，直接抛出
+            timeout_occurred = True
+            raise
+            
         except Exception as e:
-            print(f"[BrowserPool] 延迟初始化失败: {e}")
-            return False
+            thread_name = threading.current_thread().name
+            elapsed = time.time() - start_time
+            
+            # 检查是否是因为超时导致的其他异常
+            if instance and instance.is_timeout:
+                timeout_occurred = True
+                print(f"[BrowserPool] ❌ 线程 {thread_name} 因超时导致异常（耗时 {elapsed:.2f} 秒）: {e}")
+                raise BrowserTimeoutError(f"浏览器操作超时导致异常: {e}") from e
+            else:
+                print(f"[BrowserPool] 线程 {thread_name} 使用浏览器异常（耗时 {elapsed:.2f} 秒）: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
+        
+        finally:
+            # 无论成功、失败还是超时，都要释放实例
+            if instance:
+                elapsed = time.time() - start_time
+                print(f"[BrowserPool] 浏览器操作完成，耗时 {elapsed:.2f} 秒")
+                self._release_instance(instance, timeout_occurred=timeout_occurred)
     
     def close(self):
-        """关闭浏览器实例"""
-        self._stop_idle_timer()
+        """关闭浏览器池，清理所有资源"""
+        print("[BrowserPool] 开始关闭浏览器池...")
         
-        if self.browser:
-            try:
-                self.browser.close()
-            except:
-                pass
+        # 停止清理线程
+        self._cleanup_running = False
+        if self._cleanup_thread and self._cleanup_thread.is_alive():
+            self._cleanup_thread.join(timeout=5)
         
-        if self.playwright:
-            try:
-                self.playwright.stop()
-            except:
-                pass
+        # 关闭所有浏览器实例
+        with self._pool_lock:
+            instances_to_close = self._instances[:]
+            self._instances.clear()
         
-        self._initialized = False
-        self.jd_page = None
-        self.baidu_page = None
-        self._last_used_time = None
-        print("已关闭浏览器实例和所有页面")
-
-
-def query_with_retry(
-    waybill_number: str,
-    browser_pool: Optional[BrowserPool] = None,
-    max_retry: int = 3
-) -> Optional[Dict]:
-    """
-    带重试机制的物流信息查询（单线程版本）
+        for instance in instances_to_close:
+            self._close_instance(instance)
+        
+        print(f"[BrowserPool] 浏览器池已关闭，共关闭 {len(instances_to_close)} 个实例")
     
-    Args:
-        waybill_number: 运单号
-        browser_pool: 浏览器实例池
-        max_retry: 最大重试次数
-        
-    Returns:
-        物流信息字典，失败返回 None
-    """
-    # 如果包含SF就是顺丰的单， SF的单不用查询，没有办法查，直接返回空
-    if 'SF' in waybill_number.upper():
-        return {
-            'success': True,
-            'data': []
-        }
-    
-    # 根据运单号类型获取对应的页面实例
-    if browser_pool is None:
-        return {
-            'success': False,
-            'error': '需要浏览器实例池（所有运单号都需要通过浏览器实例进行AJAX请求）'
-        }
-    
-    page, is_first_time = browser_pool.get_page_for_waybill(waybill_number)
-    if page is None:
-        # SF 运单号会返回 None，这是正常的
-        if 'SF' in waybill_number.upper():
+    def get_pool_status(self) -> Dict:
+        """获取浏览器池状态信息"""
+        with self._pool_lock:
+            total = len(self._instances)
+            busy = sum(1 for i in self._instances if i.is_busy)
+            idle = total - busy
+            
+            instances_info = []
+            for idx, instance in enumerate(self._instances):
+                idle_time = (datetime.now() - instance.last_used_time).total_seconds()
+                instances_info.append({
+                    'index': idx,
+                    'is_busy': instance.is_busy,
+                    'idle_seconds': idle_time,
+                    'thread_id': instance.thread_id,
+                    'should_close': instance.should_close
+                })
+            
             return {
-                'success': True,
-                'data': []
+                'total': total,
+                'busy': busy,
+                'idle': idle,
+                'waiting': self._waiting_count,
+                'max_instances': self.max_instances,
+                'scale_thresholds': self.scale_thresholds,  # 渐进式扩展阈值
+                'instances': instances_info,
+                'idle_timeout': self.idle_timeout
             }
-        return {
-            'success': False,
-            'error': '无法获取浏览器实例'
-        }
-    
-    # 重试查询
-    for attempt in range(max_retry):
-        try:
-            # 获取物流信息
-            result = get_logistics_info(page, waybill_number, is_first_time=is_first_time)
-            # 第一次查询后，后续查询不再需要初始化
-            is_first_time = False
-            
-            if result and result.get('success'):
-                return result
-            
-            # 如果失败但不是最后一次尝试，继续重试
-            if attempt < max_retry - 1:
-                print(f"运单号 {waybill_number} 第 {attempt + 1} 次查询失败，重试中...")
-                continue
-            else:
-                # 最后一次尝试失败
-                return result
-                
-        except Exception as e:
-            print(f"运单号 {waybill_number} 查询异常: {e}")
-            if attempt < max_retry - 1:
-                continue
-            else:
-                return {
-                    'success': False,
-                    'error': f'查询异常：{str(e)}'
-                }
-    
-    return None
 
-
-def batch_query_waybill_numbers(
-    waybill_numbers: List[str],
-    browser_pool: Optional[BrowserPool] = None,
-    max_retry: int = 3
-) -> Dict[str, Optional[Dict]]:
-    """
-    批量查询物流信息（顺序处理，使用浏览器实例池）
-    
-    Args:
-        waybill_numbers: 运单号列表
-        browser_pool: 浏览器实例池
-        max_retry: 最大重试次数
-        
-    Returns:
-        字典：{运单号: 物流信息}
-    """
-    results = {}
-    
-    # 初始化浏览器池（如果需要）
-    if browser_pool and not browser_pool._initialized:
-        browser_pool.initialize()
-    
-    # 顺序处理每个运单号
-    total = len(waybill_numbers)
-    for idx, waybill_number in enumerate(waybill_numbers, 1):
-        try:
-            #  查询物流信息
-            result = query_with_retry(waybill_number, browser_pool, max_retry)
-            # 将结果保存到字典中
-            results[waybill_number] = result
-            
-            # 显示进度
-            if idx % 10 == 0 or idx == total:
-                success_count = sum(1 for r in results.values() if r and r.get('success'))
-                print(f"进度: {idx}/{total}，成功: {success_count}")
-                
-        except Exception as e:
-            print(f"运单号 {waybill_number} 查询失败: {e}")
-            import traceback
-            traceback.print_exc()
-            results[waybill_number] = {
-                'success': False,
-                'error': f'查询异常：{str(e)}'
-            }
-    
-    return results
 

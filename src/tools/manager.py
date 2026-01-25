@@ -165,3 +165,20 @@ class ToolManager:
                 print(f"[ToolManager] 工具 {name} 清理完成")
             except Exception as e:
                 print(f"[ToolManager] 工具 {name} 清理异常: {e}")
+
+
+# 全局单例访问函数
+_tool_manager_instance = None
+
+
+def get_tool_manager() -> ToolManager:
+    """
+    获取工具管理器单例实例
+    
+    Returns:
+        ToolManager实例
+    """
+    global _tool_manager_instance
+    if _tool_manager_instance is None:
+        _tool_manager_instance = ToolManager()
+    return _tool_manager_instance

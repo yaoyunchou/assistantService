@@ -108,6 +108,17 @@ def register_web_routes(app, tool_manager: ToolManager):
         routes_logger.info("/hello 路由被访问")
         return "<h1>Hello World! Flask 正常工作！</h1><a href='/'>返回首页</a>"
     
+    @app.route('/browser-status')
+    def browser_status():
+        """浏览器状态监控页面"""
+        try:
+            tools_info = tool_manager.get_tools_info()
+            routes_logger.info("浏览器状态页面访问")
+            return render_template('browser_status.html', tools=tools_info, config=Config)
+        except Exception as e:
+            routes_logger.error(f"浏览器状态页面渲染错误: {e}", exc_info=True)
+            return render_template('error.html', message='浏览器状态页面加载失败', tools=tool_manager.get_tools_info(), config=Config), 500
+    
     @app.route('/settings')
     def settings():
         """配置页面"""

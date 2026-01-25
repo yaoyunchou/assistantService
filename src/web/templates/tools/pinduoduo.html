@@ -1,0 +1,527 @@
+{% extends "base.html" %}
+
+{% block title %}{{ tool.display_name }} - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+/* 状态卡片样式 */
+.status-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 30px;
+    margin-bottom: 30px;
+}
+
+.status-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+
+.status-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.status-indicator.success {
+    background: #d4edda;
+    color: #155724;
+}
+
+.status-indicator.failed {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.status-indicator.unknown {
+    background: #e2e3e5;
+    color: #383d41;
+}
+
+.status-indicator-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.status-info {
+    margin-top: 20px;
+}
+
+.status-info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.status-info-row:last-child {
+    border-bottom: none;
+}
+
+.status-info-label {
+    color: #7f8c8d;
+    font-weight: 500;
+}
+
+.status-info-value {
+    color: #2c3e50;
+    font-weight: 600;
+}
+
+/* 操作按钮样式 */
+.action-buttons {
+    display: flex;
+    gap: 15px;
+    margin-top: 20px;
+}
+
+.btn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 6px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.btn-primary {
+    background: #3498db;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #2980b9;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+}
+
+.btn-secondary {
+    background: #95a5a6;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: #7f8c8d;
+}
+
+.btn-danger {
+    background: #e74c3c;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #c0392b;
+}
+
+.btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none !important;
+}
+
+/* 二维码显示区域 */
+.qrcode-container {
+    display: none;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 30px;
+    margin-bottom: 30px;
+    text-align: center;
+}
+
+.qrcode-container.show {
+    display: block;
+}
+
+.qrcode-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #2c3e50;
+    margin-bottom: 20px;
+}
+
+.qrcode-image {
+    max-width: 300px;
+    margin: 0 auto;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 10px;
+    background: white;
+}
+
+.qrcode-hint {
+    margin-top: 15px;
+    color: #7f8c8d;
+    font-size: 14px;
+}
+
+.qrcode-status {
+    margin-top: 15px;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.qrcode-status.waiting {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.qrcode-status.success {
+    background: #d4edda;
+    color: #155724;
+}
+
+.qrcode-status.error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+/* TODO区域样式 */
+.todo-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 30px;
+    margin-bottom: 30px;
+}
+
+.todo-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #2c3e50;
+    margin-bottom: 15px;
+}
+
+.todo-description {
+    color: #7f8c8d;
+    line-height: 1.6;
+    margin-bottom: 20px;
+}
+
+.todo-items {
+    list-style: none;
+    padding: 0;
+}
+
+.todo-items li {
+    padding: 10px 0;
+    padding-left: 30px;
+    position: relative;
+    color: #7f8c8d;
+}
+
+.todo-items li:before {
+    content: "○";
+    position: absolute;
+    left: 0;
+    color: #bdc3c7;
+    font-size: 20px;
+}
+
+/* 加载动画 */
+.loading {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid rgba(52, 152, 219, 0.3);
+    border-radius: 50%;
+    border-top-color: #3498db;
+    animation: spin 1s ease-in-out infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>{{ tool.display_name }}</h2>
+    <p class="subtitle">{{ tool.description }}</p>
+</div>
+
+<!-- 状态卡片 -->
+<div class="status-card">
+    <div class="status-header">
+        <h3 class="status-title">登录状态</h3>
+        <div id="status-indicator" class="status-indicator unknown">
+            <span class="status-indicator-dot"></span>
+            <span id="status-text">加载中...</span>
+        </div>
+    </div>
+    
+    <div class="status-info">
+        <div class="status-info-row">
+            <span class="status-info-label">最后执行时间</span>
+            <span class="status-info-value" id="last-execution">--</span>
+        </div>
+        <div class="status-info-row">
+            <span class="status-info-label">最后成功时间</span>
+            <span class="status-info-value" id="last-success">--</span>
+        </div>
+        <div class="status-info-row">
+            <span class="status-info-label">最后失败时间</span>
+            <span class="status-info-value" id="last-failure">--</span>
+        </div>
+        <div class="status-info-row">
+            <span class="status-info-label">状态信息</span>
+            <span class="status-info-value" id="status-message">--</span>
+        </div>
+    </div>
+    
+    <div class="action-buttons">
+        <button id="refresh-status-btn" class="btn btn-secondary">刷新状态</button>
+        <button id="login-btn" class="btn btn-primary">重新登录</button>
+        <button id="clear-cookies-btn" class="btn btn-danger">清除登录</button>
+    </div>
+</div>
+
+<!-- 二维码显示区域 -->
+<div id="qrcode-container" class="qrcode-container">
+    <h3 class="qrcode-title">请使用拼多多APP扫码登录</h3>
+    <img id="qrcode-image" class="qrcode-image" src="" alt="二维码">
+    <p class="qrcode-hint">扫码成功后请稍等，系统会自动保存登录状态</p>
+    <div id="qrcode-status" class="qrcode-status waiting">
+        <span class="loading"></span> 等待扫码登录...
+    </div>
+</div>
+
+<!-- TODO功能区域 -->
+<div class="todo-card">
+    <h3 class="todo-title">🚀 自动化功能（开发中）</h3>
+    <p class="todo-description">
+        登录成功后，您可以在这里使用各种自动化功能。以下功能正在规划中：
+    </p>
+    <ul class="todo-items">
+        <li>订单数据自动抓取和统计</li>
+        <li>商品信息批量管理</li>
+        <li>评价自动监控和提醒</li>
+        <li>价格监控和预警</li>
+        <li>库存自动管理</li>
+        <li>数据报表自动生成</li>
+    </ul>
+</div>
+
+<script>
+// 页面加载时获取状态
+document.addEventListener('DOMContentLoaded', function() {
+    refreshStatus();
+});
+
+// 刷新状态按钮
+document.getElementById('refresh-status-btn').addEventListener('click', refreshStatus);
+
+// 登录按钮
+document.getElementById('login-btn').addEventListener('click', startLogin);
+
+// 清除登录按钮
+document.getElementById('clear-cookies-btn').addEventListener('click', clearCookies);
+
+// 刷新状态
+async function refreshStatus() {
+    try {
+        const response = await fetch('/api/pinduoduo/status');
+        const data = await response.json();
+        
+        if (data.success) {
+            updateStatusDisplay(data);
+        } else {
+            showError('获取状态失败: ' + (data.message || '未知错误'));
+        }
+    } catch (error) {
+        showError('获取状态失败: ' + error.message);
+    }
+}
+
+// 更新状态显示
+function updateStatusDisplay(data) {
+    const indicator = document.getElementById('status-indicator');
+    const statusText = document.getElementById('status-text');
+    
+    // 移除所有状态类
+    indicator.classList.remove('success', 'failed', 'unknown');
+    
+    // 设置状态
+    if (data.status === 'success') {
+        indicator.classList.add('success');
+        statusText.textContent = '登录有效';
+    } else if (data.status === 'failed') {
+        indicator.classList.add('failed');
+        statusText.textContent = '需要重新登录';
+    } else {
+        indicator.classList.add('unknown');
+        statusText.textContent = '未知状态';
+    }
+    
+    // 更新时间信息
+    document.getElementById('last-execution').textContent = formatTime(data.last_execution);
+    document.getElementById('last-success').textContent = formatTime(data.last_success);
+    document.getElementById('last-failure').textContent = formatTime(data.last_failure);
+    document.getElementById('status-message').textContent = data.message || '--';
+}
+
+// 格式化时间
+function formatTime(timeStr) {
+    if (!timeStr) return '--';
+    try {
+        const date = new Date(timeStr);
+        return date.toLocaleString('zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+    } catch (e) {
+        return timeStr;
+    }
+}
+
+// 开始登录流程
+async function startLogin() {
+    const loginBtn = document.getElementById('login-btn');
+    loginBtn.disabled = true;
+    loginBtn.textContent = '加载中...';
+    
+    try {
+        const response = await fetch('/api/pinduoduo/login', {
+            method: 'POST'
+        });
+        const data = await response.json();
+        
+        if (data.success && data.qrcode) {
+            // 显示二维码
+            showQRCode(data.qrcode);
+            // 开始轮询检查登录状态
+            startLoginPolling();
+        } else {
+            showError('获取二维码失败: ' + (data.message || '未知错误'));
+        }
+    } catch (error) {
+        showError('获取二维码失败: ' + error.message);
+    } finally {
+        loginBtn.disabled = false;
+        loginBtn.textContent = '重新登录';
+    }
+}
+
+// 显示二维码
+function showQRCode(qrcodeData) {
+    const container = document.getElementById('qrcode-container');
+    const image = document.getElementById('qrcode-image');
+    const status = document.getElementById('qrcode-status');
+    
+    image.src = qrcodeData;
+    container.classList.add('show');
+    status.className = 'qrcode-status waiting';
+    status.innerHTML = '<span class="loading"></span> 等待扫码登录...';
+}
+
+// 开始轮询检查登录状态
+let pollingInterval = null;
+function startLoginPolling() {
+    // 清除之前的轮询
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+    }
+    
+    // 设置轮询间隔（每2秒检查一次）
+    pollingInterval = setInterval(async () => {
+        try {
+            const response = await fetch('/api/pinduoduo/check_login_complete');
+            const data = await response.json();
+            
+            if (data.success && data.logged_in) {
+                // 登录成功
+                clearInterval(pollingInterval);
+                showLoginSuccess();
+                // 刷新状态
+                setTimeout(refreshStatus, 1000);
+            }
+        } catch (error) {
+            console.error('检查登录状态失败:', error);
+        }
+    }, 2000);
+    
+    // 60秒后停止轮询
+    setTimeout(() => {
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+            showLoginTimeout();
+        }
+    }, 60000);
+}
+
+// 显示登录成功
+function showLoginSuccess() {
+    const status = document.getElementById('qrcode-status');
+    status.className = 'qrcode-status success';
+    status.textContent = '✓ 登录成功！';
+    
+    // 3秒后隐藏二维码
+    setTimeout(() => {
+        document.getElementById('qrcode-container').classList.remove('show');
+    }, 3000);
+}
+
+// 显示登录超时
+function showLoginTimeout() {
+    const status = document.getElementById('qrcode-status');
+    status.className = 'qrcode-status error';
+    status.textContent = '× 登录超时，请重试';
+}
+
+// 清除登录状态
+async function clearCookies() {
+    if (!confirm('确定要清除登录状态吗？')) {
+        return;
+    }
+    
+    const clearBtn = document.getElementById('clear-cookies-btn');
+    clearBtn.disabled = true;
+    
+    try {
+        const response = await fetch('/api/pinduoduo/logout', {
+            method: 'POST'
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            alert('登录状态已清除');
+            refreshStatus();
+        } else {
+            showError('清除失败: ' + (data.message || '未知错误'));
+        }
+    } catch (error) {
+        showError('清除失败: ' + error.message);
+    } finally {
+        clearBtn.disabled = false;
+    }
+}
+
+// 显示错误
+function showError(message) {
+    alert(message);
+}
+</script>
+{% endblock %}
