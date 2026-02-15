@@ -176,7 +176,7 @@ HTTP请求
     ↓
 Flask App (JNSpider.py)
     ↓
-Routes (api/routes.py)
+Routes (api/routes/ 包)
     ↓
 Query Manager (spider/query_manager.py)
     ↓
@@ -194,14 +194,14 @@ JNSpider.py
     ├── Flask (app)
     ├── BrowserPool (spider/query_manager.py)
     ├── Config (config.py)
-    ├── Routes (api/routes.py)
+    ├── Routes (api/routes/ 包)
     ├── Browser Path (utils/browser_path.py)
     └── Startup (utils/startup.py)
 
-api/routes.py
-    ├── Query Manager (spider/query_manager.py)
-    ├── Config (config.py)
-    └── Startup (utils/startup.py)
+api/routes/（Blueprint 包）
+    ├── health.py, script_routes.py, settings_routes.py, browser_routes.py 等
+    ├── Query Manager / Config / Startup 等
+    └── Swagger 文档（/api/docs）
 
 spider/query_manager.py
     ├── Playwright
@@ -227,7 +227,9 @@ kaidi/
 │   ├── config.py                 # 应用配置文件
 │   ├── api/                      # API 模块
 │   │   ├── __init__.py
-│   │   └── routes.py             # Flask 路由处理
+│   │   └── routes/              # Flask 路由包（Blueprint）
+│   │       ├── __init__.py
+│   │       ├── health.py, script_routes.py, feishu_routes.py, websocket_routes.py 等
 │   ├── spider/                    # 爬虫模块
 │   │   ├── __init__.py
 │   │   ├── logistics_query.py    # 物流查询逻辑
@@ -265,13 +267,9 @@ kaidi/
   - 自动添加开机自启动
 - **依赖**: Flask, Playwright, BrowserPool
 
-**src/api/routes.py**
-- **功能**: Flask 路由处理
-- **主要路由**:
-  - `GET /health`: 健康检查
-  - `GET /query?waybill=xxx`: 单个查询
-  - `POST /batch`: 批量查询
-  - `GET/POST/DELETE /startup`: 自启动管理
+**src/api/routes/**（路由包）
+- **功能**: Flask 路由（按功能拆分为 Blueprint，集成 Swagger /api/docs）
+- **主要模块**: health.py（健康检查、/startup）、script_routes.py、settings_routes.py、browser_routes.py、pinduoduo_routes.py、tu_routes.py、feishu_routes.py、websocket_routes.py 等
 
 **src/spider/query_manager.py**
 - **功能**: 查询管理和浏览器池

@@ -1,0 +1,487 @@
+{% extends "base.html" %}
+
+{% block title %}飞书消息测试 - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.test-container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.test-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 30px;
+    margin-bottom: 20px;
+}
+
+.test-card h2 {
+    margin-top: 0;
+    color: #2c3e50;
+    font-size: 24px;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 10px;
+}
+
+.test-section {
+    margin-bottom: 30px;
+}
+
+.test-section h3 {
+    color: #34495e;
+    font-size: 18px;
+    margin-bottom: 15px;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: #555;
+    font-weight: 500;
+}
+
+.form-group input,
+.form-group textarea {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.form-group textarea {
+    min-height: 100px;
+    resize: vertical;
+    font-family: monospace;
+}
+
+.form-group input:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+}
+
+.btn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.btn-primary {
+    background: #3498db;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #2980b9;
+}
+
+.btn-primary:disabled {
+    background: #bdc3c7;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    background: #95a5a6;
+    color: white;
+    margin-left: 10px;
+}
+
+.btn-secondary:hover {
+    background: #7f8c8d;
+}
+
+.result-box {
+    margin-top: 20px;
+    padding: 15px;
+    border-radius: 6px;
+    display: none;
+}
+
+.result-box.show {
+    display: block;
+}
+
+.result-box.success {
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+    color: #155724;
+}
+
+.result-box.error {
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+    color: #721c24;
+}
+
+.result-box.info {
+    background: #d1ecf1;
+    border: 1px solid #bee5eb;
+    color: #0c5460;
+}
+
+.status-info {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+}
+
+.status-info-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.status-info-item:last-child {
+    border-bottom: none;
+}
+
+.status-info-label {
+    color: #6c757d;
+    font-weight: 500;
+}
+
+.status-info-value {
+    color: #212529;
+    font-weight: 600;
+}
+
+.status-info-value.available {
+    color: #28a745;
+}
+
+.status-info-value.unavailable {
+    color: #dc3545;
+}
+
+.loading {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #3498db;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-left: 10px;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="test-container">
+    <div class="test-card">
+        <h2>📱 飞书消息测试</h2>
+        
+        <!-- 状态信息 -->
+        <div class="status-info" id="statusInfo">
+            <div class="status-info-item">
+                <span class="status-info-label">飞书通知状态：</span>
+                <span class="status-info-value" id="feishuStatus">检查中...</span>
+            </div>
+            <div class="status-info-item">
+                <span class="status-info-label">客户端配置：</span>
+                <span class="status-info-value" id="clientStatus">检查中...</span>
+            </div>
+            <div class="status-info-item">
+                <span class="status-info-label">默认接收用户：</span>
+                <span class="status-info-value" id="userStatus">检查中...</span>
+            </div>
+        </div>
+
+        <!-- 测试1: 发送拼多多登录提醒 -->
+        <div class="test-section">
+            <h3>测试1: 发送拼多多登录提醒</h3>
+            <p style="color: #7f8c8d; margin-bottom: 15px;">
+                测试发送拼多多需要重新登录的通知消息
+            </p>
+            <div class="form-group">
+                <label>接收用户ID（可选，留空使用默认用户）：</label>
+                <input type="text" id="loginAlertUserId" placeholder="留空使用默认；格式：ou_xxx 或飞书用户ID，勿填工号">
+            </div>
+            <button class="btn btn-primary" onclick="testLoginAlert()" id="btnLoginAlert">
+                发送登录提醒
+            </button>
+            <div class="result-box" id="loginAlertResult"></div>
+        </div>
+
+        <!-- 测试2: 发送自定义消息 -->
+        <div class="test-section">
+            <h3>测试2: 发送自定义消息</h3>
+            <p style="color: #7f8c8d; margin-bottom: 15px;">
+                测试发送自定义文本消息
+            </p>
+            <div class="form-group">
+                <label>消息内容：</label>
+                <textarea id="customMessage" placeholder="请输入要发送的消息内容...">这是一条测试消息，用于测试飞书消息发送功能。</textarea>
+            </div>
+            <div class="form-group">
+                <label>接收用户ID（可选，留空使用默认用户）：</label>
+                <input type="text" id="customMessageUserId" placeholder="留空使用默认；格式：ou_xxx 或飞书用户ID，勿填工号">
+            </div>
+            <button class="btn btn-primary" onclick="testCustomMessage()" id="btnCustomMessage">
+                发送自定义消息
+            </button>
+            <div class="result-box" id="customMessageResult"></div>
+        </div>
+
+        <!-- 测试3: 发送卡片消息 -->
+        <div class="test-section">
+            <h3>测试3: 发送卡片消息</h3>
+            <p style="color: #7f8c8d; margin-bottom: 15px;">
+                发送飞书互动卡片消息，支持自定义卡片 JSON（config/header/elements 等）。
+            </p>
+            <div class="form-group">
+                <label>卡片内容（JSON 对象）：</label>
+                <textarea id="cardMessageJson" placeholder="留空则发送示例卡片" style="min-height: 180px; font-family: monospace; font-size: 13px;"></textarea>
+            </div>
+            <div class="form-group">
+                <label>接收用户ID（可选，留空使用默认用户）：</label>
+                <input type="text" id="cardMessageUserId" placeholder="留空使用默认；格式：ou_xxx 或飞书用户ID（较长），勿填工号">
+                <small style="color: #7f8c8d;">飞书要求 open_id（如 ou_xxx）或较长用户ID，短数字（如工号）会报错。</small>
+            </div>
+            <button class="btn btn-primary" onclick="testCardMessage()" id="btnCardMessage">
+                发送卡片消息
+            </button>
+            <div class="result-box" id="cardMessageResult"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 页面加载时检查状态
+document.addEventListener('DOMContentLoaded', function() {
+    checkStatus();
+});
+
+// 检查飞书状态
+async function checkStatus() {
+    try {
+        const response = await fetch('/api/feishu/status');
+        const data = await response.json();
+        
+        // 更新状态显示
+        const feishuStatusEl = document.getElementById('feishuStatus');
+        const clientStatusEl = document.getElementById('clientStatus');
+        const userStatusEl = document.getElementById('userStatus');
+        
+        if (data.feishu_enabled) {
+            feishuStatusEl.textContent = '已启用';
+            feishuStatusEl.className = 'status-info-value available';
+        } else {
+            feishuStatusEl.textContent = '已禁用';
+            feishuStatusEl.className = 'status-info-value unavailable';
+        }
+        
+        if (data.client_configured) {
+            clientStatusEl.textContent = '已配置';
+            clientStatusEl.className = 'status-info-value available';
+        } else {
+            clientStatusEl.textContent = '未配置';
+            clientStatusEl.className = 'status-info-value unavailable';
+        }
+        
+        if (data.default_user_id) {
+            userStatusEl.textContent = data.default_user_id;
+            userStatusEl.className = 'status-info-value available';
+        } else {
+            userStatusEl.textContent = '未配置';
+            userStatusEl.className = 'status-info-value unavailable';
+        }
+    } catch (error) {
+        console.error('检查状态失败:', error);
+        document.getElementById('feishuStatus').textContent = '检查失败';
+        document.getElementById('clientStatus').textContent = '检查失败';
+        document.getElementById('userStatus').textContent = '检查失败';
+    }
+}
+
+// 测试发送登录提醒
+async function testLoginAlert() {
+    const btn = document.getElementById('btnLoginAlert');
+    const resultBox = document.getElementById('loginAlertResult');
+    const userId = document.getElementById('loginAlertUserId').value.trim();
+    
+    // 禁用按钮，显示加载状态
+    btn.disabled = true;
+    btn.innerHTML = '发送中... <span class="loading"></span>';
+    resultBox.className = 'result-box';
+    resultBox.style.display = 'none';
+    
+    try {
+        const response = await fetch('/api/feishu/test/login-alert', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                user_id: userId || null
+            })
+        });
+        
+        const data = await response.json();
+        
+        // 显示结果
+        resultBox.style.display = 'block';
+        if (data.success) {
+            resultBox.className = 'result-box show success';
+            resultBox.innerHTML = `<strong>✓ 发送成功！</strong><br>${data.message || '消息已成功发送'}`;
+        } else {
+            resultBox.className = 'result-box show error';
+            resultBox.innerHTML = `<strong>✗ 发送失败</strong><br>${data.message || data.error || '未知错误'}`;
+        }
+    } catch (error) {
+        resultBox.style.display = 'block';
+        resultBox.className = 'result-box show error';
+        resultBox.innerHTML = `<strong>✗ 请求失败</strong><br>${error.message}`;
+    } finally {
+        // 恢复按钮
+        btn.disabled = false;
+        btn.innerHTML = '发送登录提醒';
+    }
+}
+
+// 测试发送自定义消息
+async function testCustomMessage() {
+    const btn = document.getElementById('btnCustomMessage');
+    const resultBox = document.getElementById('customMessageResult');
+    const message = document.getElementById('customMessage').value.trim();
+    const userId = document.getElementById('customMessageUserId').value.trim();
+    
+    if (!message) {
+        resultBox.style.display = 'block';
+        resultBox.className = 'result-box show error';
+        resultBox.innerHTML = '<strong>✗ 错误</strong><br>消息内容不能为空';
+        return;
+    }
+    
+    // 禁用按钮，显示加载状态
+    btn.disabled = true;
+    btn.innerHTML = '发送中... <span class="loading"></span>';
+    resultBox.className = 'result-box';
+    resultBox.style.display = 'none';
+    
+    try {
+        const response = await fetch('/api/feishu/test/custom-message', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                message: message,
+                user_id: userId || null
+            })
+        });
+        
+        const data = await response.json();
+        
+        // 显示结果
+        resultBox.style.display = 'block';
+        if (data.success) {
+            resultBox.className = 'result-box show success';
+            resultBox.innerHTML = `<strong>✓ 发送成功！</strong><br>${data.message || '消息已成功发送'}`;
+        } else {
+            resultBox.className = 'result-box show error';
+            resultBox.innerHTML = `<strong>✗ 发送失败</strong><br>${data.message || data.error || '未知错误'}`;
+        }
+    } catch (error) {
+        resultBox.style.display = 'block';
+        resultBox.className = 'result-box show error';
+        resultBox.innerHTML = `<strong>✗ 请求失败</strong><br>${error.message}`;
+    } finally {
+        // 恢复按钮
+        btn.disabled = false;
+        btn.innerHTML = '发送自定义消息';
+    }
+}
+
+// 默认示例卡片（飞书卡片结构）
+const defaultCardJson = `{
+  "config": { "wide_screen_mode": true },
+  "header": {
+    "title": { "tag": "plain_text", "content": "测试卡片" },
+    "template": "blue"
+  },
+  "elements": [
+    { "tag": "div", "text": { "tag": "lark_md", "content": "这是一条**卡片**测试消息。" } }
+  ]
+}`;
+
+// 测试发送卡片消息
+async function testCardMessage() {
+    const btn = document.getElementById('btnCardMessage');
+    const resultBox = document.getElementById('cardMessageResult');
+    const raw = document.getElementById('cardMessageJson').value.trim();
+    const userId = document.getElementById('cardMessageUserId').value.trim();
+
+    btn.disabled = true;
+    btn.innerHTML = '发送中... <span class="loading"></span>';
+    resultBox.className = 'result-box';
+    resultBox.style.display = 'none';
+
+    try {
+        let card;
+        if (raw) {
+            try {
+                card = JSON.parse(raw);
+            } catch (e) {
+                resultBox.style.display = 'block';
+                resultBox.className = 'result-box show error';
+                resultBox.innerHTML = '<strong>✗ 错误</strong><br>卡片内容不是合法 JSON：' + e.message;
+                return;
+            }
+        } else {
+            card = JSON.parse(defaultCardJson);
+        }
+
+        const body = { card: card };
+        if (userId) body.user_id = userId;
+
+        const response = await fetch('/api/feishu/test/card-message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await response.json();
+
+        resultBox.style.display = 'block';
+        if (data.success) {
+            resultBox.className = 'result-box show success';
+            resultBox.innerHTML = '<strong>✓ 发送成功！</strong><br>' + (data.message || '卡片已发送');
+        } else {
+            resultBox.className = 'result-box show error';
+            resultBox.innerHTML = '<strong>✗ 发送失败</strong><br>' + (data.message || data.error || '未知错误');
+        }
+    } catch (error) {
+        resultBox.style.display = 'block';
+        resultBox.className = 'result-box show error';
+        resultBox.innerHTML = '<strong>✗ 请求失败</strong><br>' + error.message;
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '发送卡片消息';
+    }
+}
+</script>
+{% endblock %}

@@ -79,15 +79,30 @@ class Config:
     MAX_MEMORY_MB = 200  # 最大内存限制（MB）
     
     # 拼多多配置
-    # Cookie和状态文件将保存在用户数据目录，避免权限问题
-    PINDUODUO_COOKIE_PATH = None  # None表示使用默认的用户数据目录
+    # 状态文件将保存在用户数据目录，避免权限问题
     PINDUODUO_STATUS_PATH = None  # None表示使用默认的用户数据目录
-    # PINDUODUO_TARGET_URL = 'https://mms.pinduoduo.com/home'
-    PINDUODUO_TARGET_URL = 'https://www.doubao.com/chat/28899721294850?open_from_ext=1'
+    PINDUODUO_TARGET_URL = 'https://mms.pinduoduo.com/home'
+    # 订单导出链接
+    PINDUODUO_ORDER_EXPORT_URL = 'https://mms.pinduoduo.com/orders/exportExcel?exportType=0'
+    # PINDUODUO_TARGET_URL = 'https://www.doubao.com/chat/28899721294850?open_from_ext=1'
 
     
+    # 途强物联网平台配置（iot.tqiot.com）
+    TU_TARGET_URL = 'https://iot.tqiot.com/#/?to=reportDown'
+    TU_STATUS_PATH = None  # None 表示使用默认用户数据目录
+    TU_ACCOUNT = os.getenv('TU_ACCOUNT', '18038361262')
+    TU_PASSWORD = os.getenv('TU_PASSWORD', 'yao625625')
+    # 设备ID，用于 locator/segment/find 接口；不填则从页面请求中自动捕获
+    TU_DEVICE_ID = os.getenv('TU_DEVICE_ID', '14165920973')
+
     # 飞书配置
     FEISHU_ENABLED = True  # 是否启用飞书通知
+
+    # WebSocket（Socket.IO）客户端配置（对接 docs/websocket-api.md，默认开启，Flask 启动时自动连接）
+    WS_CLIENT_ENABLED = True  # 是否启用
+    WS_CLIENT_HOST = os.getenv('WS_CLIENT_HOST', 'https://nestapi.xfysj.top')  # 服务端地址，测试环境 localhost
+    WS_CLIENT_PORT = int(os.getenv('WS_CLIENT_PORT', '8080'))  # 服务端端口，测试环境 3000
+    WS_CLIENT_PATH = os.getenv('WS_CLIENT_PATH', '/xcx/ws')  # Socket.IO path，与服务端一致
 
 
 # 在Config类定义后，尝试从配置文件加载配置
@@ -127,6 +142,16 @@ def _load_config_from_file():
                 Config.ENABLE_RESOURCE_MONITOR = bool(saved_config['enable_resource_monitor'])
             if 'max_memory_mb' in saved_config:
                 Config.MAX_MEMORY_MB = int(saved_config['max_memory_mb'])
+            if 'ws_client_enabled' in saved_config:
+                Config.WS_CLIENT_ENABLED = bool(saved_config['ws_client_enabled'])
+            if 'ws_client_host' in saved_config:
+                Config.WS_CLIENT_HOST = str(saved_config['ws_client_host'])
+            if 'ws_client_port' in saved_config:
+                port = int(saved_config['ws_client_port'])
+                if 1 <= port <= 65535:
+                    Config.WS_CLIENT_PORT = port
+            if 'ws_client_path' in saved_config:
+                Config.WS_CLIENT_PATH = str(saved_config['ws_client_path']).strip() or '/ws'
     except Exception:
         # 如果加载失败，使用默认配置
         pass

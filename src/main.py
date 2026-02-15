@@ -445,6 +445,19 @@ def run_flask_app():
             flask_logger.info(f"注册路由后，browser_pool对象ID: {id(browser_pool)}")
             flask_logger.info(f"注册路由后，browser_pool._initialized: {getattr(browser_pool, '_initialized', 'N/A')}")
         
+        # WebSocket 客户端：若配置启用则默认连接
+        try:
+            from utils.websocket_client import get_websocket_client
+            ws_result = get_websocket_client().start_if_enabled()
+            if ws_result.get('skipped'):
+                flask_logger.info(f"WebSocket 客户端未启用: {ws_result.get('reason', '')}")
+            elif ws_result.get('success'):
+                flask_logger.info(f"WebSocket 客户端已启动: {ws_result.get('url', '')}")
+            else:
+                flask_logger.warning(f"WebSocket 客户端启动失败: {ws_result.get('error', '')}")
+        except Exception as e:
+            flask_logger.warning(f"WebSocket 客户端启动异常: {e}")
+        
         flask_logger.info("Flask服务启动中...")
         flask_logger.info(f"服务地址: http://{Config.HOST}:{Config.PORT}")
         flask_logger.info(f"Flask应用对象: {app}")
@@ -485,6 +498,13 @@ def cleanup():
     global browser_pool, tool_manager, tray_icon
     
     logger.info("正在清理资源...")
+    
+    # 断开 WebSocket 客户端
+    try:
+        from utils.websocket_client import get_websocket_client
+        get_websocket_client().disconnect()
+    except Exception as e:
+        logger.debug(f"断开 WebSocket 客户端时: {e}")
     
     # 停止系统托盘
     if tray_icon:

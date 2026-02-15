@@ -1,6 +1,9 @@
 # Web框架
 flask>=2.3.0
 
+# API 文档 (Swagger UI)
+flasgger>=0.9.7
+
 # 浏览器自动化
 playwright>=1.40.0
 
@@ -21,3 +24,7 @@ pywebview>=4.4.0
 
 # 环境变量管理
 python-dotenv>=1.0.0
+
+# WebSocket / Socket.IO 客户端
+websocket-client>=1.6.0
+python-socketio[client]>=5.10.0

@@ -236,6 +236,48 @@
     font-size: 20px;
 }
 
+/* 同步到飞书表格 */
+.feishu-sync-desc {
+    color: #7f8c8d;
+    line-height: 1.6;
+    margin-bottom: 16px;
+}
+.feishu-sync-options {
+    margin-bottom: 16px;
+}
+.feishu-option-row {
+    margin-bottom: 10px;
+}
+.feishu-option-row label {
+    display: inline-block;
+    width: 90px;
+    color: #2c3e50;
+    font-weight: 500;
+}
+.feishu-input {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    width: 280px;
+    max-width: 100%;
+}
+.feishu-sync-result {
+    margin-top: 16px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+}
+.feishu-sync-result-title {
+    font-weight: 600;
+    color: #2c3e50;
+    margin-bottom: 8px;
+}
+.feishu-sync-result-content {
+    color: #495057;
+    font-size: 14px;
+}
+
 /* 加载动画 */
 .loading {
     display: inline-block;
@@ -290,8 +332,34 @@
     
     <div class="action-buttons">
         <button id="refresh-status-btn" class="btn btn-secondary">刷新状态</button>
-        <button id="login-btn" class="btn btn-primary">重新登录</button>
+        <button id="sync-orders-btn" class="btn btn-primary">同步订单</button>
+        <button id="login-btn" class="btn btn-secondary">重新登录</button>
         <button id="clear-cookies-btn" class="btn btn-danger">清除登录</button>
+    </div>
+</div>
+
+<!-- 同步到飞书表格 -->
+<div class="status-card feishu-sync-card">
+    <div class="status-header">
+        <h3 class="status-title">同步到飞书表格</h3>
+    </div>
+    <p class="feishu-sync-desc">将最近一次「同步订单」缓存的订单数据同步到飞书多维表格（订单号、订单状态、商品名称等）。</p>
+    <div class="feishu-sync-options">
+        <div class="feishu-option-row">
+            <label for="feishu-app-token">App Token</label>
+            <input type="text" id="feishu-app-token" placeholder="留空使用默认" class="feishu-input">
+        </div>
+        <div class="feishu-option-row">
+            <label for="feishu-table-id">Table ID</label>
+            <input type="text" id="feishu-table-id" placeholder="留空使用默认" class="feishu-input">
+        </div>
+    </div>
+    <div class="action-buttons">
+        <button id="sync-to-feishu-btn" class="btn btn-primary">同步到飞书表格</button>
+    </div>
+    <div id="feishu-sync-result" class="feishu-sync-result" style="display: none;">
+        <div class="feishu-sync-result-title">同步结果</div>
+        <div id="feishu-sync-result-content" class="feishu-sync-result-content"></div>
     </div>
 </div>
 
@@ -330,11 +398,17 @@ document.addEventListener('DOMContentLoaded', function() {
 // 刷新状态按钮
 document.getElementById('refresh-status-btn').addEventListener('click', refreshStatus);
 
+// 同步订单按钮
+document.getElementById('sync-orders-btn').addEventListener('click', syncOrders);
+
 // 登录按钮
 document.getElementById('login-btn').addEventListener('click', startLogin);
 
 // 清除登录按钮
 document.getElementById('clear-cookies-btn').addEventListener('click', clearCookies);
+
+// 同步到飞书表格按钮
+document.getElementById('sync-to-feishu-btn').addEventListener('click', syncToFeishu);
 
 // 刷新状态
 async function refreshStatus() {
@@ -377,6 +451,42 @@ function updateStatusDisplay(data) {
     document.getElementById('last-success').textContent = formatTime(data.last_success);
     document.getElementById('last-failure').textContent = formatTime(data.last_failure);
     document.getElementById('status-message').textContent = data.message || '--';
+}
+
+// 同步订单
+async function syncOrders() {
+    const syncBtn = document.getElementById('sync-orders-btn');
+    const originalText = syncBtn.textContent;
+    syncBtn.disabled = true;
+    syncBtn.innerHTML = '<span class="loading"></span> 同步中...';
+    
+    try {
+        const response = await fetch('/api/pinduoduo/execute', {
+            method: 'POST'
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            let message = '同步成功！';
+            if (data.order_result && data.order_result.success) {
+                message += ` 抓取到 ${data.order_result.data_count || 0} 条订单。`;
+            }
+            alert(message);
+            refreshStatus();
+        } else {
+            if (data.intercepted) {
+                alert('登录已失效，请重新登录。');
+                startLogin();
+            } else {
+                showError('同步失败: ' + (data.message || '未知错误'));
+            }
+        }
+    } catch (error) {
+        showError('同步请求失败: ' + error.message);
+    } finally {
+        syncBtn.disabled = false;
+        syncBtn.textContent = originalText;
+    }
 }
 
 // 格式化时间
@@ -516,6 +626,53 @@ async function clearCookies() {
         showError('清除失败: ' + error.message);
     } finally {
         clearBtn.disabled = false;
+    }
+}
+
+// 同步到飞书表格
+async function syncToFeishu() {
+    const btn = document.getElementById('sync-to-feishu-btn');
+    const resultEl = document.getElementById('feishu-sync-result');
+    const contentEl = document.getElementById('feishu-sync-result-content');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading"></span> 同步中...';
+    resultEl.style.display = 'none';
+
+    try {
+        const appToken = document.getElementById('feishu-app-token').value.trim();
+        const tableId = document.getElementById('feishu-table-id').value.trim();
+        const body = {};
+        if (appToken) body.app_token = appToken;
+        if (tableId) body.table_id = tableId;
+
+        const response = await fetch('/api/pinduoduo/sync-to-feishu', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await response.json();
+
+        resultEl.style.display = 'block';
+        if (data.success !== false) {
+            const total = data.total_count || 0;
+            const success = data.success_count || 0;
+            const fail = data.fail_count || 0;
+            const create = data.create_count || 0;
+            const update = data.update_count || 0;
+            contentEl.textContent = data.message || `成功 ${success} 条（新建 ${create}，更新 ${update}），失败 ${fail} 条，共 ${total} 条。`;
+            contentEl.style.color = '#155724';
+        } else {
+            contentEl.textContent = data.message || '同步失败';
+            contentEl.style.color = '#721c24';
+        }
+    } catch (error) {
+        resultEl.style.display = 'block';
+        contentEl.textContent = '请求失败: ' + error.message;
+        contentEl.style.color = '#721c24';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
     }
 }
 

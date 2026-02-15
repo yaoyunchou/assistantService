@@ -1,0 +1,409 @@
+{% extends "base.html" %}
+
+{% block title %}Socket.IO 客户端 - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.ws-container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.ws-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 30px;
+    margin-bottom: 20px;
+}
+
+.ws-card h2 {
+    margin-top: 0;
+    color: #2c3e50;
+    font-size: 24px;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 10px;
+}
+
+.ws-section {
+    margin-bottom: 20px;
+}
+
+.ws-section:last-child {
+    margin-bottom: 0;
+}
+
+.ws-section h3 {
+    color: #34495e;
+    font-size: 16px;
+    margin-bottom: 10px;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 6px;
+    color: #555;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.form-group input[type="text"],
+.form-group input[type="number"] {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: #3498db;
+}
+
+.checkbox-group {
+    display: flex;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.checkbox-group input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    margin-right: 10px;
+    cursor: pointer;
+}
+
+.checkbox-group label {
+    margin: 0;
+    cursor: pointer;
+    font-weight: normal;
+}
+
+.status-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.status-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.status-dot.connected {
+    background: #27ae60;
+    box-shadow: 0 0 0 2px rgba(39, 174, 96, 0.3);
+}
+
+.status-dot.connecting {
+    background: #f39c12;
+    animation: pulse 1s ease-in-out infinite;
+}
+
+.status-dot.disconnected {
+    background: #95a5a6;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.status-text {
+    font-size: 15px;
+    color: #2c3e50;
+}
+
+.status-meta {
+    font-size: 13px;
+    color: #7f8c8d;
+    margin-top: 8px;
+}
+
+.btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-primary {
+    background: #3498db;
+    color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: #2980b9;
+}
+
+.btn-primary:disabled {
+    background: #bdc3c7;
+    cursor: not-allowed;
+}
+
+.btn-success {
+    background: #27ae60;
+    color: white;
+}
+
+.btn-success:hover:not(:disabled) {
+    background: #219a52;
+}
+
+.btn-danger {
+    background: #e74c3c;
+    color: white;
+}
+
+.btn-danger:hover:not(:disabled) {
+    background: #c0392b;
+}
+
+.btn-secondary {
+    background: #95a5a6;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: #7f8c8d;
+}
+
+.btn-group {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.help-text {
+    font-size: 12px;
+    color: #95a5a6;
+    margin-top: 4px;
+}
+
+.page-header {
+    margin-bottom: 24px;
+}
+
+.page-header h1 {
+    font-size: 28px;
+    color: #2c3e50;
+    margin-bottom: 8px;
+}
+
+.page-header p {
+    color: #7f8c8d;
+    font-size: 14px;
+}
+
+.status-payload {
+    margin-top: 10px;
+    padding: 10px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 120px;
+    overflow-y: auto;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="ws-container">
+    <div class="page-header">
+        <h1>Socket.IO 客户端</h1>
+        <p>对接 <code>docs/websocket-api.md</code>：连接 path /ws，监听事件 <code>forward</code>。默认测试环境 <code>http://localhost:3000</code>，Flask 启动时自动连接。</p>
+    </div>
+
+    <div class="ws-card">
+        <h2>连接状态</h2>
+        <div class="ws-section">
+            <div class="status-row">
+                <span id="status-dot" class="status-dot disconnected"></span>
+                <span id="status-text" class="status-text">—</span>
+            </div>
+            <div id="status-meta" class="status-meta"></div>
+            <div id="status-sid" class="status-meta"></div>
+            <div id="status-payload-wrap" style="display:none;">
+                <div class="help-text">最近一次 forward 消息：</div>
+                <pre id="status-payload" class="status-payload"></pre>
+            </div>
+        </div>
+        <div class="btn-group">
+            <button type="button" id="btn-connect" class="btn btn-success">连接</button>
+            <button type="button" id="btn-disconnect" class="btn btn-danger">断开</button>
+            <button type="button" id="btn-refresh" class="btn btn-secondary">刷新状态</button>
+        </div>
+    </div>
+
+    <div class="ws-card">
+        <h2>连接配置</h2>
+        <p class="help-text" style="margin-bottom: 16px;">修改后点击「保存配置」生效；启用时下次启动将自动连接。</p>
+        <div class="ws-section">
+            <div class="checkbox-group">
+                <input type="checkbox" id="config-enabled" checked>
+                <label for="config-enabled">默认启用（Flask 启动时自动连接）</label>
+            </div>
+        </div>
+        <div class="ws-section">
+            <div class="form-group">
+                <label for="config-host">服务端地址</label>
+                <input type="text" id="config-host" placeholder="127.0.0.1" value="127.0.0.1">
+            </div>
+            <div class="form-group">
+                <label for="config-port">服务端端口</label>
+                <input type="number" id="config-port" placeholder="3000" min="1" max="65535" value="3000">
+                <span class="help-text">测试环境默认 3000</span>
+            </div>
+            <div class="form-group">
+                <label for="config-path">Socket.IO path</label>
+                <input type="text" id="config-path" placeholder="/ws" value="/ws">
+                <span class="help-text">与服务端一致，默认 /ws</span>
+            </div>
+        </div>
+        <div class="btn-group">
+            <button type="button" id="btn-save-config" class="btn btn-primary">保存配置</button>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    const statusDot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+    const statusMeta = document.getElementById('status-meta');
+    const btnConnect = document.getElementById('btn-connect');
+    const btnDisconnect = document.getElementById('btn-disconnect');
+    const btnRefresh = document.getElementById('btn-refresh');
+    const btnSaveConfig = document.getElementById('btn-save-config');
+    const configEnabled = document.getElementById('config-enabled');
+    const configHost = document.getElementById('config-host');
+    const configPort = document.getElementById('config-port');
+    const configPath = document.getElementById('config-path');
+    const statusSid = document.getElementById('status-sid');
+    const statusPayloadWrap = document.getElementById('status-payload-wrap');
+    const statusPayload = document.getElementById('status-payload');
+
+    function setStatus(status) {
+        statusDot.className = 'status-dot ' + (status.connected ? 'connected' : (status.connecting ? 'connecting' : 'disconnected'));
+        statusText.textContent = status.connected ? '已连接' : (status.connecting ? '连接中…' : '未连接');
+        let meta = [];
+        if (status.last_error) meta.push('错误: ' + status.last_error);
+        if (status.last_message_time) {
+            const d = new Date(status.last_message_time * 1000);
+            meta.push('最后消息: ' + d.toLocaleString());
+        }
+        statusMeta.textContent = meta.length ? meta.join(' | ') : '';
+        statusSid.textContent = status.sid ? 'sid: ' + status.sid : '';
+        if (status.last_forward_payload) {
+            statusPayloadWrap.style.display = 'block';
+            statusPayload.textContent = JSON.stringify(status.last_forward_payload, null, 2);
+        } else {
+            statusPayloadWrap.style.display = 'none';
+        }
+    }
+
+    function loadStatus() {
+        fetch('/api/websocket/status')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success && data.status) setStatus(data.status);
+            })
+            .catch(function(e) {
+                statusText.textContent = '获取状态失败';
+                statusMeta.textContent = String(e);
+            });
+    }
+
+    function loadConfig() {
+        fetch('/api/websocket/config')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success && data.config) {
+                    const c = data.config;
+                    configEnabled.checked = !!c.enabled;
+                    configHost.value = c.host || '127.0.0.1';
+                    configPort.value = c.port != null ? c.port : 3000;
+                    configPath.value = c.path != null ? c.path : '/ws';
+                }
+            })
+            .catch(function(e) {
+                console.error('加载配置失败', e);
+            });
+    }
+
+    btnConnect.addEventListener('click', function() {
+        btnConnect.disabled = true;
+        fetch('/api/websocket/connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                host: configHost.value.trim() || undefined,
+                port: configPort.value ? parseInt(configPort.value, 10) : undefined,
+                path: configPath.value.trim() || undefined
+            })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            loadStatus();
+            if (!data.success) alert(data.error || '连接失败');
+        })
+        .catch(function(e) { alert('请求失败: ' + e); })
+        .finally(function() { btnConnect.disabled = false; });
+    });
+
+    btnDisconnect.addEventListener('click', function() {
+        btnDisconnect.disabled = true;
+        fetch('/api/websocket/disconnect', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function() { loadStatus(); })
+        .finally(function() { btnDisconnect.disabled = false; });
+    });
+
+    btnRefresh.addEventListener('click', loadStatus);
+
+    btnSaveConfig.addEventListener('click', function() {
+        btnSaveConfig.disabled = true;
+        fetch('/api/websocket/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                enabled: configEnabled.checked,
+                host: configHost.value.trim(),
+                port: parseInt(configPort.value, 10) || 3000,
+                path: (configPath.value || '/ws').trim()
+            })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.success) {
+                loadConfig();
+                loadStatus();
+            } else {
+                alert(data.error || '保存失败');
+            }
+        })
+        .catch(function(e) { alert('请求失败: ' + e); })
+        .finally(function() { btnSaveConfig.disabled = false; });
+    });
+
+    loadStatus();
+    loadConfig();
+})();
+</script>
+{% endblock %}

@@ -1,6 +1,6 @@
 """
 拼多多自动化客户端
-负责Cookie管理、登录检测、自动化执行等核心功能
+负责状态管理、登录检测、自动化执行等核心功能
 """
 import json
 import time
@@ -13,6 +13,7 @@ from config import Config
 from utils.logger import get_logger
 from utils.path_helper import get_safe_data_path
 from tools.feishu.message_sender import get_message_sender
+from .feishutable import sync_orders_to_feishu
 
 logger = get_logger('PinduoduoClient')
 
@@ -28,13 +29,12 @@ class PinduoduoClient:
             page: Playwright Page对象，如果不提供则需要后续设置
         """
         self.page = page
-        self.cookie_path = self._get_cookie_path()
         self.status_path = self._get_status_path()
         self.target_url = Config.PINDUODUO_TARGET_URL
         self._feishu_sender = None  # 延迟初始化
         
-        # 确保cookies目录存在
-        self.cookie_path.parent.mkdir(parents=True, exist_ok=True)
+        # 确保目录存在
+        self.status_path.parent.mkdir(parents=True, exist_ok=True)
     
     @property
     def feishu_sender(self):
@@ -47,21 +47,6 @@ class PinduoduoClient:
         if self._feishu_sender is None:
             self._feishu_sender = get_message_sender()
         return self._feishu_sender
-    
-    def _get_cookie_path(self) -> Path:
-        """
-        获取Cookie文件路径
-        使用安全的数据目录，避免权限问题
-        """
-        cookie_path = Config.PINDUODUO_COOKIE_PATH
-        if cookie_path is None:
-            # 使用默认的用户数据目录
-            return get_safe_data_path('cookies/pinduoduo_cookies.json')
-        elif Path(cookie_path).is_absolute():
-            return Path(cookie_path)
-        else:
-            # 相对路径，使用安全路径处理
-            return get_safe_data_path(cookie_path)
     
     def _get_status_path(self) -> Path:
         """
@@ -86,112 +71,7 @@ class PinduoduoClient:
             page: Playwright Page对象
         """
         self.page = page
-    
-    def load_cookies(self) -> bool:
-        """
-        从文件加载Cookie并注入到浏览器上下文
-        
-        Returns:
-            是否加载成功
-        """
-        if not self.page:
-            logger.error("Page对象未设置，无法加载Cookie")
-            return False
-        
-        if not self.cookie_path.exists():
-            logger.info(f"Cookie文件不存在: {self.cookie_path}")
-            return False
-        
-        try:
-            with open(self.cookie_path, 'r', encoding='utf-8') as f:
-                cookie_data = json.load(f)
-            
-            cookies = cookie_data.get('cookies', [])
-            if not cookies:
-                logger.warning("Cookie文件中没有Cookie数据")
-                return False
-            
-            # 注入Cookie到当前上下文
-            context = self.page.context
-            context.add_cookies(cookies)
-            
-            logger.info(f"成功加载Cookie，共{len(cookies)}个")
-            return True
-        
-        except json.JSONDecodeError as e:
-            logger.error(f"Cookie文件格式错误: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"加载Cookie失败: {e}", exc_info=True)
-            return False
-    
-    def save_cookies(self) -> bool:
-        """
-        保存当前浏览器上下文的Cookie到文件
-        
-        Returns:
-            是否保存成功
-        """
-        if not self.page:
-            logger.error("Page对象未设置，无法保存Cookie")
-            return False
-        
-        try:
-            # 获取当前所有Cookie
-            context = self.page.context
-            cookies = context.cookies()
-            
-            # 构造Cookie数据
-            cookie_data = {
-                "cookies": cookies,
-                "timestamp": datetime.now().isoformat(),
-                "domain": "mms.pinduoduo.com"
-            }
-            
-            # 确保目录存在
-            self.cookie_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # 保存到文件
-            with open(self.cookie_path, 'w', encoding='utf-8') as f:
-                json.dump(cookie_data, f, ensure_ascii=False, indent=2)
-            
-            logger.info(f"成功保存Cookie到: {self.cookie_path}")
-            return True
-        
-        except Exception as e:
-            logger.error(f"保存Cookie失败: {e}", exc_info=True)
-            return False
-    
-    def clear_cookies(self) -> bool:
-        """
-        清除Cookie文件和浏览器Cookie
-        
-        Returns:
-            是否清除成功
-        """
-        success = True
-        
-        # 删除Cookie文件
-        if self.cookie_path.exists():
-            try:
-                self.cookie_path.unlink()
-                logger.info("Cookie文件已删除")
-            except Exception as e:
-                logger.error(f"删除Cookie文件失败: {e}")
-                success = False
-        
-        # 清除浏览器Cookie
-        if self.page:
-            try:
-                context = self.page.context
-                context.clear_cookies()
-                logger.info("浏览器Cookie已清除")
-            except Exception as e:
-                logger.error(f"清除浏览器Cookie失败: {e}")
-                success = False
-        
-        return success
-    
+
     def execute_automation(self, url: Optional[str] = None) -> Dict[str, Any]:
         """
         执行自动化操作（当前仅检测登录状态）
@@ -213,9 +93,6 @@ class PinduoduoClient:
         target = url or self.target_url
         
         try:
-            # 加载Cookie
-            self.load_cookies()
-            
             # 访问目标页面
             logger.info(f"正在访问: {target}")
             self.page.goto(target, wait_until='domcontentloaded', timeout=30000)
@@ -260,13 +137,15 @@ class PinduoduoClient:
                 # 记录成功状态
                 self._save_execution_status(success=True, message="自动化执行成功")
                 
-                # TODO: 这里可以添加实际的自动化操作逻辑
-                # 例如：抓取数据、执行操作等
+                # 抓取最近30天订单数据
+                logger.info("开始抓取最近30天订单数据...")
+                order_result = self.fetch_recent_orders()
                 
                 return {
                     "success": True,
                     "intercepted": False,
-                    "message": "执行成功"
+                    "message": "执行成功",
+                    "order_result": order_result
                 }
         
         except TimeoutError:
@@ -286,6 +165,314 @@ class PinduoduoClient:
                 "message": f"执行失败: {str(e)}"
             }
     
+    def fetch_recent_orders(self) -> Dict[str, Any]:
+        """
+        获取最近30天的订单数据并缓存到本地
+        
+        Returns:
+            执行结果字典
+        """
+        if not self.page:
+            return {
+                "success": False,
+                "message": "Page对象未设置"
+            }
+        
+        order_list_url = "https://mms.pinduoduo.com/orders/list"
+        
+        # 用于存储捕获的请求信息列表，每个item包含headers等信息
+        captured_requests = []
+        
+        def handle_request(request):
+            """处理网络请求，捕获包含 anti-content 的 XHR 请求信息"""
+            # 检查是否是 XHR 或 fetch 请求
+            resource_type = request.resource_type
+            if resource_type in ['xhr', 'fetch']:
+                # 获取请求头
+                headers = dict(request.headers) if request.headers else {}
+                
+                # 检查请求头中是否包含 anti-content 字段
+                if 'anti-content' in headers or 'antiContent' in headers:
+                    url = request.url
+                    logger.info(f"捕获到包含 anti-content 的 XHR 请求: {url} (类型: {resource_type})")
+                    
+                    # 获取POST请求体
+                    post_data = None
+                    post_data_parsed = None
+                    try:
+                        post_data = request.post_data
+                        if post_data:
+                            # 尝试解析JSON格式的请求体
+                            try:
+                                post_data_parsed = json.loads(post_data)
+                                logger.info(f"请求体内容: {json.dumps(post_data_parsed, ensure_ascii=False, indent=2)}")
+                            except:
+                                logger.info(f"请求体内容（非JSON）: {post_data}")
+                    except Exception as e:
+                        logger.warning(f"获取请求体失败: {e}")
+                    
+                    # 添加到捕获列表
+                    captured_requests.append({
+                        "url": url,
+                        "method": request.method,
+                        "resource_type": resource_type,
+                        "headers": headers,
+                        "post_data": post_data,
+                        "post_data_parsed": post_data_parsed,
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    
+                    logger.info(f"已捕获 {len(captured_requests)} 个包含 anti-content 的 XHR 请求")
+        
+        try:
+            # 0. 设置请求监听器（在访问页面之前）
+            logger.info("设置网络请求监听器...")
+            self.page.on("request", handle_request)
+            
+            # 1. 进入订单列表页面
+            # 注意：使用 domcontentloaded 而不是 networkidle，因为现代SPA页面可能有持续的网络请求
+            # 导致永远无法达到 networkidle 状态
+            logger.info(f"正在访问订单列表页面: {order_list_url}")
+            self.page.goto(order_list_url, wait_until='domcontentloaded', timeout=30000)
+            
+            # 等待页面基本加载完成
+            try:
+                self.page.wait_for_load_state('load', timeout=10000)
+            except:
+                logger.warning("等待 load 状态超时，继续执行...")
+            
+            # 尝试等待网络空闲，但设置较短的超时时间（5秒）
+            # 如果超时也不影响，因为 DOM 已经加载完成
+            try:
+                self.page.wait_for_load_state('networkidle', timeout=5000)
+                logger.info("页面网络已空闲")
+            except:
+                logger.warning("等待 networkidle 超时，但 DOM 已加载，继续执行...")
+            
+            # 等待一段时间，确保页面自动发起的AJAX请求被捕获
+            logger.info("等待页面自动发起AJAX请求...")
+            time.sleep(3)
+            
+            # 如果已经捕获到请求，保存请求信息
+            if captured_requests:
+                logger.info(f"成功捕获到 {len(captured_requests)} 个 XHR 请求")
+                # 保存请求信息到文件
+                request_info_path = get_safe_data_path('cache/pinduoduo_request_info.json')
+                request_info_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # 准备保存的请求信息（保存整个列表）
+                request_info = {
+                    "capture_time": datetime.now().isoformat(),
+                    "total_count": len(captured_requests),
+                    "requests": captured_requests
+                }
+                
+                with open(request_info_path, 'w', encoding='utf-8') as f:
+                    json.dump(request_info, f, ensure_ascii=False, indent=2)
+                
+                logger.info(f"请求信息已保存到: {request_info_path}")
+            else:
+                logger.warning("未捕获到目标API请求，可能页面未自动发起请求")
+            
+            # 2. 准备 fetch 脚本
+            # 计算30天的时间范围（Unix时间戳，秒）
+            end_time = int(time.time())
+            start_time = end_time - (30 * 24 * 60 * 60)
+            
+            
+            # 处理 captured_requests 里面所有的 headers，转换为 JavaScript 可用的格式
+            # 提取所有请求的 headers 列表
+            if captured_requests and len(captured_requests) > 0:
+                headers_list = [request["headers"] for request in captured_requests]
+            else:
+                # 如果没有捕获到请求，使用默认请求头
+                headers_list = [{
+                    "accept": "*/*",
+                    "accept-language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "cache-control": "no-cache",
+                    "content-type": "application/json",
+                    "pragma": "no-cache",
+                    "priority": "u=1, i",
+                    "sec-ch-ua": '"Chromium";v="143", "Not A(Brand";v="24"',
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": '"Windows"',
+                    "sec-fetch-dest": "empty",
+                    "sec-fetch-mode": "cors",
+                    "sec-fetch-site": "same-origin",
+                    "upgrade-insecure-requests": "1"
+                }]
+                logger.warning("未捕获到请求头，使用默认请求头")
+            
+            #  从第五个截取headers_list， 前面的有的请求有问题
+            headers_list = headers_list[4:]
+            # 将 headers 列表转换为 JSON 字符串，然后转义以便嵌入到 JavaScript 字符串中
+            headers_list_json = json.dumps(headers_list, ensure_ascii=False)
+            # 转义 JavaScript 字符串中的反斜杠、引号和换行符
+            headers_list_js_escaped = headers_list_json.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+            
+            # 准备请求体：按当前逻辑计算时间（最近30天）
+            end_time = int(time.time())
+            start_time = end_time - (30 * 24 * 60 * 60)
+           
+            # 构建 fetch 脚本，在 JavaScript 中完成分页逻辑，获取最多5页数据
+            fetch_script = f"""
+            async () => {{
+                const headersList = JSON.parse("{headers_list_js_escaped}");
+                const apiUrl = "https://mms.pinduoduo.com/mangkhut/mms/recentOrderList?t=1&pageNumber=";
+                const maxPages = 5;
+                const pageSize = 20;
+                const allPageItems = [];
+                
+                // 辅助函数：获取单页数据
+                const fetchPage = async (pageNumber) => {{
+                    // 使用对应页面的 headers，如果列表不够长则使用最后一个
+                    const headers = headersList[pageNumber - 1] || headersList[headersList.length - 1] || {{}};
+                    
+                    const body = {{
+                        "orderType": 0,
+                        "afterSaleType": 0,
+                        "remarkStatus": -1,
+                        "urgeShippingStatus": -1,
+                        "groupStartTime": {start_time},   
+                        "groupEndTime": {end_time},     
+                        "pageNumber": pageNumber,
+                        "pageSize": pageSize,
+                        "sortType": 7,
+                        "hideRegionBlackDelayShipping": false,
+                        "mobile": ""
+                    }};
+                    const response = await fetch(apiUrl+pageNumber, {{
+                        "headers": headers,
+                        "referrer": "{order_list_url}",
+                        "body": JSON.stringify(body),
+                        "method": "POST",
+                        "mode": "cors",
+                        "credentials": "include"
+                    }});
+                    return await response.json();
+                }};
+                
+                // 获取第一页，获取总页数
+                const firstPageData = await fetchPage(1);
+                if (!firstPageData || !firstPageData.result) {{
+                    return firstPageData;
+                }}
+                
+                const totalItemNum = firstPageData.result.totalItemNum || 0;
+                const firstPageItems = firstPageData.result.pageItems || [];
+                allPageItems.push(...firstPageItems);
+                
+                // 计算总页数（最多获取5页）
+                const totalPages = Math.min(Math.ceil(totalItemNum / pageSize), maxPages);
+                
+                // 如果有多页，使用 Promise.all 并发获取剩余页面（最多到第5页）
+                // 因为每个请求使用不同的 headers，不会被风控
+                if (totalPages > 1) {{
+                    // 创建所有页面的请求 Promise
+                    const pagePromises = [];
+                    for (let pageNum = 2; pageNum <= totalPages; pageNum++) {{
+                        pagePromises.push(fetchPage(pageNum));
+                    }}
+                    
+                    // 并发执行所有请求
+                    const pageResults = await Promise.all(pagePromises);
+                    
+                    // 合并所有页面的数据
+                    pageResults.forEach((pageData) => {{
+                        if (pageData && pageData.result && pageData.result.pageItems) {{
+                            allPageItems.push(...pageData.result.pageItems);
+                        }}
+                    }});
+                }}
+                
+                // 构建返回结果，合并所有页面的数据
+                const result = {{
+                    ...firstPageData,
+                    result: {{
+                        ...firstPageData.result,
+                        pageItems: allPageItems,
+                        totalItemNum: allPageItems.length  // 更新为实际获取的数量
+                    }}
+                }};
+                
+                return result;
+            }}
+            """
+            
+            logger.info("执行 fetch 请求获取订单数据（最多5页）...")
+            order_data = self.page.evaluate(fetch_script)
+            
+            if order_data:
+                # 3. 缓存数据到本地
+                cache_path = self._get_orders_cache_path()
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # 添加抓取时间
+                result = {
+                    "fetch_time": datetime.now().isoformat(),
+                    "data": order_data
+                }
+                
+                with open(cache_path, 'w', encoding='utf-8') as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+                
+                # 获取统计数据
+                page_items = order_data.get('result', {}).get('pageItems', []) if isinstance(order_data, dict) else []
+                total_item_num = order_data.get('result', {}).get('totalItemNum', 0) if isinstance(order_data, dict) else 0
+                data_count = len(page_items)
+                
+                logger.info(f"订单数据已成功缓存到: {cache_path}，共获取 {data_count} 条订单数据")
+                
+                # 构建返回结果，包含捕获的请求信息
+                return_result = {
+                    "success": True,
+                    "message": f"成功获取订单数据并缓存（共 {data_count} 条，最多5页）",
+                    "data_count": data_count,
+                    "total_item_num": total_item_num,
+                    "cache_path": str(cache_path)
+                }
+                
+                # 如果捕获到了请求信息，添加到返回结果中
+                if captured_requests:
+                    # 返回所有捕获到的请求信息
+                    return_result["captured_requests"] = captured_requests
+                    return_result["captured_requests_count"] = len(captured_requests)
+                
+                # 当获取到order_data.get('result', {}).get('pageItems', [])时，将数据存入飞书表格
+                page_items = order_data.get('result', {}).get('pageItems', [])
+                if page_items:
+                    logger.info(f"开始同步 {len(page_items)} 条订单数据到飞书表格")
+                    sync_result = sync_orders_to_feishu(page_items)
+                    if sync_result.get('success'):
+                        logger.info(f"订单数据同步完成: {sync_result.get('message')}")
+                        return_result["feishu_sync"] = sync_result
+                    else:
+                        logger.error(f"订单数据同步失败: {sync_result.get('message')}")
+                        return_result["feishu_sync"] = sync_result
+                    
+
+                return return_result
+            else:
+                return {
+                    "success": False,
+                    "message": "获取订单数据为空",
+                    "captured_requests": captured_requests if captured_requests else [],
+                    "captured_requests_count": len(captured_requests) if captured_requests else 0
+                }
+                
+        except Exception as e:
+            logger.error(f"获取订单数据失败: {e}", exc_info=True)
+            return {
+                "success": False,
+                "message": f"获取订单数据失败: {str(e)}",
+                "captured_requests": captured_requests if captured_requests else [],
+                "captured_requests_count": len(captured_requests) if captured_requests else 0
+            }
+
+    def _get_orders_cache_path(self) -> Path:
+        """获取订单缓存文件路径"""
+        return get_safe_data_path('cache/pinduoduo_orders_recent.json')
+
     def _save_execution_status(self, success: bool, message: str):
         """
         保存执行状态到文件
@@ -378,10 +565,7 @@ class PinduoduoClient:
             return None
         
         try:
-            # 先加载Cookie（如果有）
-            self.load_cookies()
-            
-            # 访问首页（而不是直接访问登录页面）
+            # 访问首页（由于使用了持久化上下文，Cookie会自动由浏览器加载）
             target = self.target_url
             logger.info(f"正在访问首页: {target}")
             self.page.goto(target, wait_until='domcontentloaded', timeout=30000)
@@ -406,7 +590,6 @@ class PinduoduoClient:
                 logger.info("等待二维码元素出现...")
                 
                 # 尝试多个可能的二维码选择器
-                # 优先使用更精确的选择器（拼多多使用 div.qr-code > canvas）
                 qr_selectors = [
                     '.qr-code canvas',  # 拼多多登录页面的二维码（div.qr-code > canvas）
                     'div.qr-code canvas',  # 更明确的选择器
@@ -483,10 +666,7 @@ class PinduoduoClient:
                 except:
                     pass
                 
-                # 保存Cookie（更新登录状态）
-                self.save_cookies()
-                
-                # 更新执行状态
+                # 更新执行状态（持久化上下文中Cookie已自动保存）
                 self._save_execution_status(success=True, message="登录成功（无需扫码）")
                 
                 # 返回特殊值，表示已经登录，不需要二维码
@@ -545,7 +725,6 @@ class PinduoduoClient:
         """
         try:
             # 先等待页面稳定，确保 URL 已经更新
-            # 使用较短的超时时间，避免阻塞太久
             try:
                 self.page.wait_for_load_state('domcontentloaded', timeout=2000)
             except:
@@ -563,19 +742,15 @@ class PinduoduoClient:
             url_contains_home = 'home' in current_url.lower() or 'mms.pinduoduo.com/home' in current_url.lower()
             
             # 方法3: 检查页面内容，查找登录后的特征元素
-            # 拼多多登录后的页面通常会有特定的元素，比如用户信息、导航菜单等
             page_has_logged_in_content = False
             try:
-                # 等待页面稳定
                 self.page.wait_for_load_state('domcontentloaded', timeout=2000)
                 
-                # 检查是否有登录后的特征元素（可以根据实际页面调整）
-                # 例如：用户头像、导航菜单、退出按钮等
                 logged_in_indicators = [
-                    'header',  # 登录后通常有header
-                    '.user-info',  # 用户信息
-                    '.nav-menu',  # 导航菜单
-                    '[class*="header"]',  # 包含header的元素
+                    'header',
+                    '.user-info',
+                    '.nav-menu',
+                    '[class*="header"]',
                 ]
                 
                 for indicator in logged_in_indicators:
@@ -591,17 +766,12 @@ class PinduoduoClient:
                 logger.debug(f"检查页面内容时出错: {e}")
             
             # 判断是否登录成功
-            # 必须满足：URL不包含login（或者包含home），这是主要判断条件
-            # 可选：页面有登录后的内容（作为辅助判断）
-            # 注意：不能仅凭页面内容判断，因为登录页面可能也有header等元素
-            url_indicates_logged_in = (not url_contains_login) or url_contains_home
-            
-            # 如果URL已经跳转到home，或者URL不包含login，则认为登录成功
-            # 如果URL还包含login，即使页面有某些元素，也不认为登录成功
-            is_logged_in = url_indicates_logged_in
+            # 必须不包含 login 关键字，且必须包含 home 关键字或有特征元素
+            # 这样可以避免 redirectUrl=...home 导致的误判
+            is_logged_in = (not url_contains_login) and (url_contains_home or page_has_logged_in_content)
             
             if is_logged_in:
-                logger.info(f"检测到已登录 - URL: {current_url}, URL不包含login: {not url_contains_login}, URL包含home: {url_contains_home}, 有登录内容: {page_has_logged_in_content}")
+                logger.info(f"检测到已登录 - URL: {current_url}")
                 
                 # 等待页面完全加载
                 try:
@@ -609,15 +779,12 @@ class PinduoduoClient:
                 except:
                     pass
                 
-                # 保存Cookie
-                self.save_cookies()
-                
-                # 更新执行状态
+                # 更新执行状态（持久化上下文中Cookie已自动保存）
                 self._save_execution_status(success=True, message="登录成功")
                 
                 return True
             else:
-                logger.debug(f"尚未登录 - URL: {current_url}, URL包含login: {url_contains_login}, URL包含home: {url_contains_home}")
+                logger.debug(f"尚未登录 - URL: {current_url}")
                 return False
         
         except Exception as e:

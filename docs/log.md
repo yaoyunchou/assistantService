@@ -1,5 +1,964 @@
 # 变更日志
 
+## 2026-02-09 - 浏览器代理架构重写（彻底解决所有线程问题）
+
+### 问题
+
+之前的 BrowserPool 设计复杂（实例池 + 共享 context + 外部 executor），反复出现：
+- `Cannot switch to a different thread`（跨线程操作 Playwright）
+- `Target page, context or browser has been closed`（失效实例被复用）
+- `Sync API inside asyncio loop`（重建 context 时 asyncio 残留）
+
+根本原因：Playwright 同步 API 要求所有操作在同一线程执行，旧设计用多线程池 + 外部 executor，很难保证这一点。
+
+### 重写方案：单线程代理模式
+
+**核心思想**：一个专用线程，一个持久化 context，任务提交进去、结果返回出来。
+
+**`src/spider/query_manager.py`**（完全重写，从 843 行精简到 323 行）：
+- BrowserPool 内部持有 `ThreadPoolExecutor(max_workers=1)` 专用线程
+- `execute(fn, timeout)` — 推荐 API，提交 `fn(page)` 到浏览器线程执行
+- `get_page()` — 向后兼容，仅在浏览器线程内使用
+- `_ensure_browser()` — 懒初始化 + 自动重建（同一线程上操作，无 asyncio 冲突）
+- 去掉了实例池、等待队列、空闲回收等复杂逻辑
+- 每次 execute 创建新 page，用完即关；context 长驻，Cookie 自动持久化
+
+**`src/api/routes/context.py`**：
+- 移除 `_browser_executor`（浏览器操作改由 BrowserPool 内部管理）
+- 保留 `get_browser_executor()` 返回通用后台线程池（飞书等非浏览器任务）
+
+**`src/api/routes/tu_routes.py`**：
+- 所有 Playwright 操作改为 `pool.execute(lambda page: ...)`
+- 新增 `/api/tu/login` 手动登录接口（自动登录失败时可在浏览器窗口手动操作）
+
+**`src/api/routes/pinduoduo_routes.py`**：
+- 同上，全部改为 `pool.execute(lambda page: ...)`
+- 去掉 `get_browser_executor()` 依赖
+
+**`src/tools/tu_tool.py`、`src/tools/pinduoduo_tool.py`**：
+- `execute_with_client` 改用 `pool.execute()` 代替 `pool.get_page()`
+
+**`src/spider/logistics_service.py`**：
+- `query_with_retry` 改用 `pool.execute()` 包裹整个查询+重试逻辑
+
+**`src/spider/tu/client.py`**：
+- 改进 `_do_login_on_current_page()`：用 `type(delay=50)` 逐字输入代替 `fill()`，更好触发前端事件；增加可见性检查和更多等待时间；登录失败时自动截图
+- 新增 `wait_for_manual_login(timeout=300)` 方法：打开浏览器等待用户手动登录
+
+**`src/web/templates/tools/tu.html`**：
+- 新增「手动登录（首次使用）」按钮
+
+### 效果
+
+- 从设计上消除所有线程问题（单线程拥有全部 Playwright 资源）
+- 代码大幅精简（323 行 vs 843 行）
+- 持久化 context 使用固定 `browser_data` 目录，Cookie 跨次运行保留
+- 首次使用可通过「手动登录」在浏览器窗口完成登录，之后自动记住
+
+---
+
+## 2026-02-09 - 修复重建 context 时 "Sync API inside asyncio loop" 错误
+
+### 变更说明（2026-02-09）
+
+**问题**：context 失效后重建时，先 `playwright.stop()` 再 `sync_playwright().start()`，但 stop 后 asyncio 事件循环残留在线程上，新的 start 检测到就报 `It looks like you are using Playwright Sync API inside the asyncio loop`。
+
+**修改**（`src/spider/query_manager.py`）：
+- `_rebuild_shared_context()` 改为**优先复用已有 playwright 实例**：只关闭旧 context，然后在同一个 playwright 上 `launch_persistent_context` 创建新 context。避免 stop+start 触发 asyncio 报错。
+- 仅当 playwright 实例本身也坏了时才完全重建（stop + start）。
+- 提取 `_build_context_args()` 和 `_setup_context()` 避免重复代码。
+
+---
+
+## 2026-02-09 - 彻底修复 Playwright 跨线程错误（Cannot switch to a different thread）
+
+### 变更说明（2026-02-09）
+
+**根本原因**：  
+Playwright 同步 API 要求 context/page **只能在创建它的线程中使用**。但 `_browser_executor` 有 2 个工作线程（`max_workers=2`），加上拼多多路由直接在 Flask 请求线程（而非 executor 线程）中调用 `pool.get_page()`，导致 context 在线程 A 创建、page 在线程 B 使用，触发 `Cannot switch to a different thread` 或 `TargetClosedError`。
+
+**修改**：
+
+1. **`src/api/routes/context.py`**：executor 改为 `max_workers=1`，保证所有 Playwright 操作都在同一个线程上执行。
+2. **`src/api/routes/pinduoduo_routes.py`**：所有 `pool.get_page()` 调用统一通过 `get_browser_executor().submit()` 在 executor 线程中执行，不再在 Flask 请求线程中直接调用。涉及路由：`/status`、`/login`、`/check_login_complete`、`/logout`、`/execute`。
+
+**效果**：全部 Playwright 操作（途强 + 拼多多）都通过同一个单线程 executor 执行，不再有跨线程问题。
+
+---
+
+## 2026-02-09 - 浏览器池：context 失效后自动重建（彻底修复 TargetClosedError）
+
+### 变更说明（2026-02-09）
+
+**根本原因分析**：
+1. `headless=False` 模式下，用户**手动关闭浏览器窗口**（或浏览器崩溃）导致 shared context 死掉。
+2. context 死后 `_context_broken` 未被设置，因为错误发生在 TuClient 内部被自己 catch 了，没有传播到池的 `get_page` 异常处理。
+3. 后续所有请求里 `_ensure_shared_context()` 检查 `_shared_context is not None` 就返回了，不重建——反复拿着已死的 context 调 `new_page()`，每次都失败。
+
+**修复**（`src/spider/query_manager.py`）：
+- **`_is_context_alive()`**：不仅检查 `_shared_context is not None`，还**实际测试** context 是否存活（访问 `.pages`，异常即已死）。
+- **`_ensure_shared_context()`** 的快速路径加入 `_is_context_alive()` 检查；若 context 已死，直接进入重建流程。
+- **`_rebuild_shared_context()`**：抽取独立方法，清理旧资源后重新 `launch_persistent_context`（仍用同一 `browser_data` 目录，登录态从磁盘恢复）。
+- **`_on_context_closed()`** + **`context.on("close")`**：监听 context 的 close 事件（如用户关闭浏览器窗口），立刻标记 `_context_broken=True` 并清空 `_shared_context`，不等到下次 `new_page` 才发现。
+- **`_create_new_instance()`**：`new_page()` 若报 TargetClosedError，自动 `_context_broken=True` → `_ensure_shared_context()` 重建 → 再 `new_page()` 重试一次，不直接报错给调用方。
+
+**效果**：无论 context 因何失效（用户关窗口、浏览器崩溃、进程异常），都能自动检测并重建，调用方无感。
+
+---
+
+## 2026-02-09 - 浏览器池：交出实例前校验 page 未关闭，避免 TargetClosedError
+
+### 变更说明（2026-02-09）
+
+**问题**：调用方（如 TuClient）在 `page.goto()` 时仍报 `Target page, context or browser has been closed`。原因之一是池中可能还有「已关闭的 page」被当作空闲实例再次交出，用的时候才报错。
+
+**修改**（`src/spider/query_manager.py`）：
+- 新增 `_is_page_still_valid(instance)`：用 `page.is_closed()` 判断 page 是否仍可用。
+- 在策略1、策略2中，**在交出实例前**先校验：若 `not _is_page_still_valid(instance)`，则从池中移除该实例并继续查找或新建，不再把已关闭的 page 交给调用方。
+
+这样从池里拿到的 page 一定是未关闭的，从源头减少 TargetClosedError。
+
+---
+
+## 2026-02-09 - 浏览器池：单一 context + 多 page，真正共享登录缓存
+
+### 变更说明（2026-02-09）
+
+**问题**：用户反馈「每次进去都要登录」，怀疑未使用缓存。根因是 Chrome/Playwright 规定**同一 user_data_dir 只能被一个 persistent context 使用**；之前池内多个“实例”各自是独立 context，第二、第三个 context 无法同时使用同一目录，导致部分请求拿到的是临时/无效配置，登录态无法共享。
+
+**修改**（`src/spider/query_manager.py`）：
+- **单一持久化 context**：只维护一个 `_shared_playwright` 与 `_shared_context`（`launch_persistent_context` 使用固定 `browser_data` 目录），所有“实例”改为该 context 下的 **多个 page**（`context.new_page()`），从而真正共享 Cookie/登录态与缓存。
+- **`_ensure_shared_context()`**：懒创建或重建（如 context 失效时）该唯一 context；重建前清空池内旧实例。
+- **`_create_new_instance()`**：仅调用 `_ensure_shared_context()` 后 `_shared_context.new_page()`，不再为每个实例单独 `launch_persistent_context`。
+- **`_close_instance()`**：只关闭当前实例的 **page**，不关闭 shared context/playwright；池 `close()` 时再统一关闭 context 与 playwright。
+- **context 失效**：发生 target closed 时设置 `_context_broken`，下次获取实例时会重建 context（仍用同一 browser_data 目录），登录态从磁盘恢复。
+
+效果：登录一次后，所有请求共用同一 context 与缓存目录，再次进入无需重复登录；需要清除时仍可手动删除 `browser_data` 目录。
+
+---
+
+## 2026-02-09 - 浏览器池：修复关闭时的跨线程错误
+
+### 变更说明（2026-02-09）
+
+**问题**：`close()` 方法在当前线程关闭所有实例时，如果实例是在其他线程创建的，会报错 `Cannot switch to a different thread`（Playwright 同步 API 要求必须在创建线程中关闭）。
+
+**修改**（`src/spider/query_manager.py`）：
+- **`close()` 方法**：只关闭当前线程创建的实例；其他线程创建的实例标记为 `should_close`，等待它们自行关闭；如果创建线程已不存在，再尝试强制关闭。
+- **`_close_instance()` 方法**：增加线程检查，如果当前线程不是创建线程且创建线程还存在，则跳过关闭（避免跨线程错误）。
+
+这样关闭时不会再出现跨线程错误，其他线程的实例会在自己的线程中正常关闭。
+
+---
+
+## 2026-02-09 - 浏览器池：全部繁忙时若未达上限则创建新实例
+
+### 变更说明（2026-02-09）
+
+**逻辑补充**：当所有实例都繁忙（`idle_instances == 0`）且未达到 `max_instances` 时，不再让新请求一直等待，而是**直接创建新实例**供当前请求使用。
+
+**修改**（`src/spider/query_manager.py` 中 `_get_or_create_instance`）：
+- 策略3 调整顺序与条件：先判断「池为空 → 创建首个」「已达上限 → 等待」；再判断「全部繁忙且未达上限 → 创建新实例」；最后才是按等待队列的渐进式扩展。
+- 这样在只有 1 个实例且该实例正忙时，新请求会立即得到一个新实例，而不是 sleep 后重试等待。
+
+---
+
+## 2026-02-09 - 浏览器池：实例失效（Target closed）时关闭并移除，下次请求用新实例
+
+### 变更说明（2026-02-09）
+
+**问题**：当出现 `Page.goto: Target page, context or browser has been closed` 时，池仍把该实例标记为空闲并放回池中，后续请求会继续拿到已关闭的实例导致再次失败。
+
+**修改**（`src/spider/query_manager.py`）：
+- 新增 `_is_target_closed_error(e)`，用于判断是否为「页面/上下文/浏览器已关闭」类错误。
+- 在 `get_page` 的 `except Exception` 中，若检测到此类错误且存在 `instance`，则设置 `instance.should_close = True`；在 `finally` 中 `_release_instance` 会将该实例从池中移除并关闭，不再复用。
+- 下次调用 `get_page()` 时会得到新实例（或池中其他空闲实例），避免重复使用已关闭的实例。
+
+---
+
+## 2026-02-09 - 浏览器缓存固定为同一 browser_data 目录（持久化、不自动清理）
+
+### 变更说明（2026-02-09）
+
+**需求**：运行时的浏览器数据（登录态、Cookie 等）作为持久化缓存，所有实例、每次运行都使用同一目录；不自动清理，需清除时由用户手动删除。
+
+**路径逻辑**：
+- 新增 `get_browser_data_dir(app_name='JNTools')`（`src/utils/path_helper.py`）：固定返回用户数据目录下的 `browser_data`（Windows 为 `%LOCALAPPDATA%\JNTools\browser_data`），保证路径唯一、不随项目路径或运行目录变化。
+- 浏览器池（`src/spider/query_manager.py`）改为使用 `get_browser_data_dir()`，不再使用 `get_safe_data_path('browser_data')`，避免有时用项目目录、有时用用户目录导致「不同运行用不同 profile」的问题。
+
+**效果**：每次启动、每个浏览器实例都使用同一 `browser_data` 目录，登录/缓存持久有效；程序不会自动清理该目录，需要清除时手动删除该文件夹即可。
+
+**修改文件**：
+- `src/utils/path_helper.py` - 新增 `get_browser_data_dir()`
+- `src/spider/query_manager.py` - 使用 `get_browser_data_dir`，注释明确为「固定持久化缓存」
+
+---
+
+## 2026-02-02 - 途强飞书同步改为「仅按开始时间新增、不做更新」
+
+### 变更说明（2026-02-02）
+
+**途强飞书表格同步（`src/spider/tu/feishutable.py`）**:
+- 数据逻辑调整：仅根据「开始时间」判断是否已存在；开始时间不存在则新增一条，已存在则跳过（不做任何更新）。
+- 移除所有「更新」逻辑：不再拉取 `record_id`、不再调用 `batch_update_records`，返回值去掉 `update_count`。
+- 现有记录仅用 `existing_start_times` 集合做去重判断，本批内相同开始时间也只新增一条。
+
+**修改文件**: `src/spider/tu/feishutable.py`
+
+---
+
+## 2026-02-01 - 途强数据自动同步到飞书表格 & 页面刷新保证 XHR 拦截
+
+### 变更说明（2026-02-01）
+
+**途强自动化客户端（`src/spider/tu/client.py`）**:
+- **飞书同步集成**：`execute_automation` 在成功获取最近 30 天记录后，自动调用 `sync_tu_data_to_feishu(records)` 将数据同步到飞书多维表格；返回值增加 `feishu_sync` 字段（同步结果或异常信息）。
+- **页面刷新**：`goto` 目标页后增加 `page.reload(wait_until='domcontentloaded')`，登录成功后再次 `reload`，确保 SPA 页面触发 XHR 请求、能拦截到带 Authorization 的请求。
+
+**途强飞书表格同步（`src/spider/tu/feishutable.py`）**:
+- 提供 `sync_tu_data_to_feishu(records, app_token, table_id)`，将途强记录同步到指定飞书多维表格。
+- 以「开始时间」为唯一标识，区分创建与更新；支持批量创建/更新，失败时降级为单条操作。
+- 字段映射：`开始时间`（Text）、`公里`（米转公里 2 位小数）、`startTime`/`endTime`（DateTime 毫秒时间戳）、`平均时速`（2 位小数）、`坐标`（结束点 lng,lat）。
+
+**修改/涉及文件**:
+- `src/spider/tu/client.py` - 引入 `sync_tu_data_to_feishu`，执行成功后调用并返回 `feishu_sync`；保留此前新增的 reload 逻辑。
+- `src/spider/tu/feishutable.py` - 已实现并沿用（无新增改动）。
+
+---
+
+## 2026-01-30 - 删除未使用的 api/routes.py，文档统一为 api/routes/ 包
+
+### 变更说明（2026-01-30）
+
+- **删除**: `src/api/routes.py`（单文件，约 1175 行）。应用实际使用的是 **`src/api/routes/` 包**（Python 在存在同名包时优先加载包），该单文件从未被注册，已删除。
+- **文档更新**: README、配置说明、开发指南、开机自启动测试指南、飞书聊天机器人配置说明、PROJECT_DOCUMENTATION 中所有「在 api/routes.py 中添加」或「位置 api/routes.py」的表述已改为「api/routes/ 包」或对应 Blueprint 文件（如 `health.py`、`feishu_routes.py`）。
+
+---
+
+## 2026-01-30 - Socket.IO 对接测试环境（websocket-api.md）
+
+### 变更说明（2026-01-30）
+
+**对接规范**（`docs/websocket-api.md`）:
+- 服务端为 **Socket.IO**（与 HTTP 同端口），连接 path 为 `/ws`，默认事件 `forward`
+- 测试环境：`http://localhost:3000`，path `/ws`
+
+**客户端改动**:
+- 客户端由原始 WebSocket 改为 **Socket.IO 客户端**（`python-socketio[client]`）
+- 连接参数：`socketio_path=/ws`，`transports=['websocket','polling']`，监听事件 `forward`
+- 默认配置：host `127.0.0.1`，port `3000`，path `/ws`（测试环境）
+
+**配置与页面**:
+- 新增配置项 `WS_CLIENT_PATH`（默认 `/ws`），支持从 `app_config.json` 读写
+- 管理页增加「Socket.IO path」输入框、状态中展示 `sid` 与最近一次 `forward` 消息内容
+
+**修改/新增文件**:
+- `requirements.txt` - 新增 `python-socketio[client]>=5.10.0`，保留 `websocket-client`
+- `src/config.py` - 默认 port 改为 3000，新增 `WS_CLIENT_PATH` 及加载逻辑
+- `src/utils/config_manager.py` - 支持 `ws_client_path` 的读写与应用
+- `src/utils/websocket_client.py` - 重写为 Socket.IO 客户端（connect/disconnect/forward/sid/自动重连）
+- `src/api/routes/websocket_routes.py` - 配置与连接 API 支持 `path` 参数（在包内注册）
+- `src/web/templates/websocket.html` - 标题与说明改为 Socket.IO，默认端口 3000，path 输入，展示 sid 与 last_forward_payload
+
+---
+
+## 2026-01-30 - WebSocket 客户端与管理页面
+
+### 功能新增（2026-01-30）
+
+**新增内容**:
+- 新增 **WebSocket 客户端**：可配置连接地址与端口，默认开启，Flask 运行时会按配置自动连接
+- 新增 **WebSocket 管理页面**：侧栏「WebSocket 客户端」入口，可查看连接状态、手动连接/断开、修改并保存配置
+
+**配置说明**:
+- `config.py`：`WS_CLIENT_ENABLED`（默认 True）、`WS_CLIENT_HOST`（默认 127.0.0.1）、`WS_CLIENT_PORT`（默认 8765）
+- 可通过环境变量 `WS_CLIENT_HOST`、`WS_CLIENT_PORT` 覆盖
+- 配置可保存到 `app_config.json`，与现有配置页一致
+
+**API 接口**:
+- `GET /api/websocket/status` - 获取连接状态（connected/connecting、last_error、last_message_time）
+- `GET /api/websocket/config` - 获取当前配置
+- `POST /api/websocket/config` - 更新并保存配置
+- `POST /api/websocket/connect` - 发起连接（可选传入 host/port）
+- `POST /api/websocket/disconnect` - 断开连接
+
+**修改/新增文件**:
+- `requirements.txt` - 新增依赖 `websocket-client>=1.6.0`
+- `src/config.py` - 新增 WebSocket 客户端相关配置及从文件加载
+- `src/utils/config_manager.py` - 支持 WebSocket 配置的读写与应用
+- 新增 `src/utils/websocket_client.py` - WebSocket 客户端管理单例（连接/断开/状态/自动重连）
+- `src/api/routes.py` - 新增 WebSocket 相关 API 路由
+- `src/main.py` - Flask 启动后调用 `start_if_enabled()` 默认连接，退出时 `cleanup()` 中断开
+- `src/web/routes.py` - 新增 `/websocket` 页面路由
+- `src/web/templates/base.html` - 侧栏新增「WebSocket 客户端」入口
+- 新增 `src/web/templates/websocket.html` - WebSocket 管理页（状态、配置表单、连接/断开按钮）
+- `README.md` - 功能特性中补充 WebSocket 客户端说明
+
+---
+
+## 2026-01-29 - 拼多多页面：同步到飞书表格
+
+### 功能新增（2026-01-29）
+
+**新增内容**:
+- 拼多多工具页增加「同步到飞书表格」功能卡片
+- 将本地缓存的订单数据（最近一次「同步订单」结果）同步到飞书多维表格
+
+**页面功能**:
+- 说明：使用最近一次同步订单的缓存数据，同步到飞书表格（订单号、订单状态、商品名称等）
+- 可选填写 App Token、Table ID，留空使用默认（与 feishutable 一致）
+- 按钮「同步到飞书表格」调用 API，下方展示同步结果（成功/新建/更新/失败条数）
+
+**API**:
+- `POST /api/pinduoduo/sync-to-feishu`：请求体可选 `app_token`、`table_id`；读取 `cache/pinduoduo_orders_recent.json` 中的 `data.result.pageItems`，调用 `sync_orders_to_feishu` 并返回结果
+
+**修改/新增文件**:
+- `src/api/routes.py` - 新增 `pinduoduo_sync_to_feishu` 路由
+- `src/web/templates/tools/pinduoduo.html` - 新增飞书同步卡片、样式与脚本
+
+---
+
+## 2026-01-29 - 飞书支持发送卡片消息
+
+### 功能新增（2026-01-29）
+
+**新增内容**:
+- 飞书消息发送器与客户端支持发送**卡片消息**（interactive 类型）
+- `FeishuClient.send_card_message(user_id, card)`：底层发送卡片
+- `FeishuMessageSender.send_card_message(card, user_id=None)`：高层接口，默认使用 `FEISHU_USER_ID`
+
+**配置说明**:
+- 与文本消息使用同一套配置，无需额外配置
+- 需在 `.env` 中配置：`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_USER_ID`
+- 卡片内容可为 dict（自动序列化为 JSON）或已是 JSON 字符串
+
+**修改/新增文件**:
+- `src/tools/feishu/feishu_client.py` - 新增 `send_card_message`、`import json`
+- `src/tools/feishu/message_sender.py` - 新增 `send_card_message`
+- `README.md` - 补充飞书支持卡片消息说明
+
+---
+
+## 2026-01-29 - 新增：途强物联网平台助手（tu）
+
+### 功能新增（2026-01-29）
+
+**新增内容**:
+- 新增途强智能设备管理平台（iot.tqiot.com）自动化模块，参考拼多多助手实现
+- 支持自动登录（账号密码）、打开 reportDown 页面、获取最近 30 天记录并缓存到本地
+
+**功能特点**:
+- ✅ 自动登录：使用配置的账号（18038361262）和密码自动填充并提交登录
+- ✅ 目标页面：https://iot.tqiot.com/#/?to=reportDown
+- ✅ 最近 30 天记录：执行时自动登录后进入 reportDown，从 XHR 响应或页面表格获取记录并缓存
+- ✅ 状态与缓存：执行状态和记录缓存使用安全路径（用户数据目录），与拼多多一致
+- ✅ Web 界面：途强助手页面支持刷新状态、一键「获取最近 30 天记录」、清除登录
+
+**配置说明**:
+- `config.py` 新增：`TU_TARGET_URL`、`TU_STATUS_PATH`、`TU_ACCOUNT`、`TU_PASSWORD`
+- 账号密码可通过环境变量 `TU_ACCOUNT`、`TU_PASSWORD` 覆盖，避免硬编码
+
+**API 接口**:
+- `GET /api/tu/status` - 获取最后执行状态
+- `POST /api/tu/execute` - 执行自动化（自动登录 + 获取最近 30 天记录）
+- `POST /api/tu/logout` - 清除登录状态和 Cookie
+
+**修改/新增文件**:
+- 新增：`src/spider/tu/__init__.py`、`src/spider/tu/client.py`
+- 新增：`src/tools/tu_tool.py`、`src/web/templates/tools/tu.html`
+- `src/config.py` - 途强相关配置
+- `src/api/routes.py` - 途强 API 路由
+- `src/app.py` - 注册途强工具
+
+**流程优化（同日）**:
+- 执行时先直接访问 `https://iot.tqiot.com/#/?to=reportDown`
+- 若被登录拦截（该 URL 下出现登录框），则在此页执行自动登录，登录成功后再打开 reportDown 并获取数据
+- 若未被拦截，则直接执行获取最近 30 天记录的逻辑
+
+## 2026-01-27 - 新增：飞书消息发送测试页面
+
+### 功能新增（2026-01-27）
+
+**新增内容**:
+- 创建了飞书消息发送测试页面，方便测试和调试飞书消息发送功能
+- 添加了测试API接口，支持测试发送登录提醒和自定义消息
+
+**功能特点**:
+- ✅ 实时显示飞书配置状态（是否启用、客户端配置、默认用户ID）
+- ✅ 测试发送拼多多登录提醒消息
+- ✅ 测试发送自定义文本消息
+- ✅ 支持指定接收用户ID（可选，不指定则使用默认用户）
+- ✅ 实时显示发送结果（成功/失败）
+- ✅ 友好的用户界面，清晰的错误提示
+
+**页面功能**:
+1. **状态检查**：
+   - 显示飞书通知是否启用
+   - 显示客户端是否已配置
+   - 显示默认接收用户ID
+
+2. **测试1：发送登录提醒**：
+   - 测试发送拼多多登录提醒消息
+   - 可指定接收用户ID（可选）
+
+3. **测试2：发送自定义消息**：
+   - 测试发送自定义文本消息
+   - 可输入消息内容
+   - 可指定接收用户ID（可选）
+
+**API接口**:
+- `GET /api/feishu/status` - 获取飞书消息发送器状态
+- `POST /api/feishu/test/login-alert` - 测试发送登录提醒
+- `POST /api/feishu/test/custom-message` - 测试发送自定义消息
+
+**访问方式**:
+- 侧边栏导航：📱 飞书消息测试
+- 直接访问：`/feishu-test`
+
+**修改文件**:
+- 新增：`src/web/templates/feishu_test.html` - 飞书消息测试页面
+- `src/web/routes.py` - 添加 `/feishu-test` 路由
+- `src/web/templates/base.html` - 在侧边栏添加飞书消息测试链接
+- `src/api/routes.py` - 添加飞书消息测试API接口
+
+## 2026-01-27 - 优化：订单分页请求添加延迟避免风控
+
+### 性能优化（2026-01-27）
+
+**优化内容**:
+- 将订单分页请求从并发改为串行，每个请求之间随机等待5-10秒
+- 避免请求过于频繁被风控系统拦截
+
+**实现逻辑**:
+1. 先获取第一页数据（立即获取）
+2. 从第二页开始，每个请求前随机等待5-10秒
+3. 串行获取所有页面，避免并发请求
+
+**优化效果**:
+- ✅ 避免被风控系统拦截
+- ✅ 随机延迟（5-10秒）模拟人工操作，降低被检测风险
+- ✅ 串行请求确保请求间隔，提高成功率
+
+**技术实现**:
+- 使用 `setTimeout` 和 `Promise` 实现延迟
+- 随机生成5-10秒之间的延迟时间
+- 使用 `for` 循环串行请求，替代 `Promise.all` 并发请求
+
+**修改文件**:
+- `src/spider/pinduoduo/client.py` - 优化 `fetch_recent_orders()` 方法中的分页请求逻辑
+
+## 2026-01-27 - 修复：飞书表格客户端获取记录时的空值处理
+
+### Bug 修复（2026-01-27）
+
+**修复内容**:
+- 修复了 `list_records` 和 `get_all_records` 方法中，当 API 返回的 `items` 字段为 `None` 时导致的 `TypeError` 错误
+- 使用 `result.get('items') or []` 确保 `items` 不会是 `None`，避免调用 `len()` 时出错
+
+**问题原因**:
+- 当飞书 API 返回的数据中 `items` 字段为 `None` 时，`result.get('items', [])` 会返回 `None`（因为 key 存在但值为 `None`）
+- 导致后续调用 `len(items)` 时出现 `TypeError: object of type 'NoneType' has no len()`
+
+**解决方案**:
+- 使用 `result.get('items') or []` 替代 `result.get('items', [])`
+- 这样即使 `items` 为 `None`，也会使用空列表 `[]` 作为默认值
+
+**修改文件**:
+- `src/tools/feishu/feishu_table_client.py` - 修复 `list_records()` 和 `get_all_records()` 方法中的空值处理
+
+## 2026-01-27 - 功能增强：订单同步支持按订单号更新已存在记录
+
+### 功能增强（2026-01-27）
+
+**新增内容**:
+- 实现了订单同步时的去重和更新逻辑，如果订单号已存在则更新数据，不存在则创建新记录
+- 避免了重复订单数据的问题，确保订单号唯一性
+
+**实现逻辑**:
+1. 先获取所有现有记录，建立订单号到 `record_id` 的映射
+2. 遍历待同步的订单，根据订单号判断是创建还是更新
+3. 分离需要创建和需要更新的订单，分别批量处理
+4. 使用批量创建和批量更新 API 提高效率
+5. 如果批量操作失败，自动降级为单条操作
+
+**功能特点**:
+- ✅ 自动检测订单号是否已存在
+- ✅ 已存在的订单自动更新，不创建重复记录
+- ✅ 新订单正常创建
+- ✅ 支持批量创建和批量更新，提高效率
+- ✅ 批量操作失败时自动降级为单条操作，提高容错性
+- ✅ 详细的统计信息：创建数量、更新数量、成功数量、失败数量
+
+**返回结果增强**:
+- `create_count`: 新创建的订单数量
+- `update_count`: 更新的订单数量
+- `success_count`: 成功处理的订单总数（创建 + 更新）
+- `fail_count`: 失败的订单数量
+- `message`: 包含详细统计信息的消息
+
+**性能优化**:
+- 先一次性获取所有现有记录，建立映射关系，避免每条订单都查询
+- 使用批量 API 减少 API 调用次数
+- 分批处理大量数据，避免单次请求过大
+
+**修改文件**:
+- `src/spider/pinduoduo/feishutable.py` - 修改 `sync_orders_to_feishu()` 方法，实现订单号去重和更新逻辑
+
+## 2026-01-27 - 功能增强：拼多多订单数据分页获取（JavaScript内完成）
+
+### 功能增强（2026-01-27）
+
+**新增内容**:
+- 实现了拼多多订单数据的分页获取功能，在 JavaScript 的 `fetch_script` 中直接完成分页逻辑
+- 之前只能获取第一页（20条）数据，现在可以自动获取最多5页的完整数据（最多100条）
+
+**实现逻辑**:
+1. 在 JavaScript 中先获取第一页数据，获取总订单数（`totalItemNum`）
+2. 根据总订单数和每页数量（20条）计算总页数，最多获取5页
+3. 使用 `Promise.all` 并发获取所有剩余页面的数据（第2-5页）
+4. 合并所有页面的订单数据（`pageItems`）
+5. 返回合并后的完整数据，由 Python 端缓存到本地并同步到飞书表格
+
+**功能特点**:
+- ✅ 分页逻辑完全在 JavaScript 中完成，减少 Python 和浏览器之间的交互次数
+- ✅ 使用 `Promise.all` 并发请求，提高获取效率
+- ✅ 自动计算总页数，最多获取5页（100条订单）
+- ✅ 单页获取失败不影响其他页面，继续合并成功获取的数据
+- ✅ 返回结果包含实际获取数量和总订单数等统计信息
+
+**技术实现**:
+- 在 `fetch_script` 中定义 `fetchPage` 辅助函数用于获取单页数据
+- 使用 `Promise.all` 并发获取多页数据，提高效率
+- 合并所有页面的 `pageItems` 数组，构建完整的返回结果
+
+**返回结果增强**:
+- `data_count`: 实际获取的订单数量（最多100条）
+- `total_item_num`: 服务器返回的总订单数
+- `message`: 包含数据统计的详细消息
+
+**修改文件**:
+- `src/spider/pinduoduo/client.py` - 修改 `fetch_recent_orders()` 方法中的 `fetch_script`，在 JavaScript 中实现分页逻辑
+
+## 2026-01-26 - 修复：单元测试文件导入错误
+
+### Bug 修复（2026-01-26）
+
+**修复内容**:
+- 修复了直接运行测试文件时的相对导入错误
+- 添加了路径处理逻辑，支持直接运行和作为模块运行两种方式
+
+**问题原因**:
+- 直接运行测试文件时，Python 无法识别相对导入（`from .module import ...`）
+- 相对导入只能在包内作为模块导入时使用
+
+**解决方案**:
+- 添加了路径处理逻辑，在直接运行时自动添加项目根目录到 `sys.path`
+- 使用 try-except 处理导入，优先使用绝对导入，失败时回退到相对导入
+- 支持两种运行方式：
+  - 直接运行：`python src/tools/feishu/test_feishu_table_client.py`
+  - 模块运行：`python -m unittest src.tools.feishu.test_feishu_table_client`
+
+**修改文件**:
+- `src/tools/feishu/test_feishu_table_client.py` - 修复导入逻辑
+
+## 2026-01-26 - 新增：为飞书表格客户端添加单元测试
+
+### 测试新增（2026-01-26）
+
+**新增内容**:
+- 创建了 `test_feishu_table_client.py` 单元测试文件
+- 使用 `unittest` 和 `mock` 框架编写完整的测试用例
+- 覆盖了 `FeishuTableClient` 的主要功能和方法
+
+**测试覆盖**:
+1. **初始化测试**:
+   - 测试带参数初始化
+   - 测试不带参数初始化
+   - 测试参数获取逻辑
+
+2. **参数验证测试**:
+   - 测试缺少 app_token 时的异常处理
+   - 测试缺少 table_id 时的异常处理
+   - 测试参数优先级（方法参数 > 实例属性）
+
+3. **API 方法测试**:
+   - `get_app_info()` - 获取应用信息
+   - `list_tables()` - 获取表格列表
+   - `get_table_info()` - 获取表格信息
+   - `list_fields()` - 获取字段列表
+   - `get_table_schema()` - 获取完整表结构
+   - `create_record()` - 创建记录
+   - `batch_create_records()` - 批量创建记录
+   - `update_record()` - 更新记录
+   - `delete_record()` - 删除记录
+   - `get_record()` - 获取记录
+   - `list_records()` - 获取记录列表
+   - `get_all_records()` - 获取所有记录（分页处理）
+
+4. **异常处理测试**:
+   - 测试 API 请求失败场景
+   - 测试网络异常场景
+   - 测试缺少 access_token 场景
+
+**运行测试**:
+```bash
+# 方式1：使用 unittest
+python -m unittest src.tools.feishu.test_feishu_table_client -v
+
+# 方式2：使用 pytest（如果已安装）
+pytest src/tools/feishu/test_feishu_table_client.py -v
+
+# 方式3：直接运行测试文件
+python src/tools/feishu/test_feishu_table_client.py
+```
+
+**测试特点**:
+- ✅ 使用 Mock 模拟 API 调用，无需实际连接飞书服务器
+- ✅ 测试覆盖全面，包括成功和失败场景
+- ✅ 包含集成测试类（默认跳过，需要实际配置时启用）
+- ✅ 测试代码结构清晰，易于维护和扩展
+
+**修改文件**:
+- 新增：`src/tools/feishu/test_feishu_table_client.py` - 单元测试文件
+
+## 2026-01-26 - 新增：添加获取表格结构信息的方法
+
+### 功能新增（2026-01-26）
+
+**新增内容**:
+- 添加了获取表格结构信息的方法，方便了解表格字段结构，便于开发插入数据
+- 新增方法包括：获取应用信息、获取表格列表、获取表格信息、获取字段列表、获取完整表结构、打印表结构
+
+**新增方法**:
+1. `get_app_info()` - 获取多维表格应用信息
+2. `list_tables()` - 获取应用中的所有数据表列表
+3. `get_table_info()` - 获取数据表信息
+4. `list_fields()` - 获取数据表的字段列表（表结构）
+5. `get_table_schema()` - 获取数据表的完整结构信息（表信息 + 字段列表）
+6. `print_table_schema()` - 打印数据表结构信息（用于调试和开发）
+
+**使用示例**:
+```python
+# 创建客户端
+client = FeishuTableClient(
+    app_token="bascnCMII2O1qg4W1O4w",
+    table_id="tblxxxxxxxxxxxx"
+)
+
+# 方式1：获取完整表结构
+schema = client.get_table_schema()
+print(f"表名: {schema['table']['name']}")
+for field in schema['fields']:
+    print(f"  - {field['field_name']} ({field['type']})")
+
+# 方式2：直接打印表结构（推荐，更直观）
+client.print_table_schema()
+# 输出：
+# ========== 数据表结构 ==========
+# 表名: 订单表
+# 字段列表:
+# 1. 订单号 (text) [必填]
+#    field_id: fldxxxxx
+# 2. 金额 (number)
+#    field_id: fldyyyyy
+# ...
+
+# 方式3：只获取字段列表
+fields = client.list_fields()
+for field in fields:
+    print(f"{field['field_name']}: {field['type']}")
+
+# 获取所有表格列表
+tables = client.list_tables()
+for table in tables:
+    print(f"{table['name']}: {table['table_id']}")
+```
+
+**优化效果**:
+- ✅ 可以快速了解表格结构，避免插入数据时字段名错误
+- ✅ 支持查看字段类型、是否必填等信息
+- ✅ 提供友好的打印输出，方便调试
+- ✅ 支持获取应用中的所有表格列表
+
+**修改文件**:
+- `src/tools/feishu/feishu_table_client.py` - 添加表格结构相关方法
+
+## 2026-01-26 - 优化：支持在创建实例时传入app_token和table_id
+
+### 功能优化（2026-01-26）
+
+**优化内容**:
+- 修改 `FeishuTableClient` 的 `__init__` 方法，支持在创建实例时传入 `app_token` 和 `table_id`
+- 所有操作方法中的 `app_token` 和 `table_id` 参数改为可选，如果不提供则使用实例属性
+- 调整方法参数顺序，将必需参数放在前面，可选参数放在后面
+- 添加 `_get_app_token_and_table_id` 辅助方法，统一处理参数获取逻辑
+
+**使用方式**:
+```python
+# 方式1：在创建实例时传入app_token和table_id（推荐，更简洁）
+client = FeishuTableClient(
+    app_token="bascnCMII2O1qg4W1O4w",
+    table_id="tblxxxxxxxxxxxx"
+)
+# 后续调用时不需要再传入这两个参数
+result = client.create_record(fields={"姓名": "张三", "年龄": 25})
+all_records = client.get_all_records()
+
+# 方式2：在方法调用时传入（会覆盖实例属性）
+client = FeishuTableClient()
+result = client.create_record(
+    fields={"姓名": "张三", "年龄": 25},
+    app_token="bascnCMII2O1qg4W1O4w",
+    table_id="tblxxxxxxxxxxxx"
+)
+```
+
+**优化效果**:
+- ✅ 使用更简洁，避免重复传入相同的参数
+- ✅ 支持两种使用方式，灵活方便
+- ✅ 向后兼容，原有调用方式仍然支持
+
+**修改文件**:
+- `src/tools/feishu/feishu_table_client.py` - 优化初始化方法和所有操作方法
+
+## 2026-01-26 - 重构：将飞书多维表格功能提取为独立模块
+
+### 代码重构（2026-01-26）
+
+**重构内容**:
+- 将 `FeishuTableClient` 类从 `message_sender.py` 提取到独立的 `feishu_table_client.py` 文件
+- 提高代码模块化程度，职责分离更清晰
+- 更新模块导出，方便其他模块使用
+
+**文件变更**:
+- 新增：`src/tools/feishu/feishu_table_client.py` - 飞书多维表格客户端独立模块
+- 修改：`src/tools/feishu/message_sender.py` - 移除表格相关代码，恢复为纯消息发送模块
+- 修改：`src/tools/feishu/__init__.py` - 添加 `FeishuTableClient` 和 `get_feishu_table_client` 导出
+
+**使用方式**:
+```python
+# 方式1：从模块直接导入
+from tools.feishu import FeishuTableClient, get_feishu_table_client
+
+# 方式2：从子模块导入
+from tools.feishu.feishu_table_client import FeishuTableClient, get_feishu_table_client
+
+# 使用方式不变
+client = get_feishu_table_client()
+```
+
+**优化效果**:
+- ✅ 代码结构更清晰，职责分离
+- ✅ 模块化程度提高，便于维护
+- ✅ 导入路径更灵活，支持多种导入方式
+
+## 2026-01-26 - 添加飞书多维表格管理功能
+
+### 功能新增（2026-01-26）
+
+**新增内容**:
+- 在 `FeishuMessageSender` 模块中添加了 `FeishuTableClient` 类，提供飞书多维表格的完整操作功能
+- 实现了创建、更新、删除、查询等核心操作方法
+- 支持单条和批量操作，提高数据操作效率
+
+**功能特点**:
+1. **单条记录操作**:
+   - `create_record()` - 创建单条记录
+   - `update_record()` - 更新单条记录
+   - `delete_record()` - 删除单条记录
+   - `get_record()` - 获取单条记录
+
+2. **批量操作**:
+   - `batch_create_records()` - 批量创建记录
+   - `batch_update_records()` - 批量更新记录
+   - `batch_delete_records()` - 批量删除记录
+
+3. **查询功能**:
+   - `list_records()` - 获取记录列表（支持分页、筛选、排序）
+   - `get_all_records()` - 获取所有记录（自动处理分页）
+
+**技术实现**:
+- 复用 `FeishuClient` 的 token 获取机制，避免重复实现
+- 统一的请求处理方法 `_make_request()`，简化代码结构
+- 完整的错误处理和日志记录
+- 支持筛选条件和排序条件
+- 自动处理分页，方便获取大量数据
+
+**使用示例**:
+```python
+from tools.feishu.message_sender import get_feishu_table_client
+
+# 获取客户端实例
+client = get_feishu_table_client()
+
+# 创建记录
+record = client.create_record(
+    app_token="bascnCMII2O1qg4W1O4w",
+    table_id="tblxxxxxxxxxxxx",
+    fields={"姓名": "张三", "年龄": 25}
+)
+
+# 更新记录
+client.update_record(
+    app_token="bascnCMII2O1qg4W1O4w",
+    table_id="tblxxxxxxxxxxxx",
+    record_id="recxxxxxxxxxxxx",
+    fields={"年龄": 26}
+)
+
+# 批量创建
+client.batch_create_records(
+    app_token="bascnCMII2O1qg4W1O4w",
+    table_id="tblxxxxxxxxxxxx",
+    records=[
+        {"fields": {"姓名": "张三", "年龄": 25}},
+        {"fields": {"姓名": "李四", "年龄": 30}}
+    ]
+)
+
+# 获取所有记录
+all_records = client.get_all_records(
+    app_token="bascnCMII2O1qg4W1O4w",
+    table_id="tblxxxxxxxxxxxx"
+)
+```
+
+**API接口**:
+- 基于飞书开放平台的多维表格 API v1
+- 支持完整的 CRUD 操作
+- 遵循飞书 API 规范，返回标准格式数据
+
+**修改文件**:
+- `src/tools/feishu/message_sender.py` - 添加 `FeishuTableClient` 类和全局单例函数
+
+## 2026-01-26 - 修复浏览器全局Accept header导致API请求返回HTML的问题
+
+### Bug 修复（2026-01-26）
+
+**修复内容**:
+- 移除了 `BrowserPool` 中 `extra_http_headers` 的全局 `Accept` header 配置
+- 修复了 `fetch_recent_orders` 方法中 fetch 请求的 `accept` header 配置错误
+- 将 fetch 请求的 `accept: "*/*"` 改为 `accept: "application/json"`，确保服务器返回JSON格式数据
+- 补充了缺失的 header：`pragma: "no-cache"`、`upgrade-insecure-requests: "1"`
+- 添加了 `mode: "cors"` 参数
+- 将 `cache-control` 从 `"max-age=0"` 改为 `"no-cache"`，与浏览器实际请求保持一致
+
+**问题原因**:
+1. **根本原因**：`BrowserPool` 在创建浏览器上下文时强制设置了全局 `Accept: "text/html,application/xhtml+xml,..."` header
+   - 这个全局 header 会覆盖所有通过该浏览器上下文发起的请求（包括 `page.goto()` 和 `fetch()`）
+   - 导致即使用户在 fetch 请求中设置了 `accept: "application/json"`，也会被全局 header 覆盖
+   - 结果：API 请求返回 HTML 而不是 JSON
+
+2. **次要原因**：fetch 请求中的 `accept` header 被错误设置为 `"*/*"`，缺少明确的 JSON 类型声明
+
+**技术细节**:
+- 移除了 `extra_http_headers` 中的 `Accept` header，让浏览器和 fetch 请求自己决定使用什么 Accept header
+- 对于页面导航（`page.goto()`），浏览器会自动设置合适的 Accept header
+- 对于 fetch 请求，在代码中明确指定 `accept: "application/json"`，确保返回 JSON 格式
+- `accept: "application/json"` 明确告诉服务器客户端期望接收JSON格式的响应
+
+**修改文件**:
+- `src/spider/query_manager.py` - 移除 `extra_http_headers` 中的全局 `Accept` header
+- `src/spider/pinduoduo/client.py` - 修复 `fetch_recent_orders` 方法中的 fetch 请求配置
+
+## 2026-01-26 - 修复拼多多登录状态误判 Bug
+
+### Bug 修复（2026-01-26）
+
+**修复内容**:
+- 修复了 `PinduoduoClient._check_login_status_once` 中的登录检测逻辑
+- 解决了当 URL 处于登录页面但包含 `redirectUrl=...home` 参数时被误判为“已登录”的问题
+
+**技术细节**:
+- 将判断逻辑从 `(not login) or home` 修改为 `(not login) and (home or indicators)`
+- 确保只要 URL 中存在 `login` 关键字，就绝对不会被判定为登录成功
+
+**修改文件**:
+- `src/spider/pinduoduo/client.py` - 修改 `_check_login_status_once` 的判定逻辑
+
+## 2026-01-26 - 在拼多多助手页面添加同步订单功能
+
+### 功能新增（2026-01-26）
+
+**新增内容**:
+- 在拼多多助手 Web 页面添加了“同步订单”按钮
+- 实现了同步订单的前端逻辑，调用 `/api/pinduoduo/execute` 接口触发自动化流程
+- 添加了同步过程中的加载状态显示和结果反馈
+- 优化了按钮布局，将“同步订单”设为主要操作，而“重新登录”调整为次要操作
+
+**技术细节**:
+1. **前端交互**:
+   - 使用异步 `fetch` 调用 `/api/pinduoduo/execute`
+   - 处理同步成功、失败及登录失效（被拦截）等不同场景
+   - 同步成功后自动刷新页面状态显示
+   - 登录失效时自动引导用户进入扫码登录流程
+
+2. **UI 优化**:
+   - 为同步按钮添加了 Loading 动画
+   - 调整了按钮的优先级和配色
+
+**修改文件**:
+- `src/web/templates/tools/pinduoduo.html` - 添加按钮及相关 JavaScript 逻辑
+
+## 2026-01-26 - 实现拼多多订单抓取和缓存功能
+
+### 功能新增（2026-01-26）
+
+**新增内容**:
+- 在 `PinduoduoClient` 中实现了 `fetch_recent_orders` 方法，支持获取最近 30 天的订单数据
+- 实现了订单数据的本地缓存功能，数据保存在 `cache/pinduoduo_orders_recent.json`
+- 在 `execute_automation` 流程中集成了订单抓取逻辑，登录成功后自动触发抓取
+
+**技术细节**:
+1. **订单抓取逻辑**:
+   - 自动导航至拼多多商家后台订单列表页面
+   - 使用 `page.evaluate` 在浏览器上下文中执行异步 `fetch` 请求
+   - 动态计算最近 30 天的时间范围（Unix 时间戳）
+   - 支持跨域请求和凭证包含（credentials: include）
+
+2. **本地缓存机制**:
+   - 使用 `get_safe_data_path` 确保缓存路径在不同环境下均可写入
+   - 缓存数据包含抓取时间戳和原始 API 返回的订单列表
+   - 目录结构：`cache/pinduoduo_orders_recent.json`
+
+3. **自动化流程集成**:
+   - 修改了 `execute_automation` 方法
+   - 在检测到登录成功后，立即启动订单抓取任务
+   - 抓取结果包含在自动化执行的返回字典中
+
+**优化效果**:
+- ✅ 实现了拼多多商家数据的自动化获取
+- ✅ 提供数据持久化存储，方便后续分析和展示
+- ✅ 流程全自动，无需人工干预
+
+**修改文件**:
+- `src/spider/pinduoduo/client.py` - 新增 `fetch_recent_orders` 和 `_get_orders_cache_path` 方法，更新 `execute_automation`
+
+## 2026-01-26 - 移除冗余的手动 Cookie 管理
+
+### 代码优化（2026-01-26）
+
+**优化内容**:
+- 移除了 `PinduoduoClient` 中的手动 Cookie 加载和保存逻辑
+- 移除了 `Config.PINDUODUO_COOKIE_PATH` 配置项
+- 完全依赖 `BrowserPool` 的持久化浏览器上下文（`browser_data`）来管理登录状态
+- 简化了 `PinduoduoClient` 代码，使其更专注于业务逻辑
+
+**问题背景**:
+- 之前 `BrowserPool` 已经实现了基于 `browser_data` 目录的持久化上下文（Persistent Context）
+- Playwright 会自动处理该目录下的 cookies、localStorage 和 sessionStorage 的保存与恢复
+- `PinduoduoClient` 原有的手动保存到 `pinduoduo_cookies.json` 的逻辑变得冗余，且可能导致状态同步不一致
+
+**优化效果**:
+- ✅ 减少冗余代码，降低维护成本
+- ✅ 登录状态管理更统一，完全交给 Playwright 持久化机制
+- ✅ 避免了手动注入 Cookie 可能带来的潜在冲突
+- ✅ 代码结构更清晰，职责分明
+
+**修改文件**:
+- `src/config.py` - 移除 `PINDUODUO_COOKIE_PATH`
+- `src/spider/pinduoduo/client.py` - 移除 `load_cookies`、`save_cookies` 及其相关调用
+
 ## 2026-01-23 - 新增浏览器池调用规范文档
 
 ### 文档新增（2026-01-23）
@@ -2082,6 +3041,37 @@ assistantService/
 - 解决了文档中缺少"如何运行项目"说明的问题
 - 补充了调试时如何运行的详细步骤
 
+## 2026-01-26 - 重构：将拼多多订单数据同步到飞书表格功能提取为独立模块
+
+### 代码重构（2026-01-26）
+
+**重构内容**:
+- 创建 `src/spider/pinduoduo/feishutable.py` 模块，封装飞书表格同步功能
+- 提供 `sync_orders_to_feishu()` 方法，接收订单数据数组，批量同步到飞书多维表格
+- 在 `PinduoduoClient.fetch_recent_orders()` 中调用新方法，简化代码结构
+
+**功能特点**:
+- **批量同步**：支持批量创建记录，每批最多100条，自动分批处理
+- **容错机制**：批量创建失败时自动降级为单条创建，确保数据不丢失
+- **数据映射**：自动将拼多多订单数据转换为飞书表格字段格式
+- **统计信息**：返回同步结果，包含成功、失败和总数统计
+
+**数据映射**:
+- 订单时间：转换为可读格式（YYYY-MM-DD HH:MM:SS）
+- 订单状态：映射为中文描述（待支付、待发货、已发货等）
+- 发货状态：映射为中文描述（未发货、已发货、已收货）
+- 其他字段：商品ID、省份、城市、订单号、订单金额、优惠信息等
+
+**技术细节**:
+- 使用 `FeishuTableClient.batch_create_records()` 进行批量创建
+- 批量创建失败时自动降级为单条创建，提高成功率
+- 支持自定义 `app_token` 和 `table_id`，默认使用配置值
+- 完整的错误处理和日志记录
+
+**修改文件**:
+- `src/spider/pinduoduo/feishutable.py` - 新建文件，封装同步功能
+- `src/spider/pinduoduo/client.py` - 移除飞书表格客户端直接调用，改为调用新方法
+
 ## 2026-01-XX - 文档目录整理
 
 ### 文档组织优化
@@ -2284,3 +3274,87 @@ kuaidi/
 - 优化Web界面用户体验
 - 支持自定义主题
 - 添加工具配置管理
+
+## 2026-01-26 - 添加网络请求监听功能，捕获AJAX请求体
+
+### 功能新增（2026-01-26）
+
+**新增内容**:
+- 在 `PinduoduoClient.fetch_recent_orders` 方法中添加了网络请求监听功能
+- 使用 Playwright 的 `page.on("request")` 事件监听器捕获浏览器中的 AJAX 请求
+- 自动捕获 `https://mms.pinduoduo.com/mangkhut/mms/recentOrderList` 接口的请求信息
+- 保存捕获的请求信息到本地文件，包括：
+  - 请求 URL
+  - 请求方法（GET/POST等）
+  - 请求头（headers）
+  - 请求体（POST data）
+  - 捕获时间戳
+
+**功能特点**:
+- 在访问订单列表页面之前设置请求监听器，确保能捕获到页面自动发起的 AJAX 请求
+- 自动解析 JSON 格式的请求体，方便查看和分析
+- 将捕获的请求信息保存到 `cache/pinduoduo_request_info.json` 文件
+- 在返回结果中包含捕获的请求信息，方便调试和分析
+
+**技术细节**:
+- 使用 `page.on("request", handle_request)` 监听所有网络请求
+- 通过 URL 匹配过滤出目标 API 请求
+- 使用 `request.post_data` 获取 POST 请求体
+- 使用 `request.headers` 获取请求头信息
+- 自动保存请求信息到安全的数据目录（使用 `get_safe_data_path`）
+
+**使用场景**:
+- 调试和分析拼多多订单列表页面的实际请求参数
+- 了解浏览器自动发起的 AJAX 请求的完整信息
+- 对比手动 fetch 请求和浏览器自动请求的差异
+- 获取真实的请求头和请求体，用于后续的请求模拟
+
+**修改文件**:
+- `src/spider/pinduoduo/client.py` - 在 `fetch_recent_orders` 方法中添加请求监听功能
+
+## 2026-01-26 - 优化 fetch 请求，使用捕获到的请求头（包含 anti-content 和 etag）
+
+### 功能优化（2026-01-26）
+
+**优化内容**:
+- 修改 `fetch_recent_orders` 方法中的 fetch 脚本，优先使用捕获到的请求头
+- 自动使用浏览器实际请求中的 `anti-content` 和 `etag` 等防爬虫参数
+- 如果捕获到请求体，也会使用捕获到的请求体参数（但会更新时间戳）
+
+**技术细节**:
+- 在构建 fetch 脚本时，优先检查是否捕获到了请求头
+- 如果捕获到请求头，使用捕获到的完整请求头（包含所有防爬虫参数）
+- 如果未捕获到请求头，则使用默认的请求头作为后备方案
+- 对于请求体，如果捕获到了，会使用捕获到的参数结构，但会更新 `groupStartTime` 和 `groupEndTime` 为当前时间
+- 使用 `JSON.parse` 在 JavaScript 中解析转义后的 JSON 字符串，确保特殊字符正确处理
+
+**优势**:
+- 使用真实的浏览器请求头，提高请求成功率
+- 自动包含 `anti-content` 和 `etag` 等动态生成的防爬虫参数
+- 保持请求体结构与浏览器实际请求一致（如 `sortType: 7`、`hideRegionBlackDelayShipping: false` 等）
+
+**修改文件**:
+- `src/spider/pinduoduo/client.py` - 优化 `fetch_recent_orders` 方法中的 fetch 脚本构建逻辑
+
+## 2026-01-26 - 修改 fetch 请求体格式，直接使用字符串格式
+
+### 代码优化（2026-01-26）
+
+**优化内容**:
+- 修改 fetch 脚本中的请求体格式，直接使用字符串格式（与浏览器实际请求保持一致）
+- 请求体从 `JSON.stringify(body)` 改为直接使用字符串 `"body": "{\"orderType\":0,...}"`
+- 确保时间范围为最近30天（`groupStartTime` 和 `groupEndTime`）
+
+**技术细节**:
+- 将请求体字典转换为 JSON 字符串后，进行适当的转义处理
+- 在 fetch 脚本中直接使用转义后的 JSON 字符串作为 body 参数
+- 时间计算：`end_time = 当前时间戳`，`start_time = end_time - (30 * 24 * 60 * 60)`（30天前）
+- 使用 `json.dumps` 的 `separators=(',', ':')` 参数，确保输出格式紧凑（无多余空格）
+
+**优势**:
+- 与浏览器实际请求格式完全一致
+- 减少不必要的 JSON 解析和序列化步骤
+- 确保时间范围准确为最近30天
+
+**修改文件**:
+- `src/spider/pinduoduo/client.py` - 修改 `fetch_recent_orders` 方法中的请求体格式

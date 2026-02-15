@@ -108,6 +108,22 @@ def register_web_routes(app, tool_manager: ToolManager):
         routes_logger.info("/hello 路由被访问")
         return "<h1>Hello World! Flask 正常工作！</h1><a href='/'>返回首页</a>"
     
+    @app.route('/feishu-test')
+    def feishu_test():
+        """飞书消息测试页面"""
+        tools_info = tool_manager.get_tools_info()
+        return render_template('feishu_test.html', tools=tools_info, config=Config)
+    
+    @app.route('/websocket')
+    def websocket_page():
+        """WebSocket 客户端管理页面"""
+        try:
+            tools_info = tool_manager.get_tools_info()
+            return render_template('websocket.html', tools=tools_info, config=Config)
+        except Exception as e:
+            routes_logger.error(f"WebSocket 管理页面渲染错误: {e}", exc_info=True)
+            return render_template('error.html', message='WebSocket 管理页面加载失败', tools=tool_manager.get_tools_info(), config=Config), 500
+
     @app.route('/browser-status')
     def browser_status():
         """浏览器状态监控页面"""

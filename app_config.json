@@ -1,0 +1,22 @@
+{
+  "host": "127.0.0.1",
+  "port": 8887,
+  "headless": false,
+  "window_width": 1200,
+  "window_height": 800,
+  "window_min_width": 800,
+  "window_min_height": 600,
+  "window_resizable": true,
+  "tray_enabled": true,
+  "use_native_window": true,
+  "log_level": "INFO",
+  "enable_devtools": false,
+  "browser_lazy_init": true,
+  "browser_idle_timeout": 300,
+  "enable_resource_monitor": true,
+  "max_memory_mb": 200,
+  "ws_client_enabled": true,
+  "ws_client_host": "127.0.0.1",
+  "ws_client_port": 8080,
+  "ws_client_path": "/ws"
+}

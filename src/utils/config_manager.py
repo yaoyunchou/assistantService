@@ -56,7 +56,11 @@ class ConfigManager:
             'browser_lazy_init': Config.BROWSER_LAZY_INIT,
             'browser_idle_timeout': Config.BROWSER_IDLE_TIMEOUT,
             'enable_resource_monitor': Config.ENABLE_RESOURCE_MONITOR,
-            'max_memory_mb': Config.MAX_MEMORY_MB
+            'max_memory_mb': Config.MAX_MEMORY_MB,
+            'ws_client_enabled': Config.WS_CLIENT_ENABLED,
+            'ws_client_host': Config.WS_CLIENT_HOST,
+            'ws_client_port': Config.WS_CLIENT_PORT,
+            'ws_client_path': Config.WS_CLIENT_PATH
         }
     
     def load_config(self) -> Dict[str, Any]:
@@ -175,6 +179,16 @@ class ConfigManager:
             Config.ENABLE_RESOURCE_MONITOR = bool(value)
         elif key == 'max_memory_mb':
             Config.MAX_MEMORY_MB = int(value)
+        elif key == 'ws_client_enabled':
+            Config.WS_CLIENT_ENABLED = bool(value)
+        elif key == 'ws_client_host':
+            Config.WS_CLIENT_HOST = str(value)
+        elif key == 'ws_client_port':
+            port = int(value)
+            if 1 <= port <= 65535:
+                Config.WS_CLIENT_PORT = port
+        elif key == 'ws_client_path':
+            Config.WS_CLIENT_PATH = str(value).strip() or '/ws'
         # 注意：host 和 port 需要重启，不在这里处理
     
     def reload_from_file(self) -> bool:

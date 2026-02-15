@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+
+{% block title %}{{ tool.display_name }} - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.status-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 30px;
+    margin-bottom: 30px;
+}
+.status-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+.status-title { font-size: 20px; font-weight: 600; color: #2c3e50; }
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+}
+.status-indicator.success { background: #d4edda; color: #155724; }
+.status-indicator.failed { background: #f8d7da; color: #721c24; }
+.status-indicator.unknown { background: #e2e3e5; color: #383d41; }
+.status-indicator-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.status-info { margin-top: 20px; }
+.status-info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f0f0;
+}
+.status-info-row:last-child { border-bottom: none; }
+.status-info-label { color: #7f8c8d; font-weight: 500; }
+.status-info-value { color: #2c3e50; font-weight: 600; }
+.action-buttons { display: flex; gap: 15px; margin-top: 20px; }
+.btn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 6px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+.btn-primary { background: #3498db; color: white; }
+.btn-primary:hover { background: #2980b9; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3); }
+.btn-secondary { background: #95a5a6; color: white; }
+.btn-secondary:hover { background: #7f8c8d; }
+.btn-danger { background: #e74c3c; color: white; }
+.btn-danger:hover { background: #c0392b; }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none !important; }
+.loading {
+    display: inline-block;
+    width: 20px; height: 20px;
+    border: 3px solid rgba(52, 152, 219, 0.3);
+    border-radius: 50%;
+    border-top-color: #3498db;
+    animation: spin 1s ease-in-out infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>{{ tool.display_name }}</h2>
+    <p class="subtitle">{{ tool.description }}</p>
+</div>
+
+<div class="status-card">
+    <div class="status-header">
+        <h3 class="status-title">执行状态</h3>
+        <div id="status-indicator" class="status-indicator unknown">
+            <span class="status-indicator-dot"></span>
+            <span id="status-text">加载中...</span>
+        </div>
+    </div>
+    <div class="status-info">
+        <div class="status-info-row">
+            <span class="status-info-label">最后执行时间</span>
+            <span class="status-info-value" id="last-execution">--</span>
+        </div>
+        <div class="status-info-row">
+            <span class="status-info-label">最后成功时间</span>
+            <span class="status-info-value" id="last-success">--</span>
+        </div>
+        <div class="status-info-row">
+            <span class="status-info-label">最后失败时间</span>
+            <span class="status-info-value" id="last-failure">--</span>
+        </div>
+        <div class="status-info-row">
+            <span class="status-info-label">状态信息</span>
+            <span class="status-info-value" id="status-message">--</span>
+        </div>
+    </div>
+    <div class="action-buttons">
+        <button id="refresh-status-btn" class="btn btn-secondary">刷新状态</button>
+        <button id="manual-login-btn" class="btn btn-primary" style="background:#27ae60;">手动登录（首次使用）</button>
+        <button id="fetch-records-btn" class="btn btn-primary">获取最近 30 天记录</button>
+        <button id="clear-cookies-btn" class="btn btn-danger">清除登录</button>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() { refreshStatus(); });
+
+document.getElementById('refresh-status-btn').addEventListener('click', refreshStatus);
+document.getElementById('manual-login-btn').addEventListener('click', manualLogin);
+document.getElementById('fetch-records-btn').addEventListener('click', fetchRecords);
+document.getElementById('clear-cookies-btn').addEventListener('click', clearCookies);
+
+async function refreshStatus() {
+    try {
+        const response = await fetch('/api/tu/status');
+        const data = await response.json();
+        if (data.success) {
+            updateStatusDisplay(data);
+        } else {
+            document.getElementById('status-text').textContent = '获取失败';
+            document.getElementById('status-message').textContent = data.error || '未知错误';
+        }
+    } catch (error) {
+        document.getElementById('status-text').textContent = '获取失败';
+        document.getElementById('status-message').textContent = error.message;
+    }
+}
+
+function updateStatusDisplay(data) {
+    const indicator = document.getElementById('status-indicator');
+    const statusText = document.getElementById('status-text');
+    indicator.classList.remove('success', 'failed', 'unknown');
+    if (data.status === 'success') {
+        indicator.classList.add('success');
+        statusText.textContent = '执行有效';
+    } else if (data.status === 'failed') {
+        indicator.classList.add('failed');
+        statusText.textContent = '执行失败';
+    } else {
+        indicator.classList.add('unknown');
+        statusText.textContent = '未知状态';
+    }
+    document.getElementById('last-execution').textContent = formatTime(data.last_execution);
+    document.getElementById('last-success').textContent = formatTime(data.last_success);
+    document.getElementById('last-failure').textContent = formatTime(data.last_failure);
+    document.getElementById('status-message').textContent = data.message || '--';
+}
+
+function formatTime(timeStr) {
+    if (!timeStr) return '--';
+    try {
+        const date = new Date(timeStr);
+        return date.toLocaleString('zh-CN', {
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
+    } catch (e) { return timeStr; }
+}
+
+async function fetchRecords() {
+    const btn = document.getElementById('fetch-records-btn');
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading"></span> 执行中...';
+    try {
+        const response = await fetch('/api/tu/execute', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            let msg = data.message || '执行成功';
+            if (data.records_result && data.records_result.total !== undefined) {
+                msg += ' 共 ' + data.records_result.total + ' 条记录。';
+            }
+            alert(msg);
+            refreshStatus();
+        } else {
+            alert('执行失败: ' + (data.message || data.error || '未知错误'));
+        }
+    } catch (error) {
+        alert('请求失败: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+    }
+}
+
+async function manualLogin() {
+    const btn = document.getElementById('manual-login-btn');
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading"></span> 请在弹出的浏览器窗口中登录...';
+    try {
+        const response = await fetch('/api/tu/login', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            alert(data.message || '登录成功！后续操作无需再次登录。');
+            refreshStatus();
+        } else {
+            alert('登录失败: ' + (data.message || data.error || '未知错误'));
+        }
+    } catch (error) {
+        alert('请求失败: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+    }
+}
+
+async function clearCookies() {
+    if (!confirm('确定要清除途强登录状态吗？')) return;
+    try {
+        const response = await fetch('/api/tu/logout', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            alert('已清除登录状态');
+            refreshStatus();
+        } else {
+            alert('清除失败: ' + (data.error || '未知错误'));
+        }
+    } catch (error) {
+        alert('请求失败: ' + error.message);
+    }
+}
+</script>
+{% endblock %}

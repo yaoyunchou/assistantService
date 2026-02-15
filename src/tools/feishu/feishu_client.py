@@ -2,6 +2,7 @@
 飞书API客户端
 负责飞书应用认证和API调用
 """
+import json
 import os
 import requests
 import time
@@ -9,6 +10,23 @@ from typing import Optional, Dict, Any
 from utils.logger import get_logger
 
 logger = get_logger('FeishuClient')
+
+
+def _receive_id_type(receive_id: str) -> str:
+    """
+    根据 receive_id 字符串格式推断飞书 API 所需的 receive_id_type。
+    飞书要求：open_id 传 open_id，user_id（长数字）传 user_id，否则 API 报错。
+    """
+    if not receive_id or not isinstance(receive_id, str):
+        return "user_id"
+    s = receive_id.strip()
+    if s.startswith("ou_"):
+        return "open_id"
+    if s.startswith("on_"):
+        return "union_id"
+    if "@" in s and "." in s:
+        return "email"
+    return "user_id"
 
 
 class FeishuClient:
@@ -100,9 +118,10 @@ class FeishuClient:
             return False
         
         try:
+            receive_id_type = _receive_id_type(user_id)
             url = f"{self.BASE_URL}/im/v1/messages"
             params = {
-                "receive_id_type": "user_id"
+                "receive_id_type": receive_id_type
             }
             headers = {
                 "Authorization": f"Bearer {access_token}",
@@ -114,7 +133,7 @@ class FeishuClient:
                 "content": f'{{"text":"{text}"}}'
             }
             
-            logger.info(f"正在发送飞书消息给用户: {user_id}")
+            logger.info(f"正在发送飞书消息给用户: {user_id} (receive_id_type={receive_id_type})")
             response = requests.post(url, params=params, json=data, headers=headers, timeout=10)
             result = response.json()
             
@@ -131,7 +150,101 @@ class FeishuClient:
         except Exception as e:
             logger.error(f"发送飞书消息时发生错误: {e}", exc_info=True)
             return False
-    
+
+    def send_card_message(self, user_id: str, card: Dict[str, Any]) -> bool:
+        """
+        发送卡片消息给指定用户
+
+        飞书卡片消息 msg_type 为 "interactive"，content 为卡片 JSON。
+        卡片可以是完整结构（config/header/elements）或模板（type="template"）。
+
+        Args:
+            user_id: 接收消息的用户ID（user_id 或 open_id）
+            card: 卡片内容，dict 会序列化为 JSON 字符串
+
+        Returns:
+            是否发送成功
+        """
+        access_token = self.get_tenant_access_token()
+        if not access_token:
+            logger.error("无法获取access_token，卡片消息发送失败")
+            return False
+
+        try:
+            receive_id_type = _receive_id_type(user_id)
+            content_str = card if isinstance(card, str) else json.dumps(card, ensure_ascii=False)
+            url = f"{self.BASE_URL}/im/v1/messages"
+            params = {"receive_id_type": receive_id_type}
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json; charset=utf-8"
+            }
+            data = {
+                "receive_id": user_id,
+                "msg_type": "interactive",
+                "content": content_str
+            }
+
+            logger.info(f"正在发送飞书卡片消息给用户: {user_id} (receive_id_type={receive_id_type})")
+            response = requests.post(url, params=params, json=data, headers=headers, timeout=10)
+            result = response.json()
+
+            if result.get('code') == 0:
+                logger.info("飞书卡片消息发送成功")
+                return True
+            logger.error(f"飞书卡片消息发送失败: {result.get('msg')}")
+            return False
+
+        except requests.RequestException as e:
+            logger.error(f"请求飞书API失败: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"发送飞书卡片消息时发生错误: {e}", exc_info=True)
+            return False
+
+    def reply_to_message(self, message_id: str, text: str) -> bool:
+        """
+        在指定消息所在会话中回复一条文本消息（用于事件订阅收到消息后「可聊天」回复）。
+
+        Args:
+            message_id: 要回复的那条消息的 message_id（如事件中的 event.message.message_id）
+            text: 回复的文本内容
+
+        Returns:
+            是否发送成功
+        """
+        access_token = self.get_tenant_access_token()
+        if not access_token:
+            logger.error("无法获取access_token，回复消息失败")
+            return False
+        if not message_id or not text:
+            logger.error("回复消息缺少 message_id 或 text")
+            return False
+        try:
+            url = f"{self.BASE_URL}/im/v1/messages/{message_id}/reply"
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json; charset=utf-8"
+            }
+            data = {
+                "content": json.dumps({"text": text}, ensure_ascii=False),
+                "msg_type": "text"
+            }
+            logger.info(f"正在回复消息: message_id={message_id[:20]}...")
+            response = requests.post(url, json=data, headers=headers, timeout=10)
+            result = response.json()
+            if result.get('code') == 0:
+                logger.info("飞书回复消息成功")
+                return True
+            logger.error(f"飞书回复消息失败: {result.get('msg')}")
+            return False
+        except requests.RequestException as e:
+            logger.error(f"请求飞书API失败: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"回复飞书消息时发生错误: {e}", exc_info=True)
+            return False
+
     def is_configured(self) -> bool:
         """
         检查飞书客户端是否已正确配置

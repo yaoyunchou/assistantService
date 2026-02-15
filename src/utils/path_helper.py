@@ -39,6 +39,29 @@ def get_user_data_dir(app_name: str = 'JNTools') -> Path:
     return user_dir
 
 
+def get_browser_data_dir(app_name: str = 'JNTools') -> Path:
+    """
+    获取浏览器用户数据目录（固定持久化缓存，所有运行共用）。
+
+    始终使用用户数据目录下的 browser_data，保证：
+    - 每次启动、每次实例都使用同一目录，登录/缓存持久有效；
+    - 不随项目路径或运行目录变化，路径唯一；
+    - 程序不会自动清理，需要清除时由您手动删除该目录。
+
+    Windows: %LOCALAPPDATA%\\JNTools\\browser_data
+    Linux/Mac: ~/.local/share/JNTools/browser_data 或 ~/JNTools/browser_data
+
+    Args:
+        app_name: 应用名称，默认为 'JNTools'
+
+    Returns:
+        浏览器数据目录路径
+    """
+    browser_dir = get_user_data_dir(app_name) / 'browser_data'
+    browser_dir.mkdir(parents=True, exist_ok=True)
+    return browser_dir
+
+
 def get_safe_data_path(relative_path: str, app_name: str = 'JNTools') -> Path:
     """
     获取安全的数据文件路径

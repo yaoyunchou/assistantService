@@ -191,6 +191,21 @@ def init_tools(browser_pool: Optional[BrowserPool] = None) -> ToolManager:
         print(f"[App] 注册拼多多工具失败: {e}")
         import traceback
         traceback.print_exc()
+
+    # 途强工具（tu 模块）
+    try:
+        from tools.tu_tool import TuTool
+        tu_tool = TuTool()
+        tool_manager.register_tool(tu_tool)
+        print(f"[App] 已注册工具: {tu_tool.display_name}")
+        if tu_tool.initialize(browser_pool=browser_pool):
+            print(f"[App] 工具 tu 初始化成功")
+        else:
+            print(f"[App] 工具 tu 初始化失败")
+    except Exception as e:
+        print(f"[App] 注册途强工具失败: {e}")
+        import traceback
+        traceback.print_exc()
     
     # 只初始化启动时需要初始化的工具
     tools_to_init = []
