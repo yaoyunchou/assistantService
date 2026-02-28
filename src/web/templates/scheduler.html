@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+
+{% block title %}定时任务 - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.scheduler-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
+.scheduler-header h2 { margin: 0; font-size: 22px; color: #2c3e50; }
+.btn { padding: 10px 20px; border: none; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+.btn-primary { background: #3498db; color: white; }
+.btn-primary:hover { background: #2980b9; }
+.btn-secondary { background: #95a5a6; color: white; }
+.btn-secondary:hover { background: #7f8c8d; }
+.btn-danger { background: #e74c3c; color: white; }
+.btn-danger:hover { background: #c0392b; }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-sm { padding: 6px 12px; font-size: 13px; }
+.card { background: white; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 24px; }
+.jobs-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.jobs-table th, .jobs-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #eee; }
+.jobs-table th { background: #f8f9fa; font-weight: 600; color: #495057; }
+.jobs-table tr:hover { background: #f8f9fa; }
+.jobs-table .col-id { width: 120px; font-family: monospace; font-size: 12px; }
+.jobs-table .col-name { width: 140px; }
+.jobs-table .col-type { width: 140px; }
+.jobs-table .col-cron { width: 120px; }
+.jobs-table .col-next { width: 180px; color: #7f8c8d; }
+.jobs-table .col-actions { white-space: nowrap; }
+.result-msg { padding: 12px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
+.result-msg.success { background: #d4edda; color: #155724; }
+.result-msg.error { background: #f8d7da; color: #721c24; }
+.result-msg.info { background: #d1ecf1; color: #0c5460; }
+.empty-tip { color: #7f8c8d; text-align: center; padding: 40px 20px; }
+.form-card { margin-bottom: 24px; }
+.form-row { margin-bottom: 12px; }
+.form-row label { display: block; margin-bottom: 4px; font-weight: 500; color: #495057; }
+.form-row input, .form-row select, .form-row textarea { width: 100%; max-width: 400px; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; }
+.form-row textarea { min-height: 60px; font-family: monospace; font-size: 12px; }
+.form-actions { margin-top: 16px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card form-card">
+    <h3 style="margin-top:0;">新增任务</h3>
+    <div class="form-row">
+        <label>任务名称</label>
+        <input type="text" id="newName" placeholder="例如：1688 补详情" />
+    </div>
+    <div class="form-row">
+        <label>任务类型</label>
+        <select id="newType">
+            <option value="">请选择</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label>运行参数 data（JSON，可选）</label>
+        <textarea id="newData" placeholder='{}'></textarea>
+    </div>
+    <div class="form-row">
+        <label>定时 cron（分 时 日 月 周，如 0 * * * * 表示每小时整点）</label>
+        <input type="text" id="newCron" value="0 * * * *" placeholder="0 * * * *" />
+    </div>
+    <div class="form-actions">
+        <button type="button" class="btn btn-primary" id="btnAdd">新增任务</button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="scheduler-header">
+        <h2>⏰ 任务列表</h2>
+        <button type="button" class="btn btn-secondary" id="btnRefresh">刷新</button>
+    </div>
+    <div id="jobsWrap">
+        <div class="empty-tip" id="emptyTip">加载中…</div>
+        <table class="jobs-table" id="jobsTable" style="display: none;">
+            <thead>
+                <tr>
+                    <th class="col-id">任务 ID</th>
+                    <th class="col-name">名称</th>
+                    <th class="col-type">类型</th>
+                    <th class="col-cron">cron</th>
+                    <th class="col-next">下次执行</th>
+                    <th class="col-actions">操作</th>
+                </tr>
+            </thead>
+            <tbody id="jobsBody"></tbody>
+        </table>
+    </div>
+    <div id="resultArea"></div>
+</div>
+
+<script>
+(function() {
+    var jobsTable = document.getElementById('jobsTable');
+    var jobsBody = document.getElementById('jobsBody');
+    var emptyTip = document.getElementById('emptyTip');
+    var resultArea = document.getElementById('resultArea');
+    var btnRefresh = document.getElementById('btnRefresh');
+    var btnAdd = document.getElementById('btnAdd');
+    var newName = document.getElementById('newName');
+    var newType = document.getElementById('newType');
+    var newData = document.getElementById('newData');
+    var newCron = document.getElementById('newCron');
+
+    function showResult(text, type) {
+        resultArea.innerHTML = '<div class="result-msg ' + (type || 'info') + '">' + text + '</div>';
+        setTimeout(function() { resultArea.innerHTML = ''; }, 5000);
+    }
+
+    function shortId(id) {
+        if (!id) return '—';
+        return id.length > 8 ? id.substring(0, 8) + '…' : id;
+    }
+
+    function loadTypes() {
+        fetch('/api/scheduler/types')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.success || !data.types) return;
+                newType.innerHTML = '<option value="">请选择</option>' + data.types.map(function(t) {
+                    return '<option value="' + (t.type || '').replace(/"/g, '&quot;') + '">' + (t.name || t.type || '').replace(/</g, '&lt;') + '</option>';
+                }).join('');
+            });
+    }
+
+    function loadJobs() {
+        btnRefresh.disabled = true;
+        emptyTip.textContent = '加载中…';
+        jobsTable.style.display = 'none';
+        fetch('/api/scheduler/jobs')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                btnRefresh.disabled = false;
+                if (!data.success) {
+                    emptyTip.textContent = '加载失败：' + (data.error || '未知错误');
+                    return;
+                }
+                var jobs = data.jobs || [];
+                if (jobs.length === 0) {
+                    emptyTip.textContent = '暂无任务，请在上方新增。';
+                    emptyTip.style.display = 'block';
+                    return;
+                }
+                emptyTip.style.display = 'none';
+                jobsTable.style.display = 'table';
+                jobsBody.innerHTML = jobs.map(function(j) {
+                    var next = j.next_run_time ? j.next_run_time : '—';
+                    var id = (j.id || '').replace(/"/g, '&quot;');
+                    return '<tr>' +
+                        '<td class="col-id" title="' + (j.id || '') + '">' + shortId(j.id).replace(/</g, '&lt;') + '</td>' +
+                        '<td class="col-name">' + (j.name || '—').replace(/</g, '&lt;') + '</td>' +
+                        '<td class="col-type">' + (j.type || '—').replace(/</g, '&lt;') + '</td>' +
+                        '<td class="col-cron">' + (j.cron || '—').replace(/</g, '&lt;') + '</td>' +
+                        '<td class="col-next">' + next.replace(/</g, '&lt;') + '</td>' +
+                        '<td class="col-actions">' +
+                        '<button type="button" class="btn btn-primary btn-sm btn-trigger" data-id="' + id + '">执行</button> ' +
+                        '<button type="button" class="btn btn-danger btn-sm btn-delete" data-id="' + id + '">删除</button>' +
+                        '</td></tr>';
+                }).join('');
+                jobsBody.querySelectorAll('.btn-trigger').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        var id = btn.getAttribute('data-id');
+                        if (!id) return;
+                        btn.disabled = true;
+                        resultArea.innerHTML = '<div class="result-msg info">正在执行…</div>';
+                        fetch('/api/scheduler/trigger/' + encodeURIComponent(id), { method: 'POST' })
+                            .then(function(r) { return r.json(); })
+                            .then(function(res) {
+                                btn.disabled = false;
+                                if (res.success) {
+                                    showResult(res.message || '执行完成', 'success');
+                                    loadJobs();
+                                } else {
+                                    showResult('执行失败：' + (res.error || '未知错误'), 'error');
+                                }
+                            })
+                            .catch(function(e) {
+                                btn.disabled = false;
+                                showResult('请求失败：' + e.message, 'error');
+                            });
+                    });
+                });
+                jobsBody.querySelectorAll('.btn-delete').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        var id = btn.getAttribute('data-id');
+                        if (!id || !confirm('确定删除该任务？')) return;
+                        btn.disabled = true;
+                        fetch('/api/scheduler/tasks/' + encodeURIComponent(id), { method: 'DELETE' })
+                            .then(function(r) { return r.json(); })
+                            .then(function(res) {
+                                if (res.success) {
+                                    showResult('已删除', 'success');
+                                    loadJobs();
+                                } else {
+                                    showResult('删除失败：' + (res.error || '未知错误'), 'error');
+                                    btn.disabled = false;
+                                }
+                            })
+                            .catch(function(e) {
+                                btn.disabled = false;
+                                showResult('请求失败：' + e.message, 'error');
+                            });
+                    });
+                });
+            })
+            .catch(function(e) {
+                btnRefresh.disabled = false;
+                emptyTip.textContent = '请求失败：' + e.message;
+            });
+    }
+
+    btnAdd.addEventListener('click', function() {
+        var name = (newName.value || '').trim();
+        var typeVal = (newType.value || '').trim();
+        var cron = (newCron.value || '0 * * * *').trim();
+        if (!name) { showResult('请填写任务名称', 'error'); return; }
+        if (!typeVal) { showResult('请选择任务类型', 'error'); return; }
+        var data = {};
+        try {
+            var dataStr = (newData.value || '').trim();
+            if (dataStr) data = JSON.parse(dataStr);
+        } catch (e) {
+            showResult('data 不是合法 JSON', 'error');
+            return;
+        }
+        btnAdd.disabled = true;
+        fetch('/api/scheduler/tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, type: typeVal, data: data, cron: cron })
+        })
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                btnAdd.disabled = false;
+                if (res.success) {
+                    showResult('已新增任务：' + (res.task && res.task.id ? shortId(res.task.id) : ''), 'success');
+                    newName.value = '';
+                    newType.value = '';
+                    newData.value = '{}';
+                    loadJobs();
+                } else {
+                    showResult('新增失败：' + (res.error || '未知错误'), 'error');
+                }
+            })
+            .catch(function(e) {
+                btnAdd.disabled = false;
+                showResult('请求失败：' + e.message, 'error');
+            });
+    });
+
+    btnRefresh.addEventListener('click', loadJobs);
+    loadTypes();
+    loadJobs();
+})();
+</script>
+{% endblock %}

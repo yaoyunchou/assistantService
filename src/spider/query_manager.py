@@ -71,7 +71,7 @@ class BrowserPool:
 
     def __init__(self, headless: bool = True, idle_timeout: int = 600, max_instances: int = 5):
         self.headless = headless
-        self._shared_user_data_dir = get_browser_data_dir(app_name='JNTools')
+        self._shared_user_data_dir = get_browser_data_dir(app_name='如意助手')
         print(f"[BrowserPool] 浏览器缓存目录（持久化）: {self._shared_user_data_dir.resolve()}")
 
         # 专用线程（max_workers=1 保证所有 playwright 操作在同一线程）

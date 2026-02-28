@@ -1,20 +1,20 @@
 ; Inno Setup 安装包脚本
-; 用于打包 JNTools（蕉内工具箱）应用程序
+; 用于打包如意助手应用程序
 
 [Setup]
 ; 注意: AppId的值唯一标识你的应用程序。
 ; 不要使用相同的AppId值为不同的应用程序。
 ; (若要生成新的 GUID，可在菜单中选择 "工具" -> "生成 GUID")
 AppId={{2024AABB-CCDD-EEFF-0123-456789ABCDEE}}
-AppName=蕉内工具箱
+AppName=如意助手
 AppVersion=1.0.4
-AppPublisher=蕉内
+AppPublisher=如意助手
 AppPublisherURL=
 AppSupportURL=
 AppUpdatesURL=
 ; 应用程序的默认安装目录
-DefaultDirName={commonpf}\JNTools
-DefaultGroupName=蕉内工具箱
+DefaultDirName={commonpf}\如意助手
+DefaultGroupName=如意助手
 ; 允许用户选择安装目录
 AllowNoIcons=yes
 ; 压缩方式
@@ -22,7 +22,7 @@ Compression=lzma2/ultra
 SolidCompression=yes
 ; 输出目录和文件名
 OutputDir=.
-OutputBaseFilename=JNTools_Setup_v1.0.0
+OutputBaseFilename=如意助手_Setup_v1.0.4
 ; 需要管理员权限（用于安装到 Program Files）
 PrivilegesRequired=admin
 ; 安装程序图标（可选，如果有的话）
@@ -33,8 +33,8 @@ LicenseFile=
 InfoBeforeFile=
 InfoAfterFile=
 ; 卸载时删除用户数据（可选）
-UninstallDisplayIcon={app}\JNTools.exe
-UninstallDisplayName=蕉内工具箱
+UninstallDisplayIcon={app}\如意助手.exe
+UninstallDisplayName=如意助手
 
 [Languages]
 ; 方案1：使用中文界面（需要下载中文语言包）
@@ -53,25 +53,25 @@ Name: "quicklaunchicon"; Description: "创建快速启动栏快捷方式"; Group
 
 [Files]
 ; 主程序文件
-Source: "dist\JNTools\JNTools.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\如意助手\如意助手.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; 依赖文件目录（_internal 包含所有 Python 依赖）
-Source: "dist\JNTools\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\如意助手\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; 浏览器驱动目录
-Source: "dist\JNTools\playwright_drivers\*"; DestDir: "{app}\playwright_drivers"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\如意助手\playwright_drivers\*"; DestDir: "{app}\playwright_drivers"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; 注意：logs 目录不需要打包，会在运行时自动创建
 
 [Icons]
 ; 开始菜单快捷方式
-Name: "{group}\蕉内工具箱"; Filename: "{app}\JNTools.exe"; WorkingDir: "{app}"
-Name: "{group}\卸载蕉内工具箱"; Filename: "{uninstallexe}"
+Name: "{group}\如意助手"; Filename: "{app}\如意助手.exe"; WorkingDir: "{app}"
+Name: "{group}\卸载如意助手"; Filename: "{uninstallexe}"
 ; 桌面快捷方式（可选，由用户选择）
-Name: "{commondesktop}\蕉内工具箱"; Filename: "{app}\JNTools.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{commondesktop}\如意助手"; Filename: "{app}\如意助手.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 ; 快速启动栏快捷方式（可选，由用户选择）
-Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\蕉内工具箱"; Filename: "{app}\JNTools.exe"; WorkingDir: "{app}"; Tasks: quicklaunchicon
+Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\如意助手"; Filename: "{app}\如意助手.exe"; WorkingDir: "{app}"; Tasks: quicklaunchicon
 
 [Run]
 ; 安装完成后运行程序（可选）
-; Filename: "{app}\JNTools.exe"; Description: "启动蕉内工具箱"; Flags: nowait postinstall skipifsilent
+; Filename: "{app}\如意助手.exe"; Description: "启动如意助手"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; 卸载时删除日志目录（可选）

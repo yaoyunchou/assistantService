@@ -148,6 +148,31 @@ def feishu_test_custom_message():
         return jsonify({'success': False, 'error': f'服务器内部错误: {str(e)}'}), 500
 
 
+@bp.route('/compare_orders', methods=['POST'])
+@swag_from({
+    'tags': ['飞书'],
+    'summary': '飞书两表按快递单号对比并更新关联',
+    'description': '用表B的快递单号匹配表A，匹配到的表A记录：是否关联改为「关联正常」，关联订单号填为表B的订单号。表A=tblpx3szhgwxAxDa，表B=tblpV1RrhyUAzfSy。',
+    'responses': {200: {'description': '返回 success/updated_count/message 等'}}
+})
+def feishu_compare_orders():
+    """按快递单号对比两个飞书表，更新表A的是否关联与关联订单号。"""
+    try:
+        from api.service.feishu_compare import run_feishu_order_compare
+        result = run_feishu_order_compare()
+        status = 200 if result.get('success') else 500
+        return jsonify(result), status
+    except Exception as e:
+        routes_logger.error(f"飞书订单对比异常: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'updated_count': 0,
+            'matched_express_nos': [],
+            'error': str(e)
+        }), 500
+
+
 @bp.route('/test/card-message', methods=['POST'])
 @swag_from({
     'tags': ['飞书'],

@@ -206,7 +206,22 @@ def init_tools(browser_pool: Optional[BrowserPool] = None) -> ToolManager:
         print(f"[App] 注册途强工具失败: {e}")
         import traceback
         traceback.print_exc()
-    
+
+    # 1688 订单提取工具
+    try:
+        from tools.order_1688_tool import Order1688Tool
+        order_1688_tool = Order1688Tool()
+        tool_manager.register_tool(order_1688_tool)
+        print(f"[App] 已注册工具: {order_1688_tool.display_name}")
+        if order_1688_tool.initialize(browser_pool=browser_pool):
+            print(f"[App] 工具 order_1688 初始化成功")
+        else:
+            print(f"[App] 工具 order_1688 初始化失败")
+    except Exception as e:
+        print(f"[App] 注册1688订单提取工具失败: {e}")
+        import traceback
+        traceback.print_exc()
+
     # 只初始化启动时需要初始化的工具
     tools_to_init = []
     

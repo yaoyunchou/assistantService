@@ -8,15 +8,15 @@ from pathlib import Path
 from typing import Optional
 
 
-def get_user_data_dir(app_name: str = 'JNTools') -> Path:
+def get_user_data_dir(app_name: str = '如意助手') -> Path:
     """
     获取用户数据目录
-    
-    Windows: %LOCALAPPDATA%\JNTools
-    Linux/Mac: ~/.local/share/JNTools 或 ~/JNTools
-    
+
+    Windows: %LOCALAPPDATA%\如意助手
+    Linux/Mac: ~/.local/share/如意助手 或 ~/如意助手
+
     Args:
-        app_name: 应用名称，默认为 'JNTools'
+        app_name: 应用名称，默认为 '如意助手'
         
     Returns:
         用户数据目录路径
@@ -39,7 +39,7 @@ def get_user_data_dir(app_name: str = 'JNTools') -> Path:
     return user_dir
 
 
-def get_browser_data_dir(app_name: str = 'JNTools') -> Path:
+def get_browser_data_dir(app_name: str = '如意助手') -> Path:
     """
     获取浏览器用户数据目录（固定持久化缓存，所有运行共用）。
 
@@ -48,11 +48,11 @@ def get_browser_data_dir(app_name: str = 'JNTools') -> Path:
     - 不随项目路径或运行目录变化，路径唯一；
     - 程序不会自动清理，需要清除时由您手动删除该目录。
 
-    Windows: %LOCALAPPDATA%\\JNTools\\browser_data
-    Linux/Mac: ~/.local/share/JNTools/browser_data 或 ~/JNTools/browser_data
+    Windows: %LOCALAPPDATA%\\如意助手\\browser_data
+    Linux/Mac: ~/.local/share/如意助手/browser_data 或 ~/如意助手/browser_data
 
     Args:
-        app_name: 应用名称，默认为 'JNTools'
+        app_name: 应用名称，默认为 '如意助手'
 
     Returns:
         浏览器数据目录路径
@@ -62,7 +62,7 @@ def get_browser_data_dir(app_name: str = 'JNTools') -> Path:
     return browser_dir
 
 
-def get_safe_data_path(relative_path: str, app_name: str = 'JNTools') -> Path:
+def get_safe_data_path(relative_path: str, app_name: str = '如意助手') -> Path:
     """
     获取安全的数据文件路径
     

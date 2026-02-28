@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+
+{% block title %}{{ tool.display_name }} - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    padding: 24px;
+    margin-bottom: 24px;
+}
+.card-title { font-size: 18px; font-weight: 600; color: #2c3e50; margin-bottom: 16px; }
+.card-desc { color: #7f8c8d; line-height: 1.6; margin-bottom: 20px; }
+.action-buttons { display: flex; gap: 12px; flex-wrap: wrap; }
+.btn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 6px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.btn-primary { background: #3498db; color: white; }
+.btn-primary:hover { background: #2980b9; }
+.btn-secondary { background: #95a5a6; color: white; }
+.btn-secondary:hover { background: #7f8c8d; }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.result-area { margin-top: 20px; }
+.result-count { font-weight: 600; color: #2c3e50; margin-bottom: 12px; }
+.result-msg { padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; }
+.result-msg.success { background: #d4edda; color: #155724; }
+.result-msg.error { background: #f8d7da; color: #721c24; }
+.result-msg.info { background: #d1ecf1; color: #0c5460; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th, .data-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; }
+.data-table th { background: #f8f9fa; font-weight: 600; color: #495057; }
+.data-table tr:hover { background: #f8f9fa; }
+.data-table .cell-orderId { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.data-table .cell-addr { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.loading { display: inline-block; margin-left: 8px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2 class="card-title">{{ tool.display_name }}</h2>
+    <p class="card-desc">{{ tool.description }}。请确保已登录 1688，提取时会打开待收货列表并逐个进入详情页获取收货人、手机、地址等。</p>
+    <div class="action-buttons">
+        <button type="button" class="btn btn-primary" id="btnExtract">提取并同步到飞书</button>
+        <button type="button" class="btn btn-secondary" id="btnCompare" title="按快递单号对比两表，匹配到的记录：是否关联改为「关联正常」，关联订单号填为另一表的订单号">对比并更新关联</button>
+        <button type="button" class="btn btn-secondary" id="btnDownload" disabled>下载 JSON</button>
+    </div>
+    <div class="result-area" id="resultArea"></div>
+</div>
+
+<div class="card" id="tableCard" style="display: none;">
+    <h2 class="card-title">订单列表</h2>
+    <div class="table-wrap" style="overflow-x: auto;">
+        <table class="data-table" id="dataTable">
+            <thead><tr id="tableHead"></tr></thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+(function() {
+    var list = [];
+    var resultArea = document.getElementById('resultArea');
+    var tableCard = document.getElementById('tableCard');
+    var tableHead = document.getElementById('tableHead');
+    var tableBody = document.getElementById('tableBody');
+    var btnExtract = document.getElementById('btnExtract');
+    var btnCompare = document.getElementById('btnCompare');
+    var btnDownload = document.getElementById('btnDownload');
+
+    function showMsg(text, type) {
+        resultArea.innerHTML = '<div class="result-msg ' + (type || 'info') + '">' + text + '</div>';
+    }
+
+    function renderTable() {
+        if (!list.length) return;
+        var cols = ['orderId','orderTime','orderStatus','logisticsNo','totalPrice','productName','receiverName','receiverPhone','receiverAddress'];
+        tableHead.innerHTML = cols.map(function(c) { return '<th>' + c + '</th>'; }).join('');
+        tableBody.innerHTML = list.map(function(row) {
+            return '<tr>' + cols.map(function(c) {
+                var v = row[c];
+                if (v === undefined || v === null) v = '';
+                var cl = (c === 'orderId' ? ' cell-orderId' : (c === 'receiverAddress' ? ' cell-addr' : ''));
+                return '<td class="' + cl + '">' + (typeof v === 'string' ? v.replace(/</g,'&lt;') : v) + '</td>';
+            }).join('') + '</tr>';
+        }).join('');
+        tableCard.style.display = 'block';
+    }
+
+    btnExtract.addEventListener('click', function() {
+        btnExtract.disabled = true;
+        resultArea.innerHTML = '<div class="result-msg info">正在打开 1688 并提取订单，请勿关闭浏览器窗口…<span class="loading">⏳</span></div>';
+        fetch('/api/order_1688/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.success) {
+                    btnExtract.disabled = false;
+                    showMsg('提取失败：' + (data.error || '未知错误'), 'error');
+                    return;
+                }
+                list = data.list || [];
+                btnDownload.disabled = list.length === 0;
+                renderTable();
+                if (list.length === 0) {
+                    btnExtract.disabled = false;
+                    showMsg('提取完成，共 0 条订单。', 'success');
+                    return;
+                }
+                resultArea.innerHTML = '<div class="result-msg info">提取完成共 ' + list.length + ' 条，正在同步到飞书…<span class="loading">⏳</span></div>';
+                return fetch('/api/order_1688/sync_feishu', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ list: list })
+                });
+            })
+            .then(function(resp) {
+                if (!resp) return;
+                return resp.json();
+            })
+            .then(function(data) {
+                btnExtract.disabled = false;
+                if (!data) return;
+                if (data.success) {
+                    showMsg('提取完成共 ' + list.length + ' 条；飞书同步：' + (data.message || '') + '（创建 ' + (data.create_count || 0) + '，更新 ' + (data.update_count || 0) + '，失败 ' + (data.fail_count || 0) + '）', 'success');
+                } else {
+                    showMsg('提取完成共 ' + list.length + ' 条；飞书同步失败：' + (data.error || data.message || '未知错误'), 'error');
+                }
+            })
+            .catch(function(e) {
+                btnExtract.disabled = false;
+                showMsg('请求失败：' + e.message, 'error');
+            });
+    });
+
+    btnCompare.addEventListener('click', function() {
+        btnCompare.disabled = true;
+        showMsg('正在按快递单号对比两表并更新关联…<span class="loading">⏳</span>', 'info');
+        fetch('/api/feishu/compare_orders', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                btnCompare.disabled = false;
+                if (data.success) {
+                    showMsg((data.message || '') + (data.updated_count > 0 ? '；匹配快递单号 ' + data.updated_count + ' 条' : ''), 'success');
+                } else {
+                    showMsg('对比失败：' + (data.error || data.message || '未知错误'), 'error');
+                }
+            })
+            .catch(function(e) {
+                btnCompare.disabled = false;
+                showMsg('请求失败：' + e.message, 'error');
+            });
+    });
+
+    btnDownload.addEventListener('click', function() {
+        if (!list.length) return;
+        var blob = new Blob([JSON.stringify(list, null, 2)], { type: 'application/json' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = '1688_order_list.json';
+        a.click();
+        URL.revokeObjectURL(a.href);
+    });
+})();
+</script>
+{% endblock %}

@@ -33,7 +33,7 @@ class DailyRotatingFileHandler(TimedRotatingFileHandler):
             log_dir.mkdir(parents=True, exist_ok=True)
         except PermissionError:
             # 如果权限不足，使用用户目录
-            user_log_dir = Path(os.getenv('LOCALAPPDATA', os.path.expanduser('~'))) / 'JNTools' / 'logs'
+            user_log_dir = Path(os.getenv('LOCALAPPDATA', os.path.expanduser('~'))) / '如意助手' / 'logs'
             user_log_dir.mkdir(parents=True, exist_ok=True)
             filename = str(user_log_dir / Path(filename).name)
             log_dir = user_log_dir

@@ -8,6 +8,9 @@ import sys
 import shutil
 from pathlib import Path
 
+# 打包后的应用名称（exe 文件名与 dist 下文件夹名）
+APP_NAME = '如意助手'
+
 # 项目根目录
 project_root = Path(SPECPATH)
 
@@ -88,7 +91,7 @@ def clean_dist_folder():
         print("="*60)
         
         # 特别处理 logs 文件夹（可能被日志文件占用）
-        logs_dir = dist_dir / 'JNTools' / 'logs'
+        logs_dir = dist_dir / APP_NAME / 'logs'
         if logs_dir.exists():
             print(f"正在强制删除 logs 文件夹: {logs_dir}")
             if force_remove(logs_dir):
@@ -120,6 +123,8 @@ a = Analysis(
     pathex=[str(src_dir)],
     binaries=[],
     datas=[
+        # config 包通过路径动态加载同级 config.py，需显式打入包（否则打包后找不到）
+        (str(src_dir / 'config.py'), '.'),
         # Web模板文件
         (str(src_dir / 'web' / 'templates'), 'web/templates'),
         # 静态资源文件
@@ -179,7 +184,7 @@ exe = EXE(
     pyz,
     a.scripts,
     exclude_binaries=True,
-    name='JNTools',
+    name=APP_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -200,7 +205,7 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='JNTools',
+    name=APP_NAME,
 )
 
 # 打包后处理：自动复制浏览器驱动
@@ -211,7 +216,7 @@ def copy_playwright_drivers():
     print("="*60)
     
     # 打包输出目录
-    dist_dir = project_root / 'dist' / 'JNTools'
+    dist_dir = project_root / 'dist' / APP_NAME
     playwright_drivers_dir = dist_dir / 'playwright_drivers'
     
     # 查找浏览器驱动源位置
@@ -277,4 +282,4 @@ def copy_playwright_drivers():
 
 # 执行后处理
 if not copy_playwright_drivers():
-        print("警告: 浏览器驱动未复制，请手动复制到 dist/JNTools/playwright_drivers/ 目录")
+        print(f"警告: 浏览器驱动未复制，请手动复制到 dist/{APP_NAME}/playwright_drivers/ 目录")

@@ -8,6 +8,34 @@ from utils.logger import get_logger
 
 logger = get_logger('PinduoduoFeishuTable')
 
+# 更新时若表格中该字段的 * 多于新数据（视为已加密），则不再覆盖
+SENSITIVE_FIELD_KEYS = ('收件人', '收件人地址', '收件人手机号')
+
+
+def _count_asterisks(s: Any) -> int:
+    if s is None:
+        return 0
+    return str(s).count('*')
+
+
+def _merge_sensitive_fields_for_update(
+    new_fields: Dict[str, Any],
+    existing_fields: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    合并待更新字段：收件人、收件人地址、收件人手机号若在表格中*更多（已加密）则保留不更新。
+    """
+    out = dict(new_fields)
+    for key in SENSITIVE_FIELD_KEYS:
+        if key not in out:
+            continue
+        existing_val = existing_fields.get(key)
+        new_val = out.get(key)
+        if _count_asterisks(existing_val) > _count_asterisks(new_val):
+            # 表格里已加密，不覆盖
+            del out[key]
+    return out
+
 
 def sync_orders_to_feishu(orders: List[Dict[str, Any]], 
                           app_token: str = 'ORSHbpajoaANQ4sFg25c917jnTc',
@@ -59,18 +87,18 @@ def sync_orders_to_feishu(orders: List[Dict[str, Any]],
         
         logger.info(f"开始同步 {total_count} 条订单数据到飞书表格")
         
-        # 1. 先获取所有现有记录，建立订单号到 record_id 的映射
+        # 1. 先获取所有现有记录，建立订单号到 record_id 及现有字段的映射
         logger.info("正在获取现有订单记录，建立订单号映射...")
         existing_records = feishu_table_client.get_all_records()
-        order_sn_to_record_id = {}
+        order_sn_to_record = {}  # order_sn -> { record_id, fields }
         for record in existing_records:
             record_id = record.get('record_id')
             fields = record.get('fields', {})
             order_sn = fields.get('订单号')
             if order_sn and record_id:
-                order_sn_to_record_id[order_sn] = record_id
+                order_sn_to_record[order_sn] = {'record_id': record_id, 'fields': fields}
         
-        logger.info(f"已获取 {len(order_sn_to_record_id)} 条现有订单记录")
+        logger.info(f"已获取 {len(order_sn_to_record)} 条现有订单记录")
         
         # 2. 分离需要创建和需要更新的订单
         orders_to_create = []
@@ -86,12 +114,16 @@ def sync_orders_to_feishu(orders: List[Dict[str, Any]],
             fields = _convert_order_to_fields(order)
             order_sn_str = str(order_sn)
             
-            if order_sn_str in order_sn_to_record_id:
-                # 订单已存在，需要更新
-                record_id = order_sn_to_record_id[order_sn_str]
+            if order_sn_str in order_sn_to_record:
+                # 订单已存在，需要更新（对收件人/地址/手机号：若已有数据*更多表示已加密则不再覆盖）
+                rec = order_sn_to_record[order_sn_str]
+                merged_fields = _merge_sensitive_fields_for_update(
+                    new_fields=fields,
+                    existing_fields=rec['fields']
+                )
                 orders_to_update.append({
-                    'record_id': record_id,
-                    'fields': fields
+                    'record_id': rec['record_id'],
+                    'fields': merged_fields
                 })
             else:
                 # 订单不存在，需要创建
@@ -222,6 +254,7 @@ def _convert_order_to_fields(order: Dict[str, Any]) -> Dict[str, Any]:
     - 快递单号 (Text)
     - 快递公司 (Text, 取 waybillDTOList.shippingName 或者为‘’)
     - 收件人 (Text)
+    - 收件人手机号 (Text)
     - 收件人地址 (Text)
     - 昵称 (Text)
     - 商品总价(元) (Number) goods_amount
@@ -303,6 +336,14 @@ def _convert_order_to_fields(order: Dict[str, Any]) -> Dict[str, Any]:
     # 13. 收件人 (Text)
     if 'receive_name' in order:
         fields['收件人'] = str(order['receive_name'])
+    
+    # 13.1 收件人手机号 (Text)
+    phone = order.get('receive_phone') or order.get('receiver_phone')
+    if not phone and isinstance(order.get('consumerAddress'), dict):
+        addr = order['consumerAddress']
+        phone = addr.get('mobile') or addr.get('phone') or addr.get('receive_phone')
+    if phone is not None and phone != '':
+        fields['收件人手机号'] = str(phone)
     
     # 14. 收件人地址 (Text)
     # 组合省市区和详细地址

@@ -15,11 +15,11 @@ def find_chrome_executable():
     
     if getattr(sys, 'frozen', False):
         # 如果是打包后的exe，从exe同目录查找
-        # 注意：PyInstaller onedir 模式下，exe 在 dist/JNTools/ 目录
+        # 注意：PyInstaller onedir 模式下，exe 在 dist/如意助手/ 目录
         exe_dir = Path(sys.executable).parent
         
-        # 如果是 onedir 模式，exe 在 dist/JNTools/，playwright_drivers 也在 dist/JNTools/playwright_drivers/
-        # 我们需要在 dist/JNTools/ 目录下查找 playwright_drivers
+        # 如果是 onedir 模式，exe 在 dist/如意助手/，playwright_drivers 也在 dist/如意助手/playwright_drivers/
+        # 我们需要在 exe 同目录下查找 playwright_drivers
         print(f"[BrowserPath] 打包环境，exe目录: {exe_dir}")
     else:
         # 开发环境，从项目根目录查找（utils -> src -> 项目根目录）

@@ -98,6 +98,11 @@ class Config:
     # 飞书配置
     FEISHU_ENABLED = True  # 是否启用飞书通知
 
+    # 定时任务（APScheduler）
+    SCHEDULER_ENABLED = True  # 是否启用定时任务模块
+    # 1688 订单补详情：cron 表达式，默认每小时整点执行一次
+    SCHEDULER_ORDER_1688_FILL_CRON = os.getenv("SCHEDULER_ORDER_1688_FILL_CRON", "0 * * * *")  # 分 时 日 月 周
+
     # WebSocket（Socket.IO）客户端配置（对接 docs/websocket-api.md，默认开启，Flask 启动时自动连接）
     WS_CLIENT_ENABLED = True  # 是否启用
     WS_CLIENT_HOST = os.getenv('WS_CLIENT_HOST', 'https://nestapi.xfysj.top')  # 服务端地址，测试环境 localhost

@@ -444,6 +444,14 @@ def run_flask_app():
         if browser_pool:
             flask_logger.info(f"注册路由后，browser_pool对象ID: {id(browser_pool)}")
             flask_logger.info(f"注册路由后，browser_pool._initialized: {getattr(browser_pool, '_initialized', 'N/A')}")
+
+        # 定时任务：若配置启用则启动调度器
+        try:
+            from scheduler import start_scheduler
+            if start_scheduler():
+                flask_logger.info("定时任务调度器已启动")
+        except Exception as e:
+            flask_logger.warning(f"启动定时任务调度器失败: {e}")
         
         # WebSocket 客户端：若配置启用则默认连接
         try:
@@ -514,6 +522,13 @@ def cleanup():
     if tool_manager:
         tool_manager.cleanup_all()
     
+    # 关闭定时任务调度器
+    try:
+        from scheduler import shutdown_scheduler
+        shutdown_scheduler()
+    except Exception as e:
+        logger.debug(f"关闭定时任务调度器时: {e}")
+
     # 关闭浏览器池
     if browser_pool:
         browser_pool.close()

@@ -12,7 +12,9 @@ from .browser_routes import bp as browser_bp
 from .pinduoduo_routes import bp as pinduoduo_bp
 from .tu_routes import bp as tu_bp
 from .feishu_routes import bp as feishu_bp
+from .order_1688_routes import bp as order_1688_bp
 from .websocket_routes import bp as websocket_bp
+from .scheduler_routes import bp as scheduler_bp
 
 from utils.logger import get_logger
 
@@ -33,7 +35,9 @@ SWAGGER_TEMPLATE = {
         {'name': '拼多多', 'description': '拼多多助手'},
         {'name': '途强', 'description': '途强物联网平台助手'},
         {'name': '飞书', 'description': '飞书消息与事件'},
+        {'name': '1688订单', 'description': '1688 订单提取与飞书同步'},
         {'name': 'WebSocket', 'description': 'Socket.IO 客户端连接与配置'},
+        {'name': '定时任务', 'description': '定时任务列表与手动触发'},
     ],
 }
 SWAGGER_CONFIG = {
@@ -78,7 +82,9 @@ def register_routes(app, browser_pool):
     app.register_blueprint(pinduoduo_bp)
     app.register_blueprint(tu_bp)
     app.register_blueprint(feishu_bp)
+    app.register_blueprint(order_1688_bp)
     app.register_blueprint(websocket_bp)
+    app.register_blueprint(scheduler_bp)
 
     # 全局错误处理（注册在 app 上）
     @app.errorhandler(404)

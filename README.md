@@ -8,6 +8,7 @@
 - 🐍 **Python脚本执行** - 支持执行Python脚本，支持参数传递和结果返回
 - 🛒 **拼多多助手** - 拼多多商家后台自动化工具，支持登录管理和飞书通知
 - 📡 **途强助手** - 途强智能设备管理平台（iot.tqiot.com）自动化，支持自动登录与最近 30 天记录获取
+- 📦 **1688 订单提取** - 从 1688 待收货订单列表提取订单与收货信息，支持同步到飞书多维表格（Web 页与命令行脚本）
 - ⚙️ **模块化配置** - 支持通过配置控制功能模块的启用/禁用和启动时机
 - 🔧 **可扩展架构** - 工具管理器设计，方便添加新工具
 - 📊 **资源监控** - 实时监控内存和CPU使用情况
@@ -305,7 +306,7 @@ from utils.path_helper import get_safe_data_path, get_user_data_dir
 file_path = get_safe_data_path('data/my_data.json')
 
 # 方式2: 直接获取用户数据目录
-user_dir = get_user_data_dir('JNTools')
+user_dir = get_user_data_dir('如意助手')
 file_path = user_dir / 'data' / 'my_data.json'
 ```
 
@@ -315,9 +316,9 @@ file_path = user_dir / 'data' / 'my_data.json'
 
 1. **开发环境且有权限**：使用项目根目录（便于开发调试）
 2. **生产环境或无权限**：使用用户数据目录
-   - Windows: `%LOCALAPPDATA%\JNTools\`（如 `C:\Users\用户名\AppData\Local\JNTools\`）
-   - Linux: `~/.local/share/JNTools/`
-   - Mac: `~/.local/share/JNTools/`
+   - Windows: `%LOCALAPPDATA%\如意助手\`（如 `C:\Users\用户名\AppData\Local\如意助手\`）
+   - Linux: `~/.local/share/如意助手/`
+   - Mac: `~/.local/share/如意助手/`
 
 #### 应用场景
 

@@ -1,5 +1,40 @@
 # 变更日志
 
+## 2026-02-24 - 1688 订单缓存目录迁入 cache
+
+### 变更说明
+
+将 1688 订单相关缓存从项目根目录的 `order_1688/catch` 迁入统一缓存目录 `cache/order_1688`，并去掉中间的 `catch` 子目录，文件直接存放在 `cache/order_1688` 下。
+
+**目录与文件**：
+- **迁移**：原 `order_1688/catch/orders_*.json`、`detail_quota.json` 等 → `cache/order_1688/` 下同名文件；已将 `orders_2026-02-24.json` 迁移至 `cache/order_1688/`。
+- **删除**：已删除原 `order_1688/` 目录（含 `catch` 子目录）。
+
+**代码**（`src/spider/order_1688/order_extract.py`）：
+- `get_catch_dir()` 重命名为 `get_order_1688_cache_dir()`，路径由 `order_1688/catch` 改为 `cache/order_1688`。
+- `cleanup_old_catch_files()` 重命名为 `cleanup_old_cache_files()`，清理逻辑改为针对 `cache/order_1688` 下非当日 JSON 文件。
+- 当日订单缓存路径仍为 `orders_YYYY-MM-DD.json`，详情配额文件仍为 `detail_quota.json`，均位于 `cache/order_1688` 下。
+
+---
+
+## 2026-02-24 - 定时任务模块（APScheduler）
+
+### 变更说明
+
+新增统一定时任务模块，用于管理如「1688 订单补详情」等按周期执行的任务，支持配置开关与 cron 表达式。
+
+**配置**（`config.Config`）：
+- `SCHEDULER_ENABLED`：是否启用定时任务模块（默认 True）。
+- `SCHEDULER_ORDER_1688_FILL_CRON`：1688 补详情任务的 cron 表达式，五段「分 时 日 月 周」（默认 `0 * * * *`，即每小时整点）。可通过环境变量覆盖。
+
+**新增**：
+- **`src/scheduler/`**：定时任务包。`manager.py` 基于 APScheduler 的 BackgroundScheduler，注册任务 `order_1688_fill_detail`，提供 `start_scheduler()`、`shutdown_scheduler()`、`list_jobs()`。
+- **`src/api/routes/scheduler_routes.py`**：`GET /api/scheduler/jobs` 列出任务，`POST /api/scheduler/trigger/<job_id>` 手动触发。
+- **`requirements.txt`**：新增 `APScheduler>=3.10.0`。
+- **`main.py`**：Flask 启动后调用 `start_scheduler()`，`cleanup()` 时调用 `shutdown_scheduler()`。
+
+---
+
 ## 2026-02-09 - 浏览器代理架构重写（彻底解决所有线程问题）
 
 ### 问题

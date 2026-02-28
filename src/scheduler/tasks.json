@@ -1,0 +1,15 @@
+{
+  "tasks": [
+    {
+      "id": "order_1688_fill_detail",
+      "name": "1688 订单补详情",
+      "type": "order_1688_fill_detail",
+      "data": {
+        "method": "get",
+        "url": "http://localhost:8099/api/order_1688/fill_detail",
+        "data": {}
+      },
+      "cron": "0 * * * *"
+    }
+  ]
+}

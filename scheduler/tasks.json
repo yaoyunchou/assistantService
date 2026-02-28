@@ -1,0 +1,11 @@
+{
+  "tasks": [
+    {
+      "id": "order_1688_fill_detail",
+      "name": "1688 订单补详情",
+      "type": "order_1688_fill_detail",
+      "data": {},
+      "cron": "0 * * * *"
+    }
+  ]
+}
