@@ -221,12 +221,13 @@ class FeishuTableClient:
         logger.info(f"正在更新记录: {record_id}")
         result = self._make_request("PUT", url, data=data)
         
-        if result:
+        if result is not None:
             logger.info(f"记录更新成功: {record_id}")
-            return result.get('record')
-        else:
-            logger.error(f"记录更新失败: {record_id}")
-            return None
+            rec = result.get('record')
+            # 飞书偶发 code=0 但 data 无 record 或为空对象，仍视为更新成功
+            return rec if rec is not None else {}
+        logger.error(f"记录更新失败: {record_id}")
+        return None
     
     def batch_update_records(self, records: List[Dict[str, Any]], app_token: Optional[str] = None, table_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """
@@ -373,6 +374,7 @@ class FeishuTableClient:
         page_token: Optional[str] = None,
         filter: Optional[str] = None,
         sort: Optional[List[Dict[str, Any]]] = None,
+        view_id: Optional[str] = None,
         app_token: Optional[str] = None,
         table_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
@@ -384,6 +386,7 @@ class FeishuTableClient:
             page_token: 分页标记，用于获取下一页数据
             filter: 筛选条件（可选）
             sort: 排序条件（可选），格式：[{"field_name": "字段名", "desc": True/False}]
+            view_id: 视图 ID（与网页 URL 中 view= 一致）；不传时接口行为可能与当前表格视图不一致
             app_token: 多维表格的唯一标识符，如果不提供则使用创建实例时传入的值
             table_id: 数据表的唯一标识符，如果不提供则使用创建实例时传入的值
             
@@ -408,6 +411,9 @@ class FeishuTableClient:
         
         if page_token:
             params["page_token"] = page_token
+
+        if view_id:
+            params["view_id"] = view_id
         
         if filter:
             params["filter"] = filter
@@ -431,6 +437,7 @@ class FeishuTableClient:
         self,
         filter: Optional[str] = None,
         sort: Optional[List[Dict[str, Any]]] = None,
+        view_id: Optional[str] = None,
         app_token: Optional[str] = None,
         table_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
@@ -464,6 +471,7 @@ class FeishuTableClient:
                 page_token=page_token,
                 filter=filter,
                 sort=sort,
+                view_id=view_id,
                 app_token=app_token,
                 table_id=table_id
             )

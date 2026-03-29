@@ -173,7 +173,8 @@ def pinduoduo_sync_to_feishu():
                 'success_count': 0, 'fail_count': 0, 'create_count': 0, 'update_count': 0, 'total_count': 0
             }), 200
         body = request.get_json(silent=True) or {}
-        app_token = body.get('app_token') or 'ORSHbpajoaANQ4sFg25c917jnTc'
+        from config import Config
+        app_token = body.get('app_token') or Config.PINDUODUO_FEISHU_APP_TOKEN
         table_id = body.get('table_id') or 'tblpV1RrhyUAzfSy'
         result = sync_orders_to_feishu(orders, app_token=app_token, table_id=table_id)
         return jsonify({
@@ -187,4 +188,92 @@ def pinduoduo_sync_to_feishu():
         }), 200
     except Exception as e:
         routes_logger.error(f"同步订单到飞书异常: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/feishu/cleanup-empty-order-sn', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '删除飞书表中无「订单号」的记录',
+    'parameters': [{
+        'in': 'body', 'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'app_token': {'type': 'string'},
+                'table_id': {'type': 'string'},
+            }
+        }
+    }],
+    'responses': {200: {'description': '删除结果'}}
+})
+def pinduoduo_feishu_cleanup_empty_order_sn():
+    """调用飞书接口批量删除「订单号」为空的行。"""
+    try:
+        from config import Config
+        from spider.pinduoduo.feishutable import delete_feishu_rows_without_order_sn
+        body = request.get_json(silent=True) or {}
+        app_token = body.get('app_token') or Config.PINDUODUO_FEISHU_APP_TOKEN
+        table_id = body.get('table_id') or Config.PINDUODUO_FEISHU_TABLE_ID
+        result = delete_feishu_rows_without_order_sn(app_token, table_id)
+        return jsonify(result), 200
+    except Exception as e:
+        routes_logger.error(f"清理飞书无订单号记录异常: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e), 'deleted_count': 0}), 500
+
+
+@bp.route('/sync-order-addresses', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '检查飞书前几条缺手机号则打开订单列表并执行地址补全脚本',
+    'parameters': [{
+        'in': 'body', 'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'app_token': {'type': 'string'},
+                'table_id': {'type': 'string'},
+                'view_id': {'type': 'string', 'description': '与多维表格 URL 中 view= 一致'},
+                'top_n': {'type': 'integer', 'default': 3},
+            }
+        }
+    }],
+    'responses': {200: {'description': '执行结果'}, 500: {'description': '浏览器池异常'}}
+})
+def pinduoduo_sync_order_addresses():
+    """在飞书表中翻页查找最多 N 条「有订单号且无手机号」的记录，再进入订单列表补全地址。"""
+    try:
+        from config import Config
+        from spider.pinduoduo.order_address_sync import sync_order_addresses_from_feishu_top_records
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'success': False, 'error': '浏览器池未初始化'}), 500
+        body = request.get_json(silent=True) or {}
+        app_token = body.get('app_token') or Config.PINDUODUO_FEISHU_APP_TOKEN
+        table_id = body.get('table_id') or Config.PINDUODUO_FEISHU_TABLE_ID
+        top_n = body.get('top_n')
+        if top_n is None:
+            top_n = 3
+        try:
+            top_n = int(top_n)
+        except (TypeError, ValueError):
+            top_n = 3
+        top_n = max(1, min(top_n, 50))
+        view_id = body.get('view_id')
+        if view_id is not None and view_id == '':
+            view_id = None
+
+        result = pool.execute(
+            lambda page: sync_order_addresses_from_feishu_top_records(
+                page,
+                app_token=app_token,
+                table_id=table_id,
+                top_n=top_n,
+                view_id=view_id,
+            ),
+            timeout=300,
+        )
+        return jsonify(result if isinstance(result, dict) else {'success': False, 'message': str(result)}), 200
+    except Exception as e:
+        routes_logger.error(f"同步 PDD 订单地址异常: {e}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500

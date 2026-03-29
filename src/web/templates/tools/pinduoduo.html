@@ -343,23 +343,33 @@
     <div class="status-header">
         <h3 class="status-title">同步到飞书表格</h3>
     </div>
-    <p class="feishu-sync-desc">将最近一次「同步订单」缓存的订单数据同步到飞书多维表格（订单号、订单状态、商品名称等）。</p>
+    <p class="feishu-sync-desc">将最近一次「同步订单」缓存的订单数据同步到飞书多维表格（订单号、订单状态、商品名称等）。下方 App Token / Table ID 为空时：<strong>清理无订单号、同步 PDD 订单地址</strong>使用配置默认值（当前表 <code>tblyxGarbBwHi25M</code>）；若仅做「同步到飞书表格」且要写入另一张表，请填写例如 <code>tblpV1RrhyUAzfSy</code>。</p>
     <div class="feishu-sync-options">
         <div class="feishu-option-row">
             <label for="feishu-app-token">App Token</label>
-            <input type="text" id="feishu-app-token" placeholder="留空使用默认" class="feishu-input">
+            <input type="text" id="feishu-app-token" class="feishu-input" value="ORSHbpajoaANQ4sFg25c917jnTc" placeholder="留空由服务端默认">
         </div>
         <div class="feishu-option-row">
             <label for="feishu-table-id">Table ID</label>
-            <input type="text" id="feishu-table-id" placeholder="留空使用默认" class="feishu-input">
+            <input type="text" id="feishu-table-id" class="feishu-input" value="tblyxGarbBwHi25M" placeholder="留空由服务端默认（地址/清理）">
         </div>
     </div>
     <div class="action-buttons">
         <button id="sync-to-feishu-btn" class="btn btn-primary">同步到飞书表格</button>
+        <button id="feishu-cleanup-order-sn-btn" class="btn btn-secondary">清理无订单号记录</button>
+        <button id="sync-pdd-address-btn" class="btn btn-primary">同步 PDD 订单地址</button>
     </div>
     <div id="feishu-sync-result" class="feishu-sync-result" style="display: none;">
         <div class="feishu-sync-result-title">同步结果</div>
         <div id="feishu-sync-result-content" class="feishu-sync-result-content"></div>
+    </div>
+    <div id="feishu-cleanup-result" class="feishu-sync-result" style="display: none; margin-top: 12px;">
+        <div class="feishu-sync-result-title">清理无订单号</div>
+        <div id="feishu-cleanup-result-content" class="feishu-sync-result-content"></div>
+    </div>
+    <div id="feishu-address-result" class="feishu-sync-result" style="display: none; margin-top: 12px;">
+        <div class="feishu-sync-result-title">同步 PDD 订单地址</div>
+        <div id="feishu-address-result-content" class="feishu-sync-result-content"></div>
     </div>
 </div>
 
@@ -409,6 +419,8 @@ document.getElementById('clear-cookies-btn').addEventListener('click', clearCook
 
 // 同步到飞书表格按钮
 document.getElementById('sync-to-feishu-btn').addEventListener('click', syncToFeishu);
+document.getElementById('feishu-cleanup-order-sn-btn').addEventListener('click', feishuCleanupEmptyOrderSn);
+document.getElementById('sync-pdd-address-btn').addEventListener('click', syncPddOrderAddresses);
 
 // 刷新状态
 async function refreshStatus() {
@@ -629,6 +641,103 @@ async function clearCookies() {
     }
 }
 
+function feishuBodyFromInputs() {
+    const appToken = document.getElementById('feishu-app-token').value.trim();
+    const tableId = document.getElementById('feishu-table-id').value.trim();
+    const body = {};
+    if (appToken) body.app_token = appToken;
+    if (tableId) body.table_id = tableId;
+    return body;
+}
+
+// 清理飞书中无「订单号」的行
+async function feishuCleanupEmptyOrderSn() {
+    const btn = document.getElementById('feishu-cleanup-order-sn-btn');
+    const resultEl = document.getElementById('feishu-cleanup-result');
+    const contentEl = document.getElementById('feishu-cleanup-result-content');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading"></span> 处理中...';
+    resultEl.style.display = 'none';
+
+    try {
+        const response = await fetch('/api/pinduoduo/feishu/cleanup-empty-order-sn', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(feishuBodyFromInputs())
+        });
+        const data = await response.json();
+        resultEl.style.display = 'block';
+        if (data.success) {
+            contentEl.textContent = data.message || `已删除 ${data.deleted_count || 0} 条（共扫描 ${data.total_scanned ?? '-'} 条）`;
+            contentEl.style.color = '#155724';
+        } else {
+            contentEl.textContent = data.message || '清理失败';
+            contentEl.style.color = '#721c24';
+        }
+    } catch (error) {
+        resultEl.style.display = 'block';
+        contentEl.textContent = '请求失败: ' + error.message;
+        contentEl.style.color = '#721c24';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
+// 同步 PDD 订单地址（检查前三条飞书记录的手机号，缺则打开订单列表并执行服务端脚本）
+async function syncPddOrderAddresses() {
+    const btn = document.getElementById('sync-pdd-address-btn');
+    const resultEl = document.getElementById('feishu-address-result');
+    const contentEl = document.getElementById('feishu-address-result-content');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading"></span> 执行中...';
+    resultEl.style.display = 'none';
+
+    try {
+        const body = feishuBodyFromInputs();
+        body.top_n = 3;
+        const response = await fetch('/api/pinduoduo/sync-order-addresses', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await response.json();
+        resultEl.style.display = 'block';
+        if (data.intercepted && data.qrcode) {
+            showQRCode(data.qrcode);
+            startLoginPolling();
+            let text = data.message || '需要登录拼多多';
+            if (data.need_fill && data.need_fill.length) {
+                text += ' | 待补全单号: ' + data.need_fill.map(x => x.order_sn).join(', ');
+            }
+            contentEl.textContent = text;
+            contentEl.style.color = '#856404';
+        } else if (data.success !== false) {
+            let text = data.message || '完成';
+            if (data.checked && data.checked.length) {
+                text += ' | 检查: ' + JSON.stringify(data.checked);
+            }
+            if (data.need_fill && data.need_fill.length) {
+                text += ' | 待补全单号: ' + data.need_fill.map(x => x.order_sn).join(', ');
+            }
+            contentEl.textContent = text;
+            contentEl.style.color = '#155724';
+        } else {
+            contentEl.textContent = data.message || data.error || '失败';
+            contentEl.style.color = '#721c24';
+        }
+    } catch (error) {
+        resultEl.style.display = 'block';
+        contentEl.textContent = '请求失败: ' + error.message;
+        contentEl.style.color = '#721c24';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
 // 同步到飞书表格
 async function syncToFeishu() {
     const btn = document.getElementById('sync-to-feishu-btn');
@@ -640,12 +749,8 @@ async function syncToFeishu() {
     resultEl.style.display = 'none';
 
     try {
-        const appToken = document.getElementById('feishu-app-token').value.trim();
-        const tableId = document.getElementById('feishu-table-id').value.trim();
-        const body = {};
-        if (appToken) body.app_token = appToken;
-        if (tableId) body.table_id = tableId;
-
+        const body = feishuBodyFromInputs();
+        // 订单缓存同步默认表仍为 tblpV1RrhyUAzfSy：若当前输入为地址表且需同步缓存，请临时改为订单表 ID
         const response = await fetch('/api/pinduoduo/sync-to-feishu', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

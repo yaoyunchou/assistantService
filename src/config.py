@@ -82,8 +82,26 @@ class Config:
     # 状态文件将保存在用户数据目录，避免权限问题
     PINDUODUO_STATUS_PATH = None  # None表示使用默认的用户数据目录
     PINDUODUO_TARGET_URL = 'https://mms.pinduoduo.com/home'
+    # 商家订单列表（同步地址、前端脚本场景与浏览器一致，使用 tab=0）
+    PINDUODUO_ORDERS_LIST_URL = os.getenv(
+        'PINDUODUO_ORDERS_LIST_URL',
+        'https://mms.pinduoduo.com/orders/list?tab=0',
+    )
     # 订单导出链接
     PINDUODUO_ORDER_EXPORT_URL = 'https://mms.pinduoduo.com/orders/exportExcel?exportType=0'
+    # 拼多多飞书多维表格（订单/地址等，可通过环境变量覆盖）
+    PINDUODUO_FEISHU_APP_TOKEN = os.getenv('PINDUODUO_FEISHU_APP_TOKEN', 'ORSHbpajoaANQ4sFg25c917jnTc')
+    PINDUODUO_FEISHU_TABLE_ID = os.getenv('PINDUODUO_FEISHU_TABLE_ID', 'tblyxGarbBwHi25M')
+    # 与多维表格 URL 中 view= 一致；列出记录不传 view_id 时可能拿到 0 条（与网页当前视图不一致）
+    PINDUODUO_FEISHU_VIEW_ID = os.getenv('PINDUODUO_FEISHU_VIEW_ID', 'vewygiHiu9')
+    # 同步订单地址：只处理订单时间在最近 N 天内的记录（见 order_address_sync 时间列解析）
+    _addr_days = os.getenv('PINDUODUO_ADDRESS_SYNC_RECENT_DAYS', '2').strip() or '2'
+    try:
+        PINDUODUO_ADDRESS_SYNC_RECENT_DAYS = max(1, min(int(_addr_days), 90))
+    except ValueError:
+        PINDUODUO_ADDRESS_SYNC_RECENT_DAYS = 2
+    # 列出记录时按该字段降序（新单优先，易早停）；留空则不传 sort，避免列名不符导致接口失败
+    PINDUODUO_ADDRESS_SYNC_SORT_FIELD = (os.getenv('PINDUODUO_ADDRESS_SYNC_SORT_FIELD') or '').strip() or None
     # PINDUODUO_TARGET_URL = 'https://www.doubao.com/chat/28899721294850?open_from_ext=1'
 
     
@@ -97,6 +115,8 @@ class Config:
 
     # 飞书配置
     FEISHU_ENABLED = True  # 是否启用飞书通知
+    # 自定义机器人 Webhook：通用渠道见 FEISHU_SYNC_WEBHOOK_URL；按业务拆分见 tools.feishu.webhook.qudao_notify
+    FEISHU_SYNC_WEBHOOK_URL = (os.getenv('FEISHU_SYNC_WEBHOOK_URL') or '').strip() or None
 
     # 定时任务（APScheduler）
     SCHEDULER_ENABLED = True  # 是否启用定时任务模块

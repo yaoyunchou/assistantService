@@ -4,6 +4,11 @@
 不启动系统托盘、原生窗口等桌面应用功能
 """
 import sys
+
+from utils.win32_msvc_runtime import add_dll_search_paths_if_needed
+
+add_dll_search_paths_if_needed()
+
 import logging
 from pathlib import Path
 

@@ -1,16 +1,14 @@
 """
-飞书通知工具模块
+飞书自定义机器人 Webhook（群机器人 / 自定义机器人 Hook）
+用于无需租户 token 的卡片通知。
 """
-from .feishu_client import FeishuClient
-from .message_sender import FeishuMessageSender, get_message_sender
-from .feishu_table_client import FeishuTableClient, get_feishu_table_client
-from .webhook.notify import (
+from .notify import (
     build_sync_notification_card,
     send_webhook_raw,
     send_sync_notification,
     upload_image_get_img_key,
 )
-from .webhook.qudao_notify import (
+from .qudao_notify import (
     CHANNEL_DEFAULT,
     CHANNEL_PINDUODUO,
     get_custom_bot_keyword,
@@ -18,11 +16,6 @@ from .webhook.qudao_notify import (
 )
 
 __all__ = [
-    'FeishuClient',
-    'FeishuMessageSender',
-    'get_message_sender',
-    'FeishuTableClient',
-    'get_feishu_table_client',
     'build_sync_notification_card',
     'send_webhook_raw',
     'send_sync_notification',

@@ -1,5 +1,143 @@
 # 变更日志
 
+## 2026-03-29 - 拼多多订单地址同步：仅最近 N 天订单（默认 2 天）
+
+扫描 `need_fill` 时要求订单时间在 **`Config.PINDUODUO_ADDRESS_SYNC_RECENT_DAYS`**（默认 **2**，环境变量 **`PINDUODUO_ADDRESS_SYNC_RECENT_DAYS`**，限制 1–90）内；时间列依次尝试 **`订单时间`**、**`订单提交时间`**、**`order_time`**。`checked` 增加 **`order_in_recent_days`**。可选 **`PINDUODUO_ADDRESS_SYNC_SORT_FIELD`**（如 `订单时间`）按列降序拉取；整页「最新单」仍早于窗口则提前停止翻页；带排序若接口失败会退化为无排序。
+
+---
+
+## 2026-03-29 - 拼多多订单地址同步：top_n 表示「缺手机号条数」而非只扫前 N 行
+
+`sync_order_addresses_from_feishu_top_records` 改为按 **`list_records` 分页** 扫描当前 **view**，直到凑满 **top_n 条**「有订单号、无手机号」或表结束（最多 500 页、每页最多 500 条，防死循环）。响应增加 **`rows_scanned`**（本轮实际遍历行数）。非「只取接口前 top_n 行」。
+
+---
+
+## 2026-03-29 - pdd-order-search-receiver：座机号识别（如 021-53395199）
+
+`extractPhone` 增加国内座机 **`0+区号-号码`**（ hyphen 左右可有空格、支持全角－），并在标签中增加 **固定电话 / 座机**；仍优先匹配带「手机 / 联系电话 / 收货电话…」前缀的片段，再兜底 11 位手机与隐私号。
+
+---
+
+## 2026-03-29 - 拼多多订单地址同步：飞书列名改为「手机号」「收货信息」
+
+`order_address_sync` 写回与缺数检测统一使用 **`FEISHU_COL_PHONE`=`手机号`**、**`FEISHU_COL_RECEIVER_INFO`=`收货信息`**（与表格实际表头一致）。`FeishuTableClient.update_record` 对 **`data` 为空 `{}` 的成功响应** 不再误判为失败；调用方以 **`updated is not None`** 判定成功。
+
+---
+
+## 2026-03-29 - 飞书 Webhook 按模块拆分（qudao_notify）
+
+新增 **`src/tools/feishu/webhook/qudao_notify.py`**：`CHANNEL_PINDUODUO`、`get_webhook_url`、`get_custom_bot_keyword`；拼多多默认使用指定 Hook，可用 **`FEISHU_WEBHOOK_PINDUODUO`** 覆盖；关键词默认 **拼多多**（规避 **19024 Key Words Not Found**），可用 **`FEISHU_WEBHOOK_PINDUODUO_KEYWORD`** 覆盖，若变量存在且为空则不再注入。`notify.build_sync_notification_card` / `send_sync_notification` 增加 **`custom_bot_keyword`**。拼多多订单地址同步登录拦截改为走 **`get_webhook_url(CHANNEL_PINDUODUO)`**。
+
+---
+
+## 2026-03-29 - 拼多多订单地址同步：Webhook 登录通知修复
+
+`order_address_sync` 在检测到登录拦截发送 **`send_sync_notification`** 时改为分支内 **延迟 import**，避免运行时报 **`NameError: send_sync_notification is not defined`**。二维码参数改为 **`image_base64`**（与 `show_login_qrcode` 返回的 `data:image/png;base64,...` 一致）。仅在配置 **`FEISHU_SYNC_WEBHOOK_URL`** 时发送；失败记录 warning。
+
+---
+
+## 2026-03-29 - 飞书 Webhook 卡片：Base64 二维码 → 上传得 img_key
+
+`build_sync_notification_card` / `send_sync_notification` 新增 **`image_base64`**（支持 `data:image/png;base64,...` 或纯 base64）。内部解码后调用开放平台 **`im/v1/images`**（`upload_image_get_img_key`），将返回的 **`image_key`** 写入卡片 **`img`** 组件；需在 `.env` 配置 **`FEISHU_APP_ID` / `FEISHU_APP_SECRET`** 且应用具备上传图片相关权限。上传失败时在正文中提示检查凭据与权限。与 **`image_url`** 并存时：Base64 成功后不再在 `lark_md` 里嵌外链图。
+
+---
+
+## 2026-03-29 - 飞书 Webhook 同步通知卡片模板
+
+新增 **`src/tools/feishu/webhook/`**：`build_sync_notification_card`、`send_sync_notification`、`send_webhook_raw`；交互卡片含标题（对应系统）、`lark_md` 描述与链接、`![](url)` 配图、主按钮与底栏时间。配置 **`FEISHU_SYNC_WEBHOOK_URL`**（`.env`）。详见 [自定义机器人](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot)。
+
+---
+
+## 2026-03-29 - 拼多多订单列表 `tab=0` 与登录拦截返回二维码
+
+- **`PINDUODUO_ORDERS_LIST_URL`**（默认 `orders/list?tab=0`，可环境变量覆盖）。
+- 同步地址打开列表后若 **login**：飞书提醒 + **`show_login_qrcode(skip_initial_navigation=True)`**，API **`intercepted` + `qrcode`**；`pinduoduo.html` 同步按钮侧展示二维码并轮询登录。
+
+---
+
+## 2026-03-29 - 拼多多飞书：清理无订单号、同步 PDD 订单地址 API 与页面按钮
+
+### 功能
+
+1. **删除无「订单号」行**：`POST /api/pinduoduo/feishu/cleanup-empty-order-sn`，全表扫描后批量删除订单号为空的记录。
+2. **同步 PDD 订单地址**：`POST /api/pinduoduo/sync-order-addresses`，`list_records` 增参 **`view_id`**（与多维表格 URL `view=` 一致，默认 `Config.PINDUODUO_FEISHU_VIEW_ID`），避免接口返回 0 条导致从不 `goto` 订单页；打开列表后 **`page.bring_to_front()`** 便于看见 Playwright 窗口。缺「收件人手机号」则执行 `pdd-order-search-receiver.js` 并回写飞书。
+3. **页面**：`pinduoduo.html` 增加对应按钮；默认 App Token / Table ID 与 `Config` 一致（表 `tblyxGarbBwHi25M`）。
+
+### 涉及文件
+
+- 新增 **`src/spider/pinduoduo/order_address_sync.py`**
+- **`src/spider/pinduoduo/feishutable.py`**、`src/api/routes/pinduoduo_routes.py`、`src/config.py`、`src/web/templates/tools/pinduoduo.html**
+
+---
+
+## 2026-03-29 - 浏览器驱动目录改为与 `playwright install` 一致
+
+本地 `playwright_drivers` 已由平铺的 `chrome-win64/` 调整为官方布局：`playwright_drivers/chromium-1208/chrome-win64/chrome.exe`（与当前 Playwright 期望的 `chromium-1208` 一致）。代码仍兼容平铺路径，便于他人或临时解压。
+
+---
+
+## 2026-03-29 - `browser_path`：支持 `playwright_drivers/chrome-win64` 平铺布局
+
+### 说明
+
+手动解压官方 `chrome-win64.zip` 时，常见目录为 **`项目根/playwright_drivers/chrome-win64/chrome.exe`**，中间没有 **`chromium-****` 子目录**。原 `find_chrome_executable()` 只识别 `playwright_drivers/chromium-*`，导致未设置 `executable_path`，Playwright 仍去 **`%LOCALAPPDATA%\ms-playwright\chromium-1208\...`** 并报 `Executable doesn't exist`。
+
+### 改动
+
+- **`src/utils/browser_path.py`**：在无匹配的 `chromium-*` 时，再尝试 `playwright_drivers/chrome-win64/chrome.exe` 与 `playwright_drivers/chrome-win/chrome.exe`，并设置 `PLAYWRIGHT_BROWSERS_PATH`。
+
+---
+
+## 2026-03-29 - Windows：VC++ 已注册但 System32 无 `msvcp140` 时的 DLL 兜底
+
+### 现象
+
+「已安装」VC++ x64（控制面板可见），仍报 `greenlet` / `_greenlet` DLL 加载失败。
+
+### 原因
+
+注册表中有卸载项，但 **`C:\Windows\System32\msvcp140.dll` 未部署**（常见于此前安装报 `0x80070005` 等，只登记、未复制 CRT）。同机 `System32\Microsoft-Edge-WebView` 下往往已有同名 CRT，可被 `os.add_dll_directory` 用于加载扩展。
+
+### 代码
+
+- 新增 **`src/utils/win32_msvc_runtime.py`**：`add_dll_search_paths_if_needed()`，在 System32 缺 `msvcp140.dll` 时把 Edge WebView CRT 目录加入 DLL 搜索路径。
+- **`src/dev.py`**、**`src/main.py`**：在其余导入前调用上述函数。
+
+**仍建议**：在「程序和功能」中对 *Microsoft Visual C++ 2015–2022 Redistributable (x64)* 执行**修复**或**卸载后管理员重装**，使 CRT 回到 System32，避免依赖 Edge 目录。
+
+---
+
+## 2026-03-29 - 环境问题：`greenlet` DLL 加载失败（缺 VC++ 运行库）
+
+### 现象
+
+调试 `dev.py` 时在 `import playwright.sync_api` 链上报错：`ImportError: DLL load failed while importing _greenlet`（找不到指定模块）。
+
+### 原因
+
+`_greenlet.cp312-win_amd64.pyd` 依赖系统上的 **MSVC 运行库**（如 `msvcp140.dll` 等）。当前环境 `C:\Windows\System32\msvcp140.dll` 不存在；`pip reinstall greenlet` 无效。
+
+### 处理
+
+1. 以**管理员**身份安装 **[Visual C++ Redistributable for Visual Studio 2015–2022 (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe)**（或从微软下载中心获取同名安装包）。
+2. 若公司策略限制安装，需 IT 放行；本机曾出现安装程序 `0x80070005`（写注册表被拒绝），与权限或策略有关。
+
+---
+
+## 2026-03-29 - 还原 VS Code `launch.json`（按历史日志）
+
+### 变更说明
+
+`.vscode/launch.json` 丢失后，根据 `docs/log.md` 中 **2026-01-21 - 添加开发模式支持热重载** 的说明与 `docs/开发指南.md` 中的调试配置结构重新写入。
+
+**配置项**：
+- **调试主程序（完整版）**：入口 `${workspaceFolder}/src/main.py`，`PYTHONPATH` 指向工作区，`cwd` 为工作区根目录。
+- **开发模式（热重载）**：入口 `${workspaceFolder}/src/dev.py`，同上并增加 `FLASK_ENV=development`、`FLASK_DEBUG=1`。
+
+**说明**：仓库 `HEAD` 中此前未跟踪该文件，故无法从 git 直接取回；内容与文档记载一致。
+
+---
+
 ## 2026-02-24 - 1688 订单缓存目录迁入 cache
 
 ### 变更说明

@@ -3,6 +3,11 @@
 整合系统托盘、Flask服务和工具管理
 """
 import sys
+
+from utils.win32_msvc_runtime import add_dll_search_paths_if_needed
+
+add_dll_search_paths_if_needed()
+
 import signal
 import atexit
 import threading

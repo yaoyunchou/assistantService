@@ -71,6 +71,17 @@ def find_chrome_executable():
                 print(f"[BrowserPath] 尝试的路径:")
                 for cp in chrome_paths:
                     print(f"  - {cp} (存在: {cp.exists()})")
+
+        # 手工解压 chrome-win64.zip 常见布局：直接放在 playwright_drivers/chrome-win64/，无 chromium-* 包一层
+        for dirname in ('chrome-win64', 'chrome-win'):
+            flat = playwright_drivers_dir / dirname / 'chrome.exe'
+            if flat.is_file():
+                CHROME_EXECUTABLE_PATH = str(flat.resolve())
+                browsers_path = str(playwright_drivers_dir.resolve())
+                os.environ['PLAYWRIGHT_BROWSERS_PATH'] = browsers_path
+                print(f"[BrowserPath] ✓ 找到浏览器驱动（playwright_drivers/{dirname}）: {CHROME_EXECUTABLE_PATH}")
+                print(f"[BrowserPath] ✓ 设置 PLAYWRIGHT_BROWSERS_PATH: {browsers_path}")
+                return CHROME_EXECUTABLE_PATH
     
     # 如果没找到，尝试使用系统安装的
     user_home = Path.home()

@@ -547,12 +547,12 @@ class PinduoduoClient:
                 "message": f"读取状态失败: {str(e)}"
             }
     
-    def show_login_qrcode(self) -> Optional[str]:
+    def show_login_qrcode(self, skip_initial_navigation: bool = False) -> Optional[str]:
         """
         显示登录二维码（如果需要）
         
         逻辑：
-        1. 先访问首页（target_url）
+        1. 默认先访问首页（target_url）；若 skip_initial_navigation=True 则使用当前页（适合已从订单页被重定向到登录的情况）
         2. 如果被拦截到登录页面，显示登录二维码
         3. 如果没有被拦截，直接返回成功（不需要二维码）
         
@@ -565,18 +565,25 @@ class PinduoduoClient:
             return None
         
         try:
-            # 访问首页（由于使用了持久化上下文，Cookie会自动由浏览器加载）
-            target = self.target_url
-            logger.info(f"正在访问首页: {target}")
-            self.page.goto(target, wait_until='domcontentloaded', timeout=30000)
-            
-            # 等待页面加载和导航完成
-            try:
-                self.page.wait_for_load_state('domcontentloaded', timeout=5000)
-                self.page.wait_for_load_state('networkidle', timeout=10000)
-            except:
-                # 如果超时，继续执行，至少 DOM 应该已经加载
-                pass
+            if not skip_initial_navigation:
+                # 访问首页（由于使用了持久化上下文，Cookie会自动由浏览器加载）
+                target = self.target_url
+                logger.info(f"正在访问首页: {target}")
+                self.page.goto(target, wait_until='domcontentloaded', timeout=30000)
+                
+                # 等待页面加载和导航完成
+                try:
+                    self.page.wait_for_load_state('domcontentloaded', timeout=5000)
+                    self.page.wait_for_load_state('networkidle', timeout=10000)
+                except:
+                    # 如果超时，继续执行，至少 DOM 应该已经加载
+                    pass
+            else:
+                logger.info("show_login_qrcode: 跳过初始导航，根据当前页面判断登录/二维码")
+                try:
+                    self.page.wait_for_load_state('domcontentloaded', timeout=5000)
+                except:
+                    pass
             
             # 检测当前URL是否包含login（被拦截）
             current_url = self.page.url

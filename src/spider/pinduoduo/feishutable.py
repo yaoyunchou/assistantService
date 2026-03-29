@@ -390,3 +390,79 @@ def _convert_order_to_fields(order: Dict[str, Any]) -> Dict[str, Any]:
         fields['物流信息'] = str(order['traceList'])
     
     return fields
+
+
+def feishu_field_to_text(val: Any) -> str:
+    """将飞书多维表格单元格值转为纯文本（兼容 text / 数字 / 富文本片段等）。"""
+    if val is None:
+        return ''
+    if isinstance(val, str):
+        return val.strip()
+    if isinstance(val, (int, float)):
+        return str(val)
+    if isinstance(val, list) and val:
+        first = val[0]
+        if isinstance(first, dict) and 'text' in first:
+            return str(first.get('text', '')).strip()
+        return str(first).strip()
+    if isinstance(val, dict):
+        if 'text' in val:
+            return str(val.get('text', '')).strip()
+        if 'value' in val:
+            return feishu_field_to_text(val.get('value'))
+    return str(val).strip()
+
+
+def delete_feishu_rows_without_order_sn(
+    app_token: str,
+    table_id: str,
+) -> Dict[str, Any]:
+    """
+    删除表格中「订单号」为空的记录（无字段或空字符串视为无订单号）。
+    """
+    if not app_token or not table_id:
+        return {'success': False, 'message': 'app_token 或 table_id 未配置', 'deleted_count': 0}
+
+    client = FeishuTableClient(app_token, table_id)
+    records = client.get_all_records()
+    ids_to_delete: List[str] = []
+    for rec in records:
+        rid = rec.get('record_id')
+        if not rid:
+            continue
+        fields = rec.get('fields') or {}
+        order_sn = feishu_field_to_text(fields.get('订单号'))
+        if not order_sn:
+            ids_to_delete.append(rid)
+
+    if not ids_to_delete:
+        logger.info('无「订单号」为空的记录需删除')
+        return {
+            'success': True,
+            'message': '没有需要删除的记录（均无空订单号）',
+            'deleted_count': 0,
+            'total_scanned': len(records),
+        }
+
+    batch_size = 500
+    deleted = 0
+    for i in range(0, len(ids_to_delete), batch_size):
+        batch = ids_to_delete[i:i + batch_size]
+        if client.batch_delete_records(batch):
+            deleted += len(batch)
+        else:
+            logger.error(f'批量删除失败，批次起始 {i}')
+            return {
+                'success': False,
+                'message': f'删除中断：已成功删除 {deleted} 条，后续批次失败',
+                'deleted_count': deleted,
+                'total_scanned': len(records),
+            }
+
+    logger.info(f'已删除无订单号记录 {deleted} 条')
+    return {
+        'success': True,
+        'message': f'已删除 {deleted} 条无「订单号」记录',
+        'deleted_count': deleted,
+        'total_scanned': len(records),
+    }
