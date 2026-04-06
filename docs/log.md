@@ -1,5 +1,35 @@
 # 变更日志
 
+## 2026-04-06 - 定时任务：拼多多 ERP 订单同步（12:00 / 18:00）+ 飞书结果通知
+
+- **`scheduler/manager.py`**：新增任务类型 **`pdd_erp_order_sync`**，对本机 **`POST /api/pinduoduo/sync-erp-orders`** 发起请求（`timeout` 默认 780s）；结束后 **`_notify_pdd_erp_sync_result`** 向飞书私聊发送摘要（需 `FEISHU_ENABLED`、应用凭证及 **`FEISHU_USER_ID`** 或任务 **`data.feishu_user_id`**）。
+- **`scheduler/tasks.json`（种子）**：增加默认任务 **`pdd_erp_order_sync_noon_evening`**，cron **`0 12,18 * * *`**。用户数据目录若已有 **`scheduler/tasks.json`** 则不会自动合并，需手动在定时任务页添加或删旧配置后重启以初始化。
+
+---
+
+## 2026-04-06 - ERP 订单同步：注释与飞书「仅增量字段」更新
+
+- **`erp_order_sync.py`**：补充模块/步骤中文注释，说明登录拦截、脚本注入与飞书调用关系。
+- **`sync_erp_order_rows_to_feishu`**：仍以 **「平台订单号」** 判重；**新建** 仍写全量解析字段；**已存在** 时仅更新 **`ERP_FEISHU_PARTIAL_UPDATE_FIELD_KEYS`**（快递公司、快递单号、订单状态、提醒、运费、是否打印快递单、是否有售后）。若已存在行且上述列在当次抓取中均为空，则 **不调飞书更新接口**，统计 **`update_skipped_no_delta`**。
+
+---
+
+## 2026-04-06 - ERP 同步飞书：数字/日期列类型与失败日志
+
+- **`feishutable._erp_row_to_fields`**：对 **`ERP_FEISHU_NUMBER_FIELD_KEYS`**（重量、体积、商品总数、金额类等）写入 **float**；对 **`ERP_FEISHU_DATETIME_FIELD_KEYS`**（付款/审核/发货时间）写入 **Unix 毫秒 int**，避免 **`NumberFieldConvFail` / `DatetimeFieldConvFail`**。无法解析时 **warning** 并跳过该字段，不再把字符串强写给数字/日期列。
+- **`FeishuTableClient`**：`_make_request` 在 `code!=0` 时记录 **http_status** 与 **完整 JSON 体**（截断 4k）；**create / update / batch_create / batch_update** 失败时附加 **`_feishu_fields_debug_str`**（字段名、Python 类型、截断值）。
+
+---
+
+## 2026-04-06 - 订单同步（拼多多官方 ERP → 飞书）
+
+- **页面**：侧栏「订单同步」、`/pdd-erp-order-sync`，模板 **`src/web/templates/pinduoduo_erp_order_sync.html`**。
+- **API**：`POST /api/pinduoduo/sync-erp-orders`（可选 `app_token`、`table_id`、`scroll_max_steps`），浏览器池超时 720s；执行 **`src/spider/pinduoduo/erp_order_sync.py`**，页面脚本 **`pdd-erp-order-all-table.js`**（`__PDD_ERP_ORDER_ALL_RUN_MODE='python'`）。
+- **飞书**：新增 **`sync_erp_order_rows_to_feishu`**（按 **`平台订单号`** upsert；收件类字段与表格已加密 `*` 较多时不覆盖）。默认表 **`tblyAX9t4DJK2wuJ`**，配置项 **`PINDUODUO_ERP_ORDER_ALL_URL`**、**`PINDUODUO_ERP_FEISHU_TABLE_ID`**、**`PINDUODUO_ERP_FEISHU_VIEW_ID`**（视图 ID 供与多维表格 URL 对齐文档，同步接口仍扫全表记录）。
+- **登录拦截**：与订单地址同步一致——飞书应用消息、拼多多渠道 Webhook 卡片、返回 **`qrcode`** 供前端展示。
+
+---
+
 ## 2026-03-29 - 拼多多订单地址同步：仅最近 N 天订单（默认 2 天）
 
 扫描 `need_fill` 时要求订单时间在 **`Config.PINDUODUO_ADDRESS_SYNC_RECENT_DAYS`**（默认 **2**，环境变量 **`PINDUODUO_ADDRESS_SYNC_RECENT_DAYS`**，限制 1–90）内；时间列依次尝试 **`订单时间`**、**`订单提交时间`**、**`order_time`**。`checked` 增加 **`order_in_recent_days`**。可选 **`PINDUODUO_ADDRESS_SYNC_SORT_FIELD`**（如 `订单时间`）按列降序拉取；整页「最新单」仍早于窗口则提前停止翻页；带排序若接口失败会退化为无排序。

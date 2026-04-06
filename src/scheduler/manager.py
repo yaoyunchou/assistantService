@@ -1,6 +1,7 @@
 """
 定时任务管理器：基于 APScheduler，任务配置存 JSON（id=uuid, name, type, data, cron），按 type 执行对应 handler。
 """
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
 from utils.logger import get_logger
@@ -45,12 +46,143 @@ def _run_order_1688_fill_detail(data: Dict[str, Any]) -> Tuple[int, str]:
         return 0, str(e)
 
 
+def _scheduler_api_base_url() -> str:
+    """本机回环调用 Flask API；HOST 为 0.0.0.0 时改用 127.0.0.1。"""
+    from config import Config
+
+    h = (Config.HOST or "").strip()
+    if h in ("0.0.0.0", "::", ""):
+        h = "127.0.0.1"
+    return f"http://{h}:{Config.PORT}"
+
+
+def _format_pdd_erp_sync_summary(resp: Dict[str, Any]) -> str:
+    """将 sync-erp-orders 的 JSON 整理为可读多行文本（用于日志与飞书）。"""
+    lines = [
+        f"成功: {'是' if resp.get('success') else '否'}",
+        f"说明: {resp.get('message') or resp.get('error') or '-'}",
+    ]
+    if resp.get("intercepted"):
+        lines.append("登录拦截: 是（需在助手内扫码后再跑）")
+    if resp.get("page_url"):
+        lines.append(f"页面: {resp['page_url']}")
+    if resp.get("row_count") is not None:
+        lines.append(f"抓取行数: {resp['row_count']}")
+    fs = resp.get("feishu_sync")
+    if isinstance(fs, dict):
+        lines.append(
+            f"飞书: {fs.get('message') or '-'} "
+            f"(新建 {fs.get('create_count', '-')}, 更新 {fs.get('update_count', '-')}, "
+            f"失败 {fs.get('fail_count', '-')})"
+        )
+        if fs.get("update_skipped_no_delta"):
+            lines.append(f"已存在无增量跳过: {fs['update_skipped_no_delta']}")
+    return "\n".join(lines)
+
+
+def _notify_pdd_erp_sync_result(
+    ok: bool,
+    summary: str,
+    raw: Optional[Dict[str, Any]] = None,
+    feishu_user_id: Optional[str] = None,
+) -> None:
+    """执行结束后发飞书私聊（默认 FEISHU_USER_ID；可在任务 data.feishu_user_id 覆盖）。"""
+    title = "【订单同步 ERP】定时执行完成" if ok else "【订单同步 ERP】定时执行异常"
+    when = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    body = f"时间: {when}\n{summary}"
+    if raw is not None:
+        logger.debug("ERP 定时同步原始响应: %s", raw)
+    try:
+        from config import Config
+        from tools.feishu.message_sender import get_message_sender
+
+        sender = get_message_sender()
+        if not Config.FEISHU_ENABLED or not sender.client.is_configured():
+            logger.info("飞书未配置或未启用，跳过 ERP 同步结果通知")
+            return
+        if not (feishu_user_id or "").strip() and not sender.default_user_id:
+            logger.info("未配置 FEISHU_USER_ID 且任务未指定 feishu_user_id，跳过 ERP 同步结果通知")
+            return
+        text = f"{title}\n{body}"
+        if len(text) > 4500:
+            text = text[:4497] + "..."
+        if sender.send_custom_message(text, user_id=feishu_user_id):
+            logger.info("已发送 ERP 同步结果飞书通知")
+        else:
+            logger.warning("ERP 同步结果飞书通知发送返回失败")
+    except Exception as e:
+        logger.warning("发送 ERP 同步结果飞书通知异常: %s", e, exc_info=True)
+
+
+def _run_pdd_erp_order_sync(data: Dict[str, Any]) -> Tuple[int, str]:
+    """
+    定时触发拼多多 ERP 全部订单 → 飞书同步（与页面「开始同步」同源 API）。
+
+    task data（可选）:
+        url: 完整 POST 地址；默认 {api_base}/api/pinduoduo/sync-erp-orders
+        data: 请求 JSON 体（app_token、table_id、scroll_max_steps 等）
+        timeout: 请求超时秒数，默认 780（应略大于路由内浏览器池超时）
+    """
+    import requests
+
+    data = data or {}
+    url = (data.get("url") or "").strip()
+    if not url.startswith("http"):
+        url = f"{_scheduler_api_base_url()}/api/pinduoduo/sync-erp-orders"
+    body = data.get("data") if isinstance(data.get("data"), dict) else {}
+    try:
+        timeout = float(data.get("timeout", 780))
+    except (TypeError, ValueError):
+        timeout = 780.0
+
+    logger.info("定时 ERP 订单同步: POST %s timeout=%s", url, timeout)
+    try:
+        r = requests.post(url, json=body, timeout=timeout)
+        ct = (r.headers.get("content-type") or "").lower()
+        if "application/json" in ct:
+            resp = r.json()
+        else:
+            resp = {"success": False, "message": r.text[:2000] or f"HTTP {r.status_code}"}
+
+        summary = _format_pdd_erp_sync_summary(resp if isinstance(resp, dict) else {})
+        ok = bool(isinstance(resp, dict) and resp.get("success")) and r.status_code == 200
+        if isinstance(resp, dict) and resp.get("intercepted"):
+            ok = False
+
+        uid = (data.get("feishu_user_id") or "").strip() or None
+        _notify_pdd_erp_sync_result(
+            ok, summary, resp if isinstance(resp, dict) else None, feishu_user_id=uid
+        )
+
+        if not ok:
+            err = (
+                (resp.get("message") or resp.get("error") if isinstance(resp, dict) else None)
+                or r.text
+                or str(r.status_code)
+            )
+            logger.warning("ERP 同步 API 未成功: %s", err)
+            return 0, summary
+
+        logger.info("ERP 同步定时任务完成:\n%s", summary)
+        return int(resp.get("row_count") or 0), summary
+    except Exception as e:
+        summary = f"请求异常: {e}"
+        uid = (data.get("feishu_user_id") or "").strip() or None
+        _notify_pdd_erp_sync_result(False, summary, None, feishu_user_id=uid)
+        logger.warning("调用 ERP 同步 API 失败: %s", e, exc_info=True)
+        return 0, summary
+
+
 def get_task_handlers() -> Dict[str, Dict[str, Any]]:
     """任务类型 -> { name, run(data) -> (code, message) or raise。"""
     return {
         "order_1688_fill_detail": {
             "name": "1688 订单补详情",
             "run": _run_order_1688_fill_detail,
+        },
+        "pdd_erp_order_sync": {
+            "name": "拼多多 ERP 订单同步",
+            "run": _run_pdd_erp_order_sync,
         },
     }
 

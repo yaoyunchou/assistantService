@@ -277,3 +277,64 @@ def pinduoduo_sync_order_addresses():
     except Exception as e:
         routes_logger.error(f"同步 PDD 订单地址异常: {e}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/sync-erp-orders', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': 'ERP 全部订单表抓取并同步到飞书（平台订单号去重）',
+    'parameters': [{
+        'in': 'body',
+        'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'app_token': {'type': 'string'},
+                'table_id': {'type': 'string'},
+                'scroll_max_steps': {'type': 'integer'},
+                'scroll_pause_ms': {'type': 'integer'},
+            },
+        },
+    }],
+    'responses': {200: {'description': '执行结果'}, 500: {'description': '浏览器池异常'}},
+})
+def pinduoduo_sync_erp_orders():
+    """打开 mms ERP 全部订单页，执行 pdd-erp-order-all-table.js，写入 Config 指定的 ERP 飞书表。"""
+    try:
+        from config import Config
+        from spider.pinduoduo.erp_order_sync import sync_erp_orders_to_feishu
+
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'success': False, 'error': '浏览器池未初始化'}), 500
+
+        body = request.get_json(silent=True) or {}
+        app_token = body.get('app_token') or Config.PINDUODUO_FEISHU_APP_TOKEN
+        table_id = body.get('table_id') or Config.PINDUODUO_ERP_FEISHU_TABLE_ID
+        scroll_max_steps = body.get('scroll_max_steps')
+        scroll_pause_ms = body.get('scroll_pause_ms')
+        if scroll_max_steps is not None:
+            try:
+                scroll_max_steps = int(scroll_max_steps)
+            except (TypeError, ValueError):
+                scroll_max_steps = None
+        if scroll_pause_ms is not None:
+            try:
+                scroll_pause_ms = int(scroll_pause_ms)
+            except (TypeError, ValueError):
+                scroll_pause_ms = None
+
+        result = pool.execute(
+            lambda page: sync_erp_orders_to_feishu(
+                page,
+                app_token=app_token,
+                table_id=table_id,
+                scroll_max_steps=scroll_max_steps,
+                scroll_pause_ms=scroll_pause_ms,
+            ),
+            timeout=720,
+        )
+        return jsonify(result if isinstance(result, dict) else {'success': False, 'message': str(result)}), 200
+    except Exception as e:
+        routes_logger.error(f'同步 ERP 订单异常: {e}', exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500

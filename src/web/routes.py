@@ -113,6 +113,16 @@ def register_web_routes(app, tool_manager: ToolManager):
         """飞书消息测试页面"""
         tools_info = tool_manager.get_tools_info()
         return render_template('feishu_test.html', tools=tools_info, config=Config)
+
+    @app.route('/pdd-erp-order-sync')
+    def pinduoduo_erp_order_sync():
+        """拼多多官方 ERP 全部订单 → 飞书多维表格"""
+        tools_info = tool_manager.get_tools_info()
+        return render_template(
+            'pinduoduo_erp_order_sync.html',
+            tools=tools_info,
+            config=Config,
+        )
     
     @app.route('/websocket')
     def websocket_page():

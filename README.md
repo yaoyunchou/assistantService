@@ -7,6 +7,7 @@
 - 🖥️ **现代化Web界面** - 基于Flask的响应式Web界面，美观易用
 - 🐍 **Python脚本执行** - 支持执行Python脚本，支持参数传递和结果返回
 - 🛒 **拼多多助手** - 拼多多商家后台自动化工具，支持登录管理和飞书通知
+- 📋 **订单同步（ERP）** - 官方 ERP 全部订单表抓取，按「平台订单号」同步到指定飞书多维表格（独立页面 `/pdd-erp-order-sync`）
 - 📡 **途强助手** - 途强智能设备管理平台（iot.tqiot.com）自动化，支持自动登录与最近 30 天记录获取
 - 📦 **1688 订单提取** - 从 1688 待收货订单列表提取订单与收货信息，支持同步到飞书多维表格（Web 页与命令行脚本）
 - ⚙️ **模块化配置** - 支持通过配置控制功能模块的启用/禁用和启动时机
@@ -16,6 +17,7 @@
 - 🚀 **开机自启** - 支持开机自动启动
 - 📱 **API接口** - 提供完整的RESTful API接口
 - 🔌 **Socket.IO 客户端** - 对接 `docs/websocket-api.md`，连接 path `/ws`、监听事件 `forward`，默认测试环境 `http://localhost:3000`，Flask 启动时自动连接，支持管理页连接/断开与配置保存
+- ⏰ **定时任务** - APScheduler，支持「拼多多 ERP 订单同步」等类型；默认种子含每日 12:00 / 18:00 同步，执行后飞书私聊结果摘要
 - 💾 **低资源占用** - 优化资源使用，空闲时内存占用<200MB
 
 ## 技术栈
@@ -137,6 +139,7 @@ python src/main.py
 2. 左侧导航栏显示所有可用工具
 3. 点击工具名称进入相应工具页面
 4. 在工具页面使用相应功能
+5. **定时任务**（`/scheduler`）：查看/新增 APScheduler 任务；需 `SCHEDULER_ENABLED` 为真且应用保持运行，任务才会在指定时间触发
 
 ### 拼多多助手
 
@@ -173,12 +176,20 @@ python src/main.py
    - 如被拦截到登录页面，自动发送飞书通知
    - 需要重新登录后才能继续使用
 
+**订单同步（ERP）**：
+
+- 侧栏进入 **订单同步**，或访问 `http://127.0.0.1:8889/pdd-erp-order-sync`（端口以实际配置为准）。
+- 使用 `src/spider/pinduoduo/scripts/pdd-erp-order-all-table.js` 在 `https://mms.pinduoduo.com/erp/order/all` 页抓取 `beast-core-table` 数据；默认写入飞书表 `tblyAX9t4DJK2wuJ`（与视图 `vew1HQrDsN` 同属应用 `ORSHbpajoaANQ4sFg25c917jnTc`），可通过环境变量 `PINDUODUO_ERP_FEISHU_TABLE_ID` / 页面输入覆盖。
+- 若被登录拦截：发送飞书提醒、Webhook 卡片（若已配置）、并返回二维码供页面展示（与「同步 PDD 订单地址」一致）。
+- **定时同步**：侧栏 **定时任务** 中类型为「拼多多 ERP 订单同步」的任务会按 cron 调用 `POST /api/pinduoduo/sync-erp-orders`。仓库种子 `src/scheduler/tasks.json` 含一条 **`0 12,18 * * *`**（每天 12:00 与 18:00）。首次运行若用户数据目录无 `scheduler/tasks.json`，会从种子复制；若你已有旧配置，需在定时任务页手动添加该任务或删掉旧文件后重启。每次执行结束会向飞书 **私聊**（`.env` 中 `FEISHU_USER_ID`，须为有效 open_id 等）发送结果摘要；未配置飞书则仅写日志。任务 `data` 可选：`url`（默认本机 API）、`data`（请求体）、`timeout`（默认 780 秒）、`feishu_user_id`（覆盖默认接收人）。
+
 **API接口**：
 - `GET /api/pinduoduo/status` - 获取最后执行状态
 - `POST /api/pinduoduo/login` - 启动登录流程
 - `GET /api/pinduoduo/check_login_complete` - 检查登录完成
 - `POST /api/pinduoduo/logout` - 清除登录状态
 - `POST /api/pinduoduo/execute` - 执行自动化操作（TODO）
+- `POST /api/pinduoduo/sync-erp-orders` - ERP 全部订单表抓取并同步飞书（JSON 可选 `app_token`、`table_id`、`scroll_max_steps`）
 
 ### 途强助手
 

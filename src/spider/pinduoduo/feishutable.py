@@ -11,11 +11,63 @@ logger = get_logger('PinduoduoFeishuTable')
 # 更新时若表格中该字段的 * 多于新数据（视为已加密），则不再覆盖
 SENSITIVE_FIELD_KEYS = ('收件人', '收件人地址', '收件人手机号')
 
+# 官方 ERP 全表同步（pdd-erp-order-all-table.js）写入表时使用
+ERP_ORDER_PRIMARY_KEY = '平台订单号'
+ERP_SENSITIVE_FIELD_KEYS = (
+    '收件人',
+    '收件电话',
+    '收件详细地址',
+    '收件省',
+    '收件市',
+    '收件区',
+)
+
+# 与 pdd-erp-order-all-table.js 输出对应；飞书表中为「数字」类型列时必须传 float/int，不能传字符串
+ERP_FEISHU_NUMBER_FIELD_KEYS = (
+    '重量',
+    '体积',
+    '商品总数',
+    '商品金额',
+    '运费',
+    '店铺优惠金额',
+    '平台优惠金额',
+    '实收金额',
+)
+# 飞书「日期」列需 Unix 毫秒时间戳（与旧版订单同步一致）
+ERP_FEISHU_DATETIME_FIELD_KEYS = ('付款时间', '审核时间', '发货时间')
+
+# 已存在「平台订单号」时，仅 PATCH 下列字段（其余列保留表中原值，避免每次全表同步覆盖人工改动）
+ERP_FEISHU_PARTIAL_UPDATE_FIELD_KEYS = (
+    '快递公司',
+    '快递单号',
+    '订单状态',
+    '提醒',
+    '运费',
+    '是否打印快递单',
+    '是否有售后',
+)
+
 
 def _count_asterisks(s: Any) -> int:
     if s is None:
         return 0
     return str(s).count('*')
+
+
+def _merge_erp_sensitive_fields_for_update(
+    new_fields: Dict[str, Any],
+    existing_fields: Dict[str, Any],
+) -> Dict[str, Any]:
+    """ERP 行更新：地址/电话类字段若表格中 * 更多则保留原值。"""
+    out = dict(new_fields)
+    for key in ERP_SENSITIVE_FIELD_KEYS:
+        if key not in out:
+            continue
+        existing_val = existing_fields.get(key)
+        new_val = out.get(key)
+        if _count_asterisks(existing_val) > _count_asterisks(new_val):
+            del out[key]
+    return out
 
 
 def _merge_sensitive_fields_for_update(
@@ -466,3 +518,298 @@ def delete_feishu_rows_without_order_sn(
         'deleted_count': deleted,
         'total_scanned': len(records),
     }
+
+
+def _parse_erp_cell_to_float(val: Any) -> Optional[float]:
+    """解析 ERP 页面/脚本中的金额、重量等字符串为 float。"""
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    if not s:
+        return None
+    t = (
+        s.replace(',', '')
+        .replace('元', '')
+        .replace('¥', '')
+        .replace('￥', '')
+        .replace(' ', '')
+        .strip()
+    )
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+def _parse_erp_cell_to_datetime_ms(val: Any) -> Optional[int]:
+    """
+    将脚本 formatFeishuDateTime 输出的 `yyyy/MM/dd HH:mm` 等转为飞书日期字段所需的毫秒时间戳。
+    """
+    if val is None:
+        return None
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        n = float(val)
+        if n > 1e14:
+            return int(n / 1000)
+        if n > 1e12:
+            return int(n)
+        if n > 1e9:
+            return int(n * 1000)
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    norm = s.replace('年', '-').replace('月', '-').replace('日', ' ')
+    norm = norm.replace('/', '-').replace('T', ' ')
+    norm = ' '.join(norm.split())
+    for fmt, maxlen in (('%Y-%m-%d %H:%M:%S', 19), ('%Y-%m-%d %H:%M', 16), ('%Y-%m-%d', 10)):
+        try:
+            chunk = norm[:maxlen].strip()
+            if fmt == '%Y-%m-%d' and len(chunk) < 10:
+                continue
+            dt = datetime.strptime(chunk, fmt)
+            return int(dt.timestamp() * 1000)
+        except ValueError:
+            continue
+    logger.debug('ERP 日期列无法解析为飞书时间戳: %r', s[:100])
+    return None
+
+
+def _erp_row_to_fields(row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    脚本返回的 rows 元素列名与飞书一致。
+    文本列保持 str；数字/日期列转为 float 或毫秒 int，避免 NumberFieldConvFail / DatetimeFieldConvFail。
+    无法解析的数字/日期列会跳过该字段并打日志（不再把字符串强写给数字/日期列）。
+    """
+    if not isinstance(row, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for k_raw, v in row.items():
+        k = str(k_raw)
+        if v is None:
+            continue
+
+        if k in ERP_FEISHU_NUMBER_FIELD_KEYS:
+            if isinstance(v, str) and not v.strip():
+                continue
+            num = _parse_erp_cell_to_float(v)
+            if num is None:
+                logger.warning(
+                    'ERP 同步跳过无法解析的数字列（避免飞书 NumberFieldConvFail）: %s=%r',
+                    k,
+                    (str(v)[:120] + '…') if len(str(v)) > 120 else v,
+                )
+                continue
+            out[k] = num
+            continue
+
+        if k in ERP_FEISHU_DATETIME_FIELD_KEYS:
+            s = str(v).strip() if v is not None else ''
+            if s == '':
+                continue
+            ms = _parse_erp_cell_to_datetime_ms(v)
+            if ms is None:
+                logger.warning(
+                    'ERP 同步跳过无法解析的日期列（避免飞书 DatetimeFieldConvFail）: %s=%r',
+                    k,
+                    (str(v)[:120] + '…') if len(str(v)) > 120 else v,
+                )
+                continue
+            out[k] = ms
+            continue
+
+        s = str(v).strip()
+        if s == '':
+            continue
+        out[k] = s
+    return out
+
+
+def _erp_fields_for_partial_update(row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    从当前行解析出「仅增量更新」允许的字段子集（类型转换规则与 _erp_row_to_fields 一致）。
+    若某列在页面为空，则不会出现在结果中，飞书该列保持原值。
+    """
+    full = _erp_row_to_fields(row)
+    return {k: full[k] for k in ERP_FEISHU_PARTIAL_UPDATE_FIELD_KEYS if k in full}
+
+
+def sync_erp_order_rows_to_feishu(
+    rows: List[Dict[str, Any]],
+    app_token: Optional[str] = None,
+    table_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    将 pdd-erp-order-all-table.js 产出的 rows 写入飞书（列名与多维表格一致）。
+
+    匹配键：**平台订单号**（与飞书表主键列一致）。
+    - **新建**：表中尚无该「平台订单号」时，写入本行解析后的**全部非空字段**（含类型转换）。
+    - **更新**：已存在时，仅更新 ``ERP_FEISHU_PARTIAL_UPDATE_FIELD_KEYS`` 中在本行有值的列；
+      未出现在本次解析结果中的列**不改**；子集内与收件信息无关，不再做 * 脱敏合并。
+    """
+    from config import Config
+
+    app_token = app_token or Config.PINDUODUO_FEISHU_APP_TOKEN
+    table_id = table_id or Config.PINDUODUO_ERP_FEISHU_TABLE_ID
+
+    if not rows:
+        return {
+            'success': True,
+            'message': '无表格行可同步',
+            'success_count': 0,
+            'fail_count': 0,
+            'create_count': 0,
+            'update_count': 0,
+            'update_skipped_no_delta': 0,
+            'total_count': 0,
+        }
+
+    try:
+        feishu_table_client = FeishuTableClient(app_token, table_id)
+        success_count = 0
+        fail_count = 0
+        update_count = 0
+        create_count = 0
+        update_skipped_no_delta = 0
+        total_count = len(rows)
+
+        existing_records = feishu_table_client.get_all_records()
+        key_to_record: Dict[str, Dict[str, Any]] = {}
+        for record in existing_records:
+            record_id = record.get('record_id')
+            fields = record.get('fields', {})
+            pk = feishu_field_to_text(fields.get(ERP_ORDER_PRIMARY_KEY))
+            if pk and record_id:
+                key_to_record[pk] = {'record_id': record_id, 'fields': fields}
+
+        orders_to_create: List[Dict[str, Any]] = []
+        orders_to_update: List[Dict[str, Any]] = []
+
+        for row in rows:
+            # 主键优先从原始行取，避免 _erp_row_to_fields 因空串丢掉「平台订单号」
+            pk = feishu_field_to_text(
+                row.get(ERP_ORDER_PRIMARY_KEY) if isinstance(row, dict) else None
+            )
+            if not pk:
+                logger.warning('ERP 行缺少「平台订单号」，跳过: %s', row)
+                fail_count += 1
+                continue
+
+            if pk in key_to_record:
+                partial = _erp_fields_for_partial_update(row)
+                if not partial:
+                    update_skipped_no_delta += 1
+                    logger.debug(
+                        'ERP 行「平台订单号」=%s 已存在，但增量字段均为空，跳过更新',
+                        pk,
+                    )
+                    continue
+                rec = key_to_record[pk]
+                orders_to_update.append({'record_id': rec['record_id'], 'fields': partial})
+            else:
+                fields = _erp_row_to_fields(row)
+                orders_to_create.append({'fields': fields})
+
+        batch_size = 20
+        if orders_to_create:
+            for i in range(0, len(orders_to_create), batch_size):
+                batch = orders_to_create[i:i + batch_size]
+                try:
+                    result = feishu_table_client.batch_create_records(batch)
+                    if result:
+                        batch_success = len(result)
+                        create_count += batch_success
+                        success_count += batch_success
+                        fail_count += len(batch) - batch_success
+                    else:
+                        for record in batch:
+                            r = feishu_table_client.create_record(record['fields'])
+                            if r:
+                                create_count += 1
+                                success_count += 1
+                            else:
+                                fail_count += 1
+                except Exception as e:
+                    logger.error('ERP 创建批次失败: %s', e, exc_info=True)
+                    for record in batch:
+                        try:
+                            r = feishu_table_client.create_record(record['fields'])
+                            if r:
+                                create_count += 1
+                                success_count += 1
+                            else:
+                                fail_count += 1
+                        except Exception as e2:
+                            logger.error('ERP 单条创建失败: %s', e2)
+                            fail_count += 1
+
+        if orders_to_update:
+            for i in range(0, len(orders_to_update), batch_size):
+                batch = orders_to_update[i:i + batch_size]
+                try:
+                    result = feishu_table_client.batch_update_records(batch)
+                    if result:
+                        batch_success = len(result)
+                        update_count += batch_success
+                        success_count += batch_success
+                        fail_count += len(batch) - batch_success
+                    else:
+                        for record in batch:
+                            r = feishu_table_client.update_record(
+                                record_id=record['record_id'],
+                                fields=record['fields'],
+                            )
+                            if r:
+                                update_count += 1
+                                success_count += 1
+                            else:
+                                fail_count += 1
+                except Exception as e:
+                    logger.error('ERP 更新批次失败: %s', e, exc_info=True)
+                    for record in batch:
+                        try:
+                            r = feishu_table_client.update_record(
+                                record_id=record['record_id'],
+                                fields=record['fields'],
+                            )
+                            if r:
+                                update_count += 1
+                                success_count += 1
+                            else:
+                                fail_count += 1
+                        except Exception as e2:
+                            logger.error('ERP 单条更新失败: %s', e2)
+                            fail_count += 1
+
+        msg_parts = [
+            f'同步完成: 成功 {success_count} (新建 {create_count}, 更新 {update_count})',
+            f'失败 {fail_count}',
+        ]
+        if update_skipped_no_delta:
+            msg_parts.append(f'已存在但无增量字段跳过 {update_skipped_no_delta}')
+        return {
+            'success': True,
+            'message': ', '.join(msg_parts),
+            'success_count': success_count,
+            'fail_count': fail_count,
+            'create_count': create_count,
+            'update_count': update_count,
+            'update_skipped_no_delta': update_skipped_no_delta,
+            'total_count': total_count,
+        }
+    except Exception as e:
+        logger.error('ERP 订单行同步飞书失败: %s', e, exc_info=True)
+        return {
+            'success': False,
+            'message': f'同步失败: {str(e)}',
+            'success_count': 0,
+            'fail_count': len(rows),
+            'create_count': 0,
+            'update_count': 0,
+            'update_skipped_no_delta': 0,
+            'total_count': len(rows),
+        }

@@ -11,6 +11,31 @@ from utils.logger import get_logger
 logger = get_logger('FeishuTableClient')
 
 
+def _feishu_fields_debug_str(fields: Optional[Dict[str, Any]], max_items: int = 45, max_total: int = 2400) -> str:
+    """记录写入失败时打印字段名、Python 类型与截断后的值，便于排查 Number/Datetime 转换问题。"""
+    if not fields:
+        return '{}'
+    parts: List[str] = []
+    for i, (k, v) in enumerate(fields.items()):
+        if i >= max_items:
+            parts.append(f'...(+{len(fields) - max_items} more keys)')
+            break
+        tname = type(v).__name__
+        if v is None:
+            rep = 'None'
+        elif isinstance(v, (int, float, bool)):
+            rep = repr(v)
+        else:
+            rep = repr(v)
+            if len(rep) > 140:
+                rep = rep[:137] + '...'
+        parts.append(f'{k}<{tname}>={rep}')
+    s = ' | '.join(parts)
+    if len(s) > max_total:
+        return s[: max_total - 3] + '...'
+    return s
+
+
 class FeishuTableClient:
     """飞书多维表格客户端"""
     
@@ -95,13 +120,38 @@ class FeishuTableClient:
                 headers=headers,
                 timeout=30
             )
-            result = response.json()
-            
+            try:
+                result = response.json()
+            except Exception as json_err:
+                logger.error(
+                    '飞书API响应非JSON method=%s url_suffix=%s status=%s err=%s body_prefix=%r',
+                    method,
+                    url.split('/open-apis', 1)[-1][:120] if '/open-apis' in url else url[-120:],
+                    response.status_code,
+                    json_err,
+                    (response.text or '')[:500],
+                )
+                return None
+
             if result.get('code') == 0:
                 return result.get('data')
-            else:
-                logger.error(f"飞书API请求失败: {result.get('msg')}, code: {result.get('code')}")
-                return None
+
+            # 失败时打出完整业务体（常含字段级原因）；避免单行过长用截断
+            try:
+                full = json.dumps(result, ensure_ascii=False)
+            except Exception:
+                full = str(result)
+            if len(full) > 4000:
+                full = full[:3997] + '...'
+            logger.error(
+                '飞书API请求失败 method=%s http_status=%s code=%s msg=%s body=%s',
+                method,
+                response.status_code,
+                result.get('code'),
+                result.get('msg'),
+                full,
+            )
+            return None
         
         except requests.RequestException as e:
             logger.error(f"请求飞书API失败: {e}")
@@ -148,9 +198,12 @@ class FeishuTableClient:
         if result:
             logger.info(f"记录创建成功，record_id: {result.get('record', {}).get('record_id')}")
             return result.get('record')
-        else:
-            logger.error("记录创建失败")
-            return None
+        logger.error(
+            '记录创建失败 table_id=%s fields=%s',
+            table_id,
+            _feishu_fields_debug_str(fields),
+        )
+        return None
     
     def batch_create_records(self, records: List[Dict[str, Any]], app_token: Optional[str] = None, table_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """
@@ -186,9 +239,14 @@ class FeishuTableClient:
             created_records = result.get('records', [])
             logger.info(f"批量创建成功，共创建 {len(created_records)} 条记录")
             return created_records
-        else:
-            logger.error("批量创建记录失败")
-            return None
+        first_fields = records[0].get('fields') if records else None
+        logger.error(
+            '批量创建记录失败 table_id=%s batch_size=%s first_fields=%s',
+            table_id,
+            len(records),
+            _feishu_fields_debug_str(first_fields),
+        )
+        return None
     
     def update_record(self, record_id: str, fields: Dict[str, Any], app_token: Optional[str] = None, table_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
@@ -226,7 +284,12 @@ class FeishuTableClient:
             rec = result.get('record')
             # 飞书偶发 code=0 但 data 无 record 或为空对象，仍视为更新成功
             return rec if rec is not None else {}
-        logger.error(f"记录更新失败: {record_id}")
+        logger.error(
+            '记录更新失败 record_id=%s table_id=%s fields=%s',
+            record_id,
+            table_id,
+            _feishu_fields_debug_str(fields),
+        )
         return None
     
     def batch_update_records(self, records: List[Dict[str, Any]], app_token: Optional[str] = None, table_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
@@ -264,9 +327,15 @@ class FeishuTableClient:
             updated_records = result.get('records', [])
             logger.info(f"批量更新成功，共更新 {len(updated_records)} 条记录")
             return updated_records
-        else:
-            logger.error("批量更新记录失败")
-            return None
+        first = records[0] if records else {}
+        logger.error(
+            '批量更新记录失败 table_id=%s batch_size=%s first_record_id=%s first_fields=%s',
+            table_id,
+            len(records),
+            first.get('record_id'),
+            _feishu_fields_debug_str(first.get('fields')),
+        )
+        return None
     
     def delete_record(self, record_id: str, app_token: Optional[str] = None, table_id: Optional[str] = None) -> bool:
         """

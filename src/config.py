@@ -102,6 +102,20 @@ class Config:
         PINDUODUO_ADDRESS_SYNC_RECENT_DAYS = 2
     # 列出记录时按该字段降序（新单优先，易早停）；留空则不传 sort，避免列名不符导致接口失败
     PINDUODUO_ADDRESS_SYNC_SORT_FIELD = (os.getenv('PINDUODUO_ADDRESS_SYNC_SORT_FIELD') or '').strip() or None
+    # 官方 ERP 全部订单页（脚本 pdd-erp-order-all-table.js）
+    PINDUODUO_ERP_ORDER_ALL_URL = os.getenv(
+        'PINDUODUO_ERP_ORDER_ALL_URL',
+        'https://mms.pinduoduo.com/erp/order/all',
+    )
+    # ERP 订单表同步目标（飞书多维表格，与 URL 中 table= / view= 一致）
+    PINDUODUO_ERP_FEISHU_TABLE_ID = os.getenv(
+        'PINDUODUO_ERP_FEISHU_TABLE_ID',
+        'tblyAX9t4DJK2wuJ',
+    )
+    PINDUODUO_ERP_FEISHU_VIEW_ID = os.getenv(
+        'PINDUODUO_ERP_FEISHU_VIEW_ID',
+        'vew1HQrDsN',
+    )
     # PINDUODUO_TARGET_URL = 'https://www.doubao.com/chat/28899721294850?open_from_ext=1'
 
     

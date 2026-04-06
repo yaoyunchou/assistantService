@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+
+{% block title %}订单同步 - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.page-header .subtitle a { color: #3498db; word-break: break-all; }
+.status-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 30px;
+    margin-bottom: 30px;
+}
+.status-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+.status-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: #2c3e50;
+}
+.desc {
+    color: #7f8c8d;
+    line-height: 1.65;
+    margin-bottom: 16px;
+}
+.feishu-sync-options { margin-bottom: 16px; }
+.feishu-option-row { margin-bottom: 10px; }
+.feishu-option-row label {
+    display: inline-block;
+    width: 120px;
+    color: #2c3e50;
+    font-weight: 500;
+}
+.feishu-input {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    width: min(100%, 420px);
+}
+.action-buttons { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.btn {
+    padding: 12px 22px;
+    border: none;
+    border-radius: 6px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.btn-primary { background: #3498db; color: white; }
+.btn-primary:hover { background: #2980b9; }
+.btn-secondary { background: #95a5a6; color: white; }
+.btn-secondary:hover { background: #7f8c8d; }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.sync-result {
+    display: none;
+    margin-top: 16px;
+    padding: 14px 16px;
+    border-radius: 8px;
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    font-size: 14px;
+    color: #495057;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.qrcode-container {
+    display: none;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 30px;
+    margin-bottom: 24px;
+    text-align: center;
+}
+.qrcode-container.show { display: block; }
+.qrcode-title { font-size: 18px; font-weight: 600; color: #2c3e50; margin-bottom: 16px; }
+.qrcode-image {
+    max-width: 300px;
+    margin: 0 auto;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 10px;
+}
+.qrcode-hint { margin-top: 12px; color: #7f8c8d; font-size: 14px; }
+.qrcode-status {
+    margin-top: 14px;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 14px;
+}
+.qrcode-status.waiting { background: #fff3cd; color: #856404; }
+.qrcode-status.success { background: #d4edda; color: #155724; }
+.qrcode-status.error { background: #f8d7da; color: #721c24; }
+.loading {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 3px solid rgba(52, 152, 219, 0.3);
+    border-radius: 50%;
+    border-top-color: #3498db;
+    animation: spin 0.9s linear infinite;
+    vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>订单同步</h2>
+    <p class="subtitle">
+        从拼多多商家后台 <strong>官方 ERP — 全部订单</strong> 抓取表格数据，按「平台订单号」写入飞书多维表格。
+        数据表：
+        <a href="https://fve8bmmwllf.feishu.cn/base/ORSHbpajoaANQ4sFg25c917jnTc?table=tblyAX9t4DJK2wuJ&view=vew1HQrDsN" target="_blank" rel="noopener noreferrer">打开飞书表</a>
+    </p>
+</div>
+
+<div class="status-card">
+    <div class="status-header">
+        <h3 class="status-title">同步到飞书</h3>
+    </div>
+    <p class="desc">
+        将打开页面 <code>{{ config.PINDUODUO_ERP_ORDER_ALL_URL }}</code>，在已登录状态下执行脚本
+        <code>pdd-erp-order-all-table.js</code>（含虚拟列表滚动采集，耗时可能数分钟）。
+        若跳转到登录页：将发送飞书提醒与群机器人卡片（若已配置），并在下方展示扫码二维码。
+    </p>
+    <p class="desc">
+        <strong>定时执行</strong>：应用内置调度可在每天 <strong>12:00</strong> 与 <strong>18:00</strong> 自动调用同一同步接口（种子任务 cron 为 <code>0 12,18 * * *</code>）。
+        每次跑完后会向飞书私聊（<code>FEISHU_USER_ID</code>）发送结果摘要；请在侧栏 <a href="{{ url_for('scheduler_page') }}">定时任务</a> 中确认任务已启用。
+        若用户数据目录里已有旧的 <code>tasks.json</code> 未含该任务，可手动新增类型「拼多多 ERP 订单同步」或删除旧配置后重启以从种子文件重新初始化。
+    </p>
+    <div class="feishu-sync-options">
+        <div class="feishu-option-row">
+            <label for="erp-feishu-app-token">App Token</label>
+            <input type="text" id="erp-feishu-app-token" class="feishu-input" value="{{ config.PINDUODUO_FEISHU_APP_TOKEN }}" placeholder="留空由服务端默认">
+        </div>
+        <div class="feishu-option-row">
+            <label for="erp-feishu-table-id">Table ID</label>
+            <input type="text" id="erp-feishu-table-id" class="feishu-input" value="{{ config.PINDUODUO_ERP_FEISHU_TABLE_ID }}" placeholder="多维表格数据表 ID">
+        </div>
+        <div class="feishu-option-row">
+            <label for="erp-scroll-max">滚动上限步数</label>
+            <input type="text" id="erp-scroll-max" class="feishu-input" placeholder="可选，默认脚本内 600">
+        </div>
+    </div>
+    <div class="action-buttons">
+        <button type="button" id="erp-sync-btn" class="btn btn-primary">开始同步</button>
+        <button type="button" id="erp-login-btn" class="btn btn-secondary">重新登录</button>
+    </div>
+    <div id="erp-sync-result" class="sync-result"></div>
+</div>
+
+<div id="qrcode-container" class="qrcode-container">
+    <h3 class="qrcode-title">请使用拼多多 APP 扫码登录</h3>
+    <img id="qrcode-image" class="qrcode-image" src="" alt="二维码">
+    <p class="qrcode-hint">扫码成功后请稍等，可再次点击「开始同步」</p>
+    <div id="qrcode-status" class="qrcode-status waiting">
+        <span class="loading"></span> 等待扫码登录...
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function erpBodyFromInputs() {
+    const appToken = document.getElementById('erp-feishu-app-token').value.trim();
+    const tableId = document.getElementById('erp-feishu-table-id').value.trim();
+    const scrollMax = document.getElementById('erp-scroll-max').value.trim();
+    const body = {};
+    if (appToken) body.app_token = appToken;
+    if (tableId) body.table_id = tableId;
+    if (scrollMax !== '' && !Number.isNaN(Number(scrollMax))) {
+        body.scroll_max_steps = Number(scrollMax);
+    }
+    return body;
+}
+
+function showQRCode(qrcodeData) {
+    const container = document.getElementById('qrcode-container');
+    const image = document.getElementById('qrcode-image');
+    const status = document.getElementById('qrcode-status');
+    image.src = qrcodeData;
+    container.classList.add('show');
+    status.className = 'qrcode-status waiting';
+    status.innerHTML = '<span class="loading"></span> 等待扫码登录...';
+}
+
+let erpPollingInterval = null;
+function startLoginPolling() {
+    if (erpPollingInterval) clearInterval(erpPollingInterval);
+    erpPollingInterval = setInterval(async () => {
+        try {
+            const response = await fetch('/api/pinduoduo/check_login_complete');
+            const data = await response.json();
+            if (data.success && data.logged_in) {
+                clearInterval(erpPollingInterval);
+                erpPollingInterval = null;
+                const status = document.getElementById('qrcode-status');
+                status.className = 'qrcode-status success';
+                status.textContent = '✓ 登录成功！';
+                setTimeout(() => {
+                    document.getElementById('qrcode-container').classList.remove('show');
+                }, 3000);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }, 2000);
+    setTimeout(() => {
+        if (erpPollingInterval) {
+            clearInterval(erpPollingInterval);
+            erpPollingInterval = null;
+            const status = document.getElementById('qrcode-status');
+            status.className = 'qrcode-status error';
+            status.textContent = '× 登录超时，请重试';
+        }
+    }, 60000);
+}
+
+document.getElementById('erp-login-btn').addEventListener('click', async function () {
+    const btn = this;
+    btn.disabled = true;
+    try {
+        const response = await fetch('/api/pinduoduo/login', { method: 'POST' });
+        const data = await response.json();
+        if (data.success && data.qrcode) {
+            showQRCode(data.qrcode);
+            startLoginPolling();
+        } else if (data.already_logged_in) {
+            alert(data.message || '已登录');
+        } else {
+            alert(data.message || data.error || '获取二维码失败');
+        }
+    } catch (e) {
+        alert('请求失败: ' + e.message);
+    } finally {
+        btn.disabled = false;
+    }
+});
+
+document.getElementById('erp-sync-btn').addEventListener('click', async function () {
+    const btn = this;
+    const resultEl = document.getElementById('erp-sync-result');
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading"></span> 同步中（可能较久）...';
+    resultEl.style.display = 'none';
+    try {
+        const response = await fetch('/api/pinduoduo/sync-erp-orders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(erpBodyFromInputs()),
+        });
+        const data = await response.json();
+        resultEl.style.display = 'block';
+        if (data.intercepted && data.qrcode) {
+            showQRCode(data.qrcode);
+            startLoginPolling();
+        }
+        let text = data.message || data.error || '';
+        if (data.page_url) text += '\n当前页面: ' + data.page_url;
+        if (data.row_count != null) text += '\n抓取行数: ' + data.row_count;
+        if (data.feishu_sync) {
+            const fs = data.feishu_sync;
+            text += '\n飞书: ' + (fs.message || JSON.stringify(fs));
+        }
+        if (data.extract_meta && data.extract_meta.log && data.extract_meta.log.length) {
+            text += '\n脚本日志(节选): ' + data.extract_meta.log.slice(-8).join(' | ');
+        }
+        resultEl.textContent = text || JSON.stringify(data);
+        resultEl.style.color = (data.success === false && !data.intercepted) ? '#721c24' : '#2c3e50';
+    } catch (e) {
+        resultEl.style.display = 'block';
+        resultEl.style.color = '#721c24';
+        resultEl.textContent = '请求失败: ' + e.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+    }
+});
+</script>
+{% endblock %}
