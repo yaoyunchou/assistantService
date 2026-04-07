@@ -1,6 +1,7 @@
 """
 定时任务 API：列表、新增、删除、触发、任务类型
 """
+import threading
 from flask import Blueprint, jsonify, request
 from api.routes.context import get_browser_pool
 from utils.logger import get_logger
@@ -23,10 +24,17 @@ def list_scheduler_jobs():
 
 @bp.route("/types", methods=["GET"])
 def list_task_types():
-    """列出可用的任务类型（type, name），用于新增任务时的下拉。"""
+    """列出可用的任务类型。?detail=1 时返回每个类型的字段 schema（用于新增表单动态渲染）。"""
     try:
-        from scheduler import get_task_types
+        from scheduler import get_task_types, get_task_type_schemas
         types = get_task_types()
+        detail = request.args.get("detail", "0")
+        if detail == "1":
+            schemas = get_task_type_schemas()
+            for t in types:
+                s = schemas.get(t["type"], {})
+                t["description"] = s.get("description", "")
+                t["fields"] = s.get("fields", [])
         return jsonify({"success": True, "types": types}), 200
     except Exception as e:
         routes_logger.error("列出任务类型异常: %s", e, exc_info=True)
@@ -78,23 +86,104 @@ def delete_scheduler_task(task_id):
 @bp.route("/trigger/<task_id>", methods=["POST"])
 def trigger_job(task_id):
     """
-    立即执行指定任务。执行方式 = 向该任务 type 对应的业务 API 发一条 HTTP 请求（与定时到点一致）。
-    见 docs/定时任务对接说明.md。
+    立即执行指定任务（异步）。
+
+    Flask 单线程模式下，任务 handler 会回调本机 API（如 sync-erp-orders），
+    若同步等待会造成死锁。因此将任务放到后台线程执行，本接口立即返回。
+    执行状态与结果通过 ``/tasks/<task_id>/status`` 和 ``/tasks/<task_id>/logs`` 查询。
     """
     routes_logger.info("收到立即执行请求: task_id=%s", task_id)
     try:
-        from scheduler import run_task_by_id
-        success, result_data, message = run_task_by_id(task_id)
-        if not success:
-            routes_logger.warning("立即执行失败: task_id=%s error=%s", task_id, message)
-            return jsonify({"success": False, "error": message}), 404 if "不存在" in message else 500
-        routes_logger.info("立即执行完成: task_id=%s message=%s", task_id, message)
+        from scheduler.task_config import get_task
+        task = get_task(task_id)
+        if not task:
+            return jsonify({"success": False, "error": "任务不存在"}), 404
+
+        from scheduler.manager import get_task_status
+        status = get_task_status(task_id)
+        if status.get("running"):
+            return jsonify({"success": False, "error": "任务正在执行中，请勿重复触发"}), 409
+
+        def _bg():
+            from scheduler import run_task_by_id
+            run_task_by_id(task_id)
+
+        t = threading.Thread(target=_bg, daemon=True, name=f"trigger-{task_id}")
+        t.start()
+
+        routes_logger.info("任务已提交后台执行: task_id=%s", task_id)
         return jsonify({
             "success": True,
             "job_id": task_id,
-            "filled_count": result_data if isinstance(result_data, int) else None,
-            "message": message,
-        }), 200
+            "message": "任务已提交执行，请通过状态接口查询结果",
+        }), 202
     except Exception as e:
         routes_logger.error("手动触发任务异常: task_id=%s error=%s", task_id, e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@bp.route("/tasks/<task_id>/pause", methods=["POST"])
+def pause_scheduler_task(task_id):
+    """暂停任务（停止定时触发，但保留配置）。"""
+    try:
+        from scheduler import pause_task
+        pause_task(task_id)
+        return jsonify({"success": True, "message": "已暂停"}), 200
+    except Exception as e:
+        routes_logger.error("暂停任务异常: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@bp.route("/tasks/<task_id>/resume", methods=["POST"])
+def resume_scheduler_task(task_id):
+    """恢复任务（重新注册到调度器）。"""
+    try:
+        from scheduler import resume_task
+        resume_task(task_id)
+        return jsonify({"success": True, "message": "已恢复"}), 200
+    except Exception as e:
+        routes_logger.error("恢复任务异常: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@bp.route("/tasks/<task_id>/status", methods=["GET"])
+def get_task_exec_status(task_id):
+    """获取任务执行状态（running、last_run、last_success、last_message）。"""
+    try:
+        from scheduler import get_task_status
+        status = get_task_status(task_id)
+        return jsonify({"success": True, "status": status}), 200
+    except Exception as e:
+        routes_logger.error("获取任务状态异常: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@bp.route("/tasks/<task_id>/logs", methods=["GET"])
+def get_task_logs(task_id):
+    """获取指定任务最近的执行日志行（内存缓存）。?n=50 控制返回行数。"""
+    try:
+        from scheduler import get_task_log_lines
+        n = request.args.get("n", 50, type=int)
+        lines = get_task_log_lines(task_id, last_n=min(n, 500))
+        return jsonify({"success": True, "lines": lines}), 200
+    except Exception as e:
+        routes_logger.error("获取任务日志异常: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@bp.route("/logs", methods=["GET"])
+def get_global_task_log():
+    """读取当天 task_*.log 文件最后 N 行。?n=100 控制行数。"""
+    try:
+        from utils.logger import get_task_log_path
+        n = request.args.get("n", 100, type=int)
+        log_path = get_task_log_path()
+        if not log_path.exists():
+            return jsonify({"success": True, "lines": [], "file": str(log_path)}), 200
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+        tail = [l.rstrip("\n\r") for l in all_lines[-min(n, 2000):]]
+        return jsonify({"success": True, "lines": tail, "file": str(log_path)}), 200
+    except Exception as e:
+        routes_logger.error("读取任务日志文件异常: %s", e, exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500

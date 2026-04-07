@@ -7,7 +7,7 @@
 ; (若要生成新的 GUID，可在菜单中选择 "工具" -> "生成 GUID")
 AppId={{2024AABB-CCDD-EEFF-0123-456789ABCDEE}}
 AppName=如意助手
-AppVersion=1.0.4
+AppVersion=2.0.0
 AppPublisher=如意助手
 AppPublisherURL=
 AppSupportURL=
@@ -22,7 +22,7 @@ Compression=lzma2/ultra
 SolidCompression=yes
 ; 输出目录和文件名
 OutputDir=.
-OutputBaseFilename=如意助手_Setup_v1.0.4
+OutputBaseFilename=如意助手_Setup_v2.0.0
 ; 需要管理员权限（用于安装到 Program Files）
 PrivilegesRequired=admin
 ; 安装程序图标（可选，如果有的话）

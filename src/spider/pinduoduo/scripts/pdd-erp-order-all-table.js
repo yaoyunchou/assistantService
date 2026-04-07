@@ -16,7 +16,7 @@
  *
  * **飞书多维表格**：`rows` 与 `syncBody.rows` 为与下述字段名完全一致的对象（无则空字符串 `''`），便于 Upsert / 写入接口直接使用：
  * 平台订单号、店铺、系统订单号、是否打印快递单、是否打印发货单、是否打印备货单、提醒、收件人、收件电话、收件省、收件市、收件区、收件详细地址、
- * ERP标签、ERP备注、标记、买家备注、卖家备注、付款时间、审核时间、发货时间、商品信息、商品快照、快递公司、快递单号、快递模板、订单状态、是否有售后、
+ * ERP标签、ERP备注、标记、买家备注、卖家备注、发货剩余、付款时间、审核时间、发货时间、商品信息、商品快照、快递公司、快递单号、快递模板、订单状态、是否有售后、
  * 重量、体积、商品种类、商品总数、商品金额、运费、店铺优惠金额、平台优惠金额、实收金额、验货状态、称重状态、审核人、打印人、发货人。
  * 另可设 `window.__PDD_ERP_ORDER_ALL_INCLUDE_LEGACY === true` 时附带 `rowsLegacy`（含 `byHeader` 等调试字段）。
  *
@@ -33,6 +33,9 @@
  * - `window.__PDD_ERP_REMINDER_TD_NTH`：从 1 开始，默认 `2`；设为 `0` 关闭该兜底。
  *
  * **商品快照**（飞书文本列）：从「商品信息」列 `td` 内收集 `img` 的 `src` / `data-src` 等、CSS `background url()`、`srcset` 首地址及 `alt`，空格拼接；写入前会去掉 URL 的 **`?` 查询串与 `#` 片段**（如 `...jpeg?imageView2/2/w/32/q/85` → `...jpeg`）。`__PDD_ERP_PRODUCT_SNAPSHOT_MAX_LEN` 默认 2000。
+ *
+ * **发货剩余 / 付款时间**：表头「发货剩余/支付时间」整格拆成飞书 **`发货剩余`**（文本）与 **`付款时间`**（`yyyy/MM/dd HH:mm`）；按行关键词与是否含日期启发式拆分。
+ * 支持短日期 `MM-dd HH:mm 支付` 格式（如 `"- - 04-06 09:11 支付"`），自动补当前年份。
  */
 (async function () {
   const today = new Date().toISOString().slice(0, 10);
@@ -64,6 +67,7 @@
     '标记',
     '买家备注',
     '卖家备注',
+    '发货剩余',
     '付款时间',
     '审核时间',
     '发货时间',
@@ -472,22 +476,155 @@
     return String(Math.round(n));
   }
 
-  /** 付款时间等：尽量输出 yyyy/MM/dd HH:mm */
+  /** 是否含 yyyy-(m)m-(d)d 或中文年月日 / `.` 分隔日期 */
+  function lineHasCalendarDate(line) {
+    const s = String(line || '');
+    return (
+      /(\d{4})\s*[年\/.\-]\s*\d{1,2}\s*[月\/.\-]\s*\d{1,2}/.test(s) ||
+      /\b\d{4}-\d{1,2}-\d{1,2}\b/.test(s)
+    );
+  }
+
+  /** 是否含短日期 MM-dd HH:mm（无年份，常见于 ERP 发货剩余列的支付时间） */
+  function lineHasShortDateTime(line) {
+    return /(?:^|[^\d])(\d{1,2})\s*[-\/]\s*(\d{1,2})\s+(\d{1,2}):(\d{2})/.test(String(line || ''));
+  }
+
+  /**
+   * 「发货剩余/支付时间」单列内拆成：发货剩余文案 + 供 formatFeishuDateTime 解析的支付相关串。
+   */
+  function parseShipRemainAndPayTime(raw) {
+    const t = String(raw || '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .trim();
+    if (!t) {
+      return { remain: '', payForFormat: '' };
+    }
+
+    const lines = t
+      .split('\n')
+      .map(function (l) {
+        return l.replace(/\s+/g, ' ').trim();
+      })
+      .filter(Boolean);
+
+    if (!lines.length) {
+      return { remain: '', payForFormat: '' };
+    }
+
+    var splitLines = [];
+    for (var si = 0; si < lines.length; si++) {
+      var spm = lines[si].match(/(\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}\s*支付)/);
+      if (spm && spm.index > 0) {
+        var bef = lines[si].slice(0, spm.index).trim();
+        if (bef) splitLines.push(bef);
+        splitLines.push(spm[1].trim());
+        var aft = lines[si].slice(spm.index + spm[0].length).trim();
+        if (aft) splitLines.push(aft);
+      } else {
+        splitLines.push(lines[si]);
+      }
+    }
+
+    const payLines = [];
+    const remainLines = [];
+
+    for (let i = 0; i < splitLines.length; i++) {
+      const L = splitLines[i];
+      const d = lineHasCalendarDate(L);
+      if (/支付\s*时间|付款\s*时间|支付[:：]|付款[:：]|买家\s*付|已\s*支付/.test(L)) {
+        payLines.push(L);
+      } else if (/发货\s*剩余|距\s*发\s*货|剩余\s*时间|超时未发|倒\s*计\s*时|发\s*货\s*剩/.test(L)) {
+        remainLines.push(L);
+      } else if (d) {
+        payLines.push(L);
+      } else if (/支付/.test(L) && /\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}/.test(L)) {
+        payLines.push(L);
+      } else {
+        remainLines.push(L);
+      }
+    }
+
+    if (payLines.length === 0) {
+      let di = -1;
+      for (let j = 0; j < splitLines.length; j++) {
+        if (lineHasCalendarDate(splitLines[j])) {
+          di = j;
+          break;
+        }
+      }
+      if (di >= 0) {
+        payLines.push(splitLines[di]);
+        for (let k = 0; k < splitLines.length; k++) {
+          if (k !== di) {
+            remainLines.push(splitLines[k]);
+          }
+        }
+      }
+    }
+
+    if (payLines.length === 0) {
+      return { remain: t.slice(0, 500), payForFormat: '' };
+    }
+
+    const payJoined = payLines.join(' ');
+    let remainJoined = remainLines.join(' | ');
+
+    if (!remainJoined && splitLines.length === 2) {
+      const other = splitLines[0] === payLines[0] ? splitLines[1] : splitLines[0];
+      if (!lineHasCalendarDate(other)) {
+        remainJoined = other;
+      }
+    }
+
+    let cleanRemain = remainJoined.replace(/^[\s\-\|]+$/, '').trim();
+    return {
+      remain: cleanRemain.slice(0, 500),
+      payForFormat: payJoined,
+    };
+  }
+
+  /** 付款时间等：尽量输出 yyyy/MM/dd HH:mm（支持 `.` 分隔、可选秒） */
   function formatFeishuDateTime(input) {
     const s = String(input || '').trim();
-    if (!s) return '';
-    let m = s.match(/(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})[日\s]*(\d{1,2}):(\d{2})/);
+    if (!s) {
+      return '';
+    }
+    let m = s.match(
+      /(\d{4})\s*[年\/.\-]\s*(\d{1,2})\s*[月\/.\-]\s*(\d{1,2})(?:日)?\s*(?:[Tt\s]+(\d{1,2}):(\d{2})(?::\d{2})?)?/
+    );
     if (m) {
       const y = m[1];
       const mo = ('0' + m[2]).slice(-2);
       const d = ('0' + m[3]).slice(-2);
-      const h = ('0' + m[4]).slice(-2);
-      const mi = m[5];
-      return y + '/' + mo + '/' + d + ' ' + h + ':' + mi;
+      if (m[4] != null && m[4] !== '' && m[5] != null) {
+        const h = ('0' + m[4]).slice(-2);
+        const mi = ('0' + m[5]).slice(-2);
+        return y + '/' + mo + '/' + d + ' ' + h + ':' + mi;
+      }
+      return y + '/' + mo + '/' + d + ' 00:00';
     }
-    m = s.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+    m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s]+(\d{1,2}):(\d{2})(?::\d{2})?)?/);
     if (m) {
-      return m[1] + '/' + ('0' + m[2]).slice(-2) + '/' + ('0' + m[3]).slice(-2) + ' 00:00';
+      const y = m[1];
+      const mo = ('0' + m[2]).slice(-2);
+      const d = ('0' + m[3]).slice(-2);
+      if (m[4] != null && m[5] != null) {
+        const h = ('0' + m[4]).slice(-2);
+        const mi = ('0' + m[5]).slice(-2);
+        return y + '/' + mo + '/' + d + ' ' + h + ':' + mi;
+      }
+      return y + '/' + mo + '/' + d + ' 00:00';
+    }
+    m = s.match(/(?:^|[^\d])(\d{1,2})\s*[-\/]\s*(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+    if (m) {
+      const y = String(new Date().getFullYear());
+      const mo = ('0' + m[1]).slice(-2);
+      const d = ('0' + m[2]).slice(-2);
+      const h = ('0' + m[3]).slice(-2);
+      const mi = ('0' + m[4]).slice(-2);
+      return y + '/' + mo + '/' + d + ' ' + h + ':' + mi;
     }
     return s.slice(0, 32);
   }
@@ -804,8 +941,11 @@
     row['买家备注'] = col.remarkBuyer >= 0 ? getCellText(tr, col.remarkBuyer).slice(0, 500) : '';
     row['卖家备注'] = '';
 
-    row['付款时间'] =
-      col.payOrRemain >= 0 ? formatFeishuDateTime(getCellText(tr, col.payOrRemain)) : '';
+    const payOrRemainRaw = col.payOrRemain >= 0 ? getCellText(tr, col.payOrRemain) : '';
+    const shipPay = parseShipRemainAndPayTime(payOrRemainRaw);
+    row['发货剩余'] = shipPay.remain;
+    row['付款时间'] = formatFeishuDateTime(shipPay.payForFormat);
+
     row['审核时间'] = '';
     row['发货时间'] = '';
 

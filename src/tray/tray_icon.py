@@ -71,8 +71,10 @@ class TrayIcon:
                 except Exception as e:
                     print(f"[TrayIcon] 无法加载配置的图标文件 {config_path}: {e}")
         
-        # 尝试从多个可能的位置加载图标（优先使用logo_default.jpg）
+        # 尝试从多个可能的位置加载图标
         possible_paths = [
+            Path(__file__).parent.parent / 'static' / 'images' / 'log_default.png',
+            Path(__file__).parent.parent.parent / 'static' / 'images' / 'log_default.png',
             Path(__file__).parent.parent / 'static' / 'images' / 'logo_default.jpg',
             Path(__file__).parent.parent.parent / 'static' / 'images' / 'logo_default.jpg',
             Path(__file__).parent.parent / 'static' / 'images' / 'icon.png',

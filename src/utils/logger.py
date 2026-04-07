@@ -1,6 +1,10 @@
 """
 日志工具模块
 支持按天生成独立的日志文件
+
+日志文件：
+  - app_YYYY-MM-DD.log  — 应用全局日志（页面、路由、启动等）
+  - task_YYYY-MM-DD.log — 定时任务执行日志（独立，不混入 app 日志）
 """
 import logging
 import os
@@ -224,3 +228,77 @@ def get_default_logger() -> logging.Logger:
     if _default_logger is None:
         _default_logger = setup_logger()
     return _default_logger
+
+
+# ---------------------------------------------------------------------------
+# 任务执行专用日志器：写入独立的 task_YYYY-MM-DD.log，不混入 app 日志
+# ---------------------------------------------------------------------------
+_task_logger_initialized = False
+
+
+def get_task_logger(name: str = "TaskExec") -> logging.Logger:
+    """
+    获取任务执行专用日志器。
+
+    该 logger 写入 ``task_YYYY-MM-DD.log``（与 ``app_*.log`` 同目录），
+    同时输出到控制台。**不会** propagate 到根 logger，因此不会写入 app 日志文件。
+
+    Args:
+        name: logger 名称，默认 ``TaskExec``
+
+    Returns:
+        配置好的任务日志器
+    """
+    global _task_logger_initialized
+
+    task_log = logging.getLogger(name)
+    if _task_logger_initialized:
+        return task_log
+
+    task_log.propagate = False
+    task_log.setLevel(logging.DEBUG)
+
+    if task_log.handlers:
+        return task_log
+
+    # 确定日志目录（与 app 日志共用同一目录）
+    current_file = Path(__file__)
+    project_root = current_file.parent.parent.parent
+    default_log_dir = project_root / "logs"
+    log_dir = _get_safe_log_dir(default_log_dir)
+
+    log_filename = log_dir / f"task_{datetime.now().strftime('%Y-%m-%d')}.log"
+
+    file_handler = DailyRotatingFileHandler(
+        filename=str(log_filename),
+        when="midnight",
+        interval=1,
+        backupCount=0,
+        encoding="utf-8",
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_formatter = logging.Formatter(
+        "[%(asctime)s] [%(levelname)-8s] [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    file_handler.setFormatter(file_formatter)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter("[%(name)s] %(message)s")
+    console_handler.setFormatter(console_formatter)
+
+    task_log.addHandler(file_handler)
+    task_log.addHandler(console_handler)
+
+    _task_logger_initialized = True
+    return task_log
+
+
+def get_task_log_path() -> Path:
+    """返回当天任务日志文件路径（供 API 读取）。"""
+    current_file = Path(__file__)
+    project_root = current_file.parent.parent.parent
+    default_log_dir = project_root / "logs"
+    log_dir = _get_safe_log_dir(default_log_dir)
+    return log_dir / f"task_{datetime.now().strftime('%Y-%m-%d')}.log"

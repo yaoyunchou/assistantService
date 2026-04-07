@@ -1,0 +1,337 @@
+{% extends "base.html" %}
+
+{% block title %}新建定时任务 - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.page-header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+.page-header h2 { margin: 0; font-size: 22px; color: #2c3e50; }
+.back-link { color: #3498db; text-decoration: none; font-size: 14px; display: inline-flex; align-items: center; gap: 4px; }
+.back-link:hover { text-decoration: underline; }
+
+.card { background: white; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 24px; }
+.section-title { font-size: 15px; font-weight: 600; color: #2c3e50; margin: 0 0 16px 0; padding-bottom: 8px; border-bottom: 1px solid #eee; }
+
+.form-group { margin-bottom: 18px; }
+.form-group label { display: block; margin-bottom: 6px; font-weight: 500; color: #495057; font-size: 14px; }
+.form-group .hint { font-size: 12px; color: #999; margin-top: 4px; }
+.form-group input[type="text"],
+.form-group input[type="number"],
+.form-group select { width: 100%; max-width: 500px; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; transition: border-color 0.2s; box-sizing: border-box; }
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: #3498db; outline: none; box-shadow: 0 0 0 2px rgba(52,152,219,0.15); }
+.form-group textarea { width: 100%; max-width: 500px; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; font-family: 'Consolas','Monaco',monospace; min-height: 60px; resize: vertical; box-sizing: border-box; }
+.form-group textarea.code-editor { min-height: 160px; line-height: 1.5; background: #fafafa; }
+
+/* 任务类型选择卡片 */
+.type-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 8px; }
+.type-card { border: 2px solid #e8e8e8; border-radius: 10px; padding: 16px; cursor: pointer; transition: all 0.2s; background: white; }
+.type-card:hover { border-color: #aaa; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.type-card.selected { border-color: #3498db; background: #f0f7ff; }
+.type-card .type-name { font-size: 15px; font-weight: 600; color: #2c3e50; margin-bottom: 4px; }
+.type-card .type-desc { font-size: 12px; color: #888; line-height: 1.4; }
+.type-card .type-icon { font-size: 24px; margin-bottom: 8px; }
+
+/* Cron 快捷选择 */
+.cron-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.cron-preset { padding: 4px 12px; border: 1px solid #ddd; border-radius: 16px; font-size: 12px; cursor: pointer; background: #f8f9fa; color: #555; transition: all 0.2s; }
+.cron-preset:hover { background: #e9ecef; border-color: #bbb; }
+.cron-preset.active { background: #3498db; color: white; border-color: #3498db; }
+.cron-preview { display: inline-block; margin-top: 6px; padding: 4px 10px; background: #eaf7ea; color: #27ae60; border-radius: 4px; font-size: 13px; }
+
+/* 动态字段区 */
+.dynamic-fields { background: #f8f9fa; border-radius: 8px; padding: 20px; margin-top: 16px; }
+.dynamic-fields.hidden { display: none; }
+.dynamic-fields .section-title { margin-top: 0; }
+
+.btn { padding: 10px 24px; border: none; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+.btn-primary { background: #3498db; color: white; }
+.btn-primary:hover { background: #2980b9; }
+.btn-secondary { background: #95a5a6; color: white; }
+.btn-secondary:hover { background: #7f8c8d; }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-lg { padding: 12px 36px; font-size: 15px; }
+
+.form-actions { display: flex; gap: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid #eee; }
+
+.result-msg { padding: 12px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
+.result-msg.success { background: #d4edda; color: #155724; }
+.result-msg.error { background: #f8d7da; color: #721c24; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <a href="/scheduler" class="back-link">&larr; 返回任务列表</a>
+    <h2>新建定时任务</h2>
+</div>
+
+<div class="card">
+    <h3 class="section-title">基本信息</h3>
+    <div class="form-group">
+        <label>任务名称 <span style="color:#e74c3c;">*</span></label>
+        <input type="text" id="taskName" placeholder="例如：每日数据同步" maxlength="80" />
+    </div>
+    <div class="form-group">
+        <label>定时规则 (Cron)</label>
+        <div class="cron-presets" id="cronPresets">
+            <span class="cron-preset" data-cron="*/5 * * * *">每 5 分钟</span>
+            <span class="cron-preset" data-cron="*/15 * * * *">每 15 分钟</span>
+            <span class="cron-preset" data-cron="*/30 * * * *">每 30 分钟</span>
+            <span class="cron-preset active" data-cron="0 * * * *">每小时整点</span>
+            <span class="cron-preset" data-cron="0 */2 * * *">每 2 小时</span>
+            <span class="cron-preset" data-cron="0 9 * * *">每天 09:00</span>
+            <span class="cron-preset" data-cron="0 12 * * *">每天 12:00</span>
+            <span class="cron-preset" data-cron="0 9,18 * * *">每天 9:00/18:00</span>
+            <span class="cron-preset" data-cron="0 0 * * *">每天 00:00</span>
+            <span class="cron-preset" data-cron="0 9 * * 1">每周一 09:00</span>
+        </div>
+        <input type="text" id="taskCron" value="0 * * * *" placeholder="分 时 日 月 周" style="max-width:300px;font-family:monospace;" />
+        <div class="hint">格式: 分 时 日 月 周 &nbsp;|&nbsp; * 表示任意 &nbsp;|&nbsp; 逗号分隔多值如 <code>9,18</code></div>
+        <div class="cron-preview" id="cronPreview">每天 每小时整点</div>
+    </div>
+</div>
+
+<div class="card">
+    <h3 class="section-title">选择任务类型 <span style="color:#e74c3c;">*</span></h3>
+    <div class="type-grid" id="typeGrid">
+        <div style="color:#999;padding:20px;">加载中…</div>
+    </div>
+</div>
+
+<div class="dynamic-fields hidden" id="dynamicFields">
+    <div class="card">
+        <h3 class="section-title" id="dynamicTitle">任务参数</h3>
+        <div id="dynamicBody"></div>
+    </div>
+</div>
+
+<div class="form-actions">
+    <button class="btn btn-primary btn-lg" id="btnSubmit" disabled>创建任务</button>
+    <a href="/scheduler" class="btn btn-secondary btn-lg" style="text-decoration:none;">取消</a>
+</div>
+<div id="resultArea"></div>
+
+<script>
+(function() {
+    var typeGrid = document.getElementById('typeGrid');
+    var dynamicFields = document.getElementById('dynamicFields');
+    var dynamicTitle = document.getElementById('dynamicTitle');
+    var dynamicBody = document.getElementById('dynamicBody');
+    var cronInput = document.getElementById('taskCron');
+    var cronPreview = document.getElementById('cronPreview');
+    var cronPresets = document.getElementById('cronPresets');
+    var nameInput = document.getElementById('taskName');
+    var btnSubmit = document.getElementById('btnSubmit');
+    var resultArea = document.getElementById('resultArea');
+
+    var allTypes = [];
+    var selectedType = null;
+
+    var typeIcons = {
+        http_request: '🌐',
+        python_script: '🐍',
+        order_1688_fill_detail: '📦',
+        pdd_erp_order_sync: '📋',
+    };
+
+    function esc(s) { return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+    function cronDesc(cron) {
+        if (!cron) return '';
+        var p = cron.trim().split(/\s+/);
+        if (p.length < 5) return cron;
+        var min = p[0], hr = p[1], dom = p[2], mon = p[3], dow = p[4];
+        var parts = [];
+        if (mon !== '*') parts.push(mon + '月');
+        if (dow !== '*') {
+            var days = {'0':'日','1':'一','2':'二','3':'三','4':'四','5':'五','6':'六','7':'日'};
+            var ds = dow.split(',').map(function(d){ return '周' + (days[d] || d); }).join('/');
+            parts.push(ds);
+        }
+        if (dom !== '*') parts.push(dom + '日');
+        if (hr === '*' && min === '0') parts.push('每小时整点');
+        else if (hr === '*' && /^\*\/\d+$/.test(min)) parts.push('每 ' + min.replace('*/', '') + ' 分钟');
+        else if (hr === '*') parts.push('每小时第' + min + '分');
+        else {
+            var hrs = hr.split(',');
+            if (/^\*\/\d+$/.test(hr)) {
+                parts.push('每 ' + hr.replace('*/', '') + ' 小时 第' + min + '分');
+            } else {
+                var times = hrs.map(function(h){
+                    return h.padStart(2,'0') + ':' + min.padStart(2,'0');
+                }).join('、');
+                parts.push(times);
+            }
+        }
+        if (dom === '*' && mon === '*' && dow === '*') parts.unshift('每天');
+        return parts.join(' ');
+    }
+
+    function updateCronPreview() {
+        var val = cronInput.value.trim();
+        var desc = cronDesc(val);
+        cronPreview.textContent = desc || val;
+        // highlight matching preset
+        var presetEls = cronPresets.querySelectorAll('.cron-preset');
+        for (var i = 0; i < presetEls.length; i++) {
+            presetEls[i].classList.toggle('active', presetEls[i].getAttribute('data-cron') === val);
+        }
+    }
+
+    cronInput.addEventListener('input', updateCronPreview);
+
+    cronPresets.addEventListener('click', function(e) {
+        var el = e.target.closest('.cron-preset');
+        if (!el) return;
+        cronInput.value = el.getAttribute('data-cron');
+        updateCronPreview();
+    });
+
+    function checkReady() {
+        btnSubmit.disabled = !(nameInput.value.trim() && selectedType);
+    }
+    nameInput.addEventListener('input', checkReady);
+
+    function selectType(typeKey) {
+        selectedType = typeKey;
+        var cards = typeGrid.querySelectorAll('.type-card');
+        for (var i = 0; i < cards.length; i++) {
+            cards[i].classList.toggle('selected', cards[i].getAttribute('data-type') === typeKey);
+        }
+        var info = null;
+        for (var j = 0; j < allTypes.length; j++) {
+            if (allTypes[j].type === typeKey) { info = allTypes[j]; break; }
+        }
+        renderDynamicFields(info);
+        checkReady();
+    }
+
+    function renderDynamicFields(info) {
+        if (!info || !info.fields || !info.fields.length) {
+            dynamicFields.classList.add('hidden');
+            dynamicBody.innerHTML = '';
+            return;
+        }
+        dynamicFields.classList.remove('hidden');
+        dynamicTitle.textContent = (info.name || '任务') + ' - 参数配置';
+        var html = '';
+        info.fields.forEach(function(f) {
+            html += '<div class="form-group">';
+            html += '<label>' + esc(f.label || f.key);
+            if (f.required) html += ' <span style="color:#e74c3c;">*</span>';
+            html += '</label>';
+            if (f.type === 'select') {
+                html += '<select data-field="' + esc(f.key) + '">';
+                (f.options || []).forEach(function(opt) {
+                    var sel = (opt === (f.default || f.options[0])) ? ' selected' : '';
+                    html += '<option value="' + esc(opt) + '"' + sel + '>' + esc(opt) + '</option>';
+                });
+                html += '</select>';
+            } else if (f.type === 'json') {
+                html += '<textarea data-field="' + esc(f.key) + '" placeholder="' + esc(f.placeholder || '{}') + '">' + esc(f.default || '') + '</textarea>';
+            } else if (f.type === 'code') {
+                html += '<textarea class="code-editor" data-field="' + esc(f.key) + '" placeholder="' + esc(f.placeholder || '') + '">' + esc(f.default || '') + '</textarea>';
+            } else if (f.type === 'number') {
+                var minAttr = f.min !== undefined ? ' min="' + f.min + '"' : '';
+                var maxAttr = f.max !== undefined ? ' max="' + f.max + '"' : '';
+                html += '<input type="number" data-field="' + esc(f.key) + '" value="' + esc(String(f.default || '')) + '" placeholder="' + esc(f.placeholder || '') + '"' + minAttr + maxAttr + ' style="max-width:200px;" />';
+            } else {
+                html += '<input type="text" data-field="' + esc(f.key) + '" value="' + esc(f.default || '') + '" placeholder="' + esc(f.placeholder || '') + '" />';
+            }
+            html += '</div>';
+        });
+        dynamicBody.innerHTML = html;
+    }
+
+    function loadTypes() {
+        fetch('/api/scheduler/types?detail=1')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.success || !data.types) {
+                    typeGrid.innerHTML = '<div style="color:#e74c3c;">加载失败</div>';
+                    return;
+                }
+                allTypes = data.types;
+                typeGrid.innerHTML = allTypes.map(function(t) {
+                    var icon = typeIcons[t.type] || '🔧';
+                    return '<div class="type-card" data-type="' + esc(t.type) + '" onclick="window._selectType(\'' + esc(t.type) + '\')">'
+                        + '<div class="type-icon">' + icon + '</div>'
+                        + '<div class="type-name">' + esc(t.name || t.type) + '</div>'
+                        + '<div class="type-desc">' + esc(t.description || '') + '</div>'
+                        + '</div>';
+                }).join('');
+            })
+            .catch(function(e) {
+                typeGrid.innerHTML = '<div style="color:#e74c3c;">加载失败: ' + esc(e.message) + '</div>';
+            });
+    }
+    window._selectType = function(typeKey) { selectType(typeKey); };
+
+    function collectData() {
+        var data = {};
+        var els = dynamicBody.querySelectorAll('[data-field]');
+        for (var i = 0; i < els.length; i++) {
+            var key = els[i].getAttribute('data-field');
+            var val = (els[i].value || '').trim();
+            if (!val) continue;
+            var fieldInfo = null;
+            for (var j = 0; j < allTypes.length; j++) {
+                if (allTypes[j].type === selectedType) {
+                    (allTypes[j].fields || []).forEach(function(f) { if (f.key === key) fieldInfo = f; });
+                }
+            }
+            if (fieldInfo && fieldInfo.type === 'json') {
+                try { data[key] = JSON.parse(val); } catch(e) { data[key] = val; }
+            } else if (fieldInfo && fieldInfo.type === 'number') {
+                data[key] = parseFloat(val) || val;
+            } else {
+                data[key] = val;
+            }
+        }
+        return data;
+    }
+
+    btnSubmit.addEventListener('click', function() {
+        var name = nameInput.value.trim();
+        if (!name) { showResult('请填写任务名称', 'error'); return; }
+        if (!selectedType) { showResult('请选择任务类型', 'error'); return; }
+        var cron = cronInput.value.trim() || '0 * * * *';
+        var data = collectData();
+
+        btnSubmit.disabled = true;
+        btnSubmit.textContent = '创建中…';
+        fetch('/api/scheduler/tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, type: selectedType, data: data, cron: cron })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(res) {
+            btnSubmit.disabled = false;
+            btnSubmit.textContent = '创建任务';
+            if (res.success) {
+                showResult('任务创建成功！正在返回任务列表…', 'success');
+                setTimeout(function() { window.location.href = '/scheduler'; }, 1200);
+            } else {
+                showResult('创建失败：' + (res.error || '未知错误'), 'error');
+            }
+        })
+        .catch(function(e) {
+            btnSubmit.disabled = false;
+            btnSubmit.textContent = '创建任务';
+            showResult('请求失败：' + e.message, 'error');
+        });
+    });
+
+    function showResult(text, type) {
+        resultArea.innerHTML = '<div class="result-msg ' + (type || 'info') + '">' + esc(text) + '</div>';
+        if (type !== 'success') {
+            setTimeout(function() { resultArea.innerHTML = ''; }, 6000);
+        }
+    }
+
+    loadTypes();
+    updateCronPreview();
+})();
+</script>
+{% endblock %}

@@ -149,3 +149,15 @@ def remove_task(task_id: str) -> bool:
     _save_raw(raw)
     logger.info("删除定时任务: id=%s", task_id)
     return True
+
+
+def update_task_field(task_id: str, field: str, value: Any) -> bool:
+    """更新指定任务的某个字段（如 enabled）。"""
+    raw = _load_raw()
+    for t in raw.get("tasks", []):
+        if t.get("id") == task_id:
+            t[field] = value
+            _save_raw(raw)
+            logger.info("更新任务字段: id=%s %s=%s", task_id, field, value)
+            return True
+    return False

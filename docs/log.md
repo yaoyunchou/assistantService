@@ -1,5 +1,181 @@
 # 变更日志
 
+## 2026-04-07 - 修复：定时任务手动触发死锁
+
+- **问题**：Flask 使用 `threaded=False` 单线程模式，点击"立即执行"时，`/api/scheduler/trigger/` 路由同步调用 `run_task_by_id()`，任务内部又 `requests.post()` 回调本机 Flask API（如 `/api/pinduoduo/sync-erp-orders`），形成死锁——Flask 被第一个请求占用，无法处理第二个请求。
+- **修复**：将 `trigger_job` 端点改为异步执行——任务放到后台线程 `threading.Thread`，接口立即返回 `202 Accepted`。增加防重复触发检查（任务正在执行时返回 `409 Conflict`）。
+- **前端适配**：`scheduler.html` 中 `triggerTask` 函数适配异步流程，提交后自动启动轮询（每 3 秒查询 `/tasks/<id>/status`），任务完成后自动显示执行结果并刷新列表。
+- **涉及文件**：`src/api/routes/scheduler_routes.py`、`src/web/templates/scheduler.html`。
+
+---
+
+## 2026-04-07 - 单实例互斥锁：防止软件重复打开
+
+- **问题**：多次点击 exe 会打开多个实例，端口冲突、资源浪费。
+- **新增**：`src/utils/single_instance.py`，使用 Windows 命名 Mutex（`CreateMutexW`）实现进程级单实例锁。
+  - 第一个实例正常启动并持有 Mutex。
+  - 第二个实例检测到 Mutex 已存在后，通过 `FindWindowW` 找到已有窗口，`ShowWindow` + `SetForegroundWindow` 将其激活到前台，然后自身退出。
+- **集成**：在 `main.py` 的 `main()` 最开头调用 `ensure_single_instance(Config.WINDOW_TITLE)`，所有后续逻辑之前完成检查。
+- **涉及文件**：`src/utils/single_instance.py`（新增）、`src/main.py`。
+
+---
+
+## 2026-04-07 - 通用渠道 Webhook 通知（成功/警告/失败）+ ERP 订单同步运行报告
+
+- **问题**：`erp_order_sync.py` 仅在登录拦截时通过 Webhook 发送飞书通知，同步成功后不发送任何消息。
+- **新增通用函数**：在 `tools/feishu/webhook/qudao_notify.py` 中新增四个通知函数，各业务模块按语义一行调用：
+  - `send_channel_notification(channel, *, title, description, header_template, ...)` — 基础通用入口，可自定义颜色。
+  - `send_success(channel, *, title, description, ...)` — 成功通知，绿色卡片，标题自动加 ✅。
+  - `send_warning(channel, *, title, description, ...)` — 警告通知，橙色卡片，标题自动加 ⚠️。
+  - `send_error(channel, *, title, description, ...)` — 失败通知，红色卡片，标题自动加 ❌。
+- **ERP 同步报告**：`erp_order_sync.py` 在飞书表写入完成后，成功调 `send_success`、部分失败调 `send_warning`。
+- **涉及文件**：`src/tools/feishu/webhook/qudao_notify.py`、`src/spider/pinduoduo/erp_order_sync.py`。
+
+---
+
+## 2026-04-07 - 修复：开发模式下定时任务不运行
+
+- **问题**：`dev.py`（开发模式入口）没有调用 `start_scheduler()`，导致定时任务（如拼多多 ERP 订单同步 12:00/18:00）在开发模式下完全不执行。只有 `main.py`（生产模式）才会启动调度器。
+- **修复**：在 `dev.py` 中添加调度器启动逻辑。由于开发模式启用了 `use_reloader=True`（Flask 热重载会启动两个进程），仅在子进程（`WERKZEUG_RUN_MAIN='true'`）中启动调度器，避免重复执行。退出时同步调用 `shutdown_scheduler()` 清理。
+- **涉及文件**：`src/dev.py`。
+
+---
+
+## 2026-04-07 - 自动化构建脚本 + 版本号统一管理
+
+- **`build.py`（新增）**：自动化构建脚本，以 `config.py` 的 `APP_VERSION` 为唯一版本来源，构建时自动同步到 `setup.iss`，然后依次执行 PyInstaller 打包和（可选）Inno Setup 安装包编译。
+  - `python build.py` — 同步版本 + PyInstaller 打包
+  - `python build.py --installer` — 同步版本 + PyInstaller + Inno Setup 安装包
+  - `python build.py --sync-only` — 只同步版本号到 setup.iss
+  - `python build.py --version` — 查看当前版本号
+- **`build.bat`（新增）**：Windows 双击构建脚本，自动激活 `.venv` 虚拟环境并调用 `build.py`。
+  - 双击 / `build.bat` — 完整构建（PyInstaller + Inno Setup）
+  - `build.bat --no-inst` — 仅 PyInstaller 打包
+  - `build.bat --version` — 查看版本号
+- **`setup.iss`**：版本从 `1.0.4` 更新为 `2.0.0`，与 `config.py` 保持一致；后续由 `build.py` 自动维护，无需手动修改。
+- **涉及文件**：`build.py`（新增）、`build.bat`（新增）、`setup.iss`。
+
+---
+
+## 2026-04-07 - 开发/生产环境端口区分
+
+- **端口区分**：开发模式 (`dev.py`) 默认端口 `8886`，生产模式 (`main.py`) 默认端口 `8887`，互不冲突，可同时运行。
+- **环境标识**：`Config.APP_ENV` 标记当前环境（`development` / `production`）；`dev.py` 启动时自动设置。
+- **页面区分**：开发环境下浏览器标签页标题追加 `[DEV:8886]`，侧栏版本号旁显示橙色 `DEV` 徽章，一眼区分。
+- **环境变量**：可通过 `PORT`、`DEV_PORT`、`APP_ENV` 环境变量覆盖默认值。
+- **涉及文件**：`config.py`、`dev.py`、`base.html`。
+
+---
+
+## 2026-04-07 - 定时任务扩展：新增 HTTP 请求 / Python 脚本类型 + 新建任务独立页面
+
+### 新增任务类型
+
+- **HTTP 定时请求**（`http_request`）：通用 HTTP 定时调用，支持 GET/POST/PUT/DELETE，可配置 URL、请求头、请求体、超时时间。适用于调用任意 API、Webhook 等场景。
+- **Python 脚本**（`python_script`）：定时执行 Python 脚本，支持内联代码或指定脚本文件路径，可配置超时时间。脚本在独立子进程中执行，stdout/stderr 均捕获到日志。
+
+### 页面重构
+
+- **任务列表页** `/scheduler`：移除内嵌新增表单，顶部改为「+ 新建任务」按钮跳转至独立页面，列表页更简洁。
+- **新建任务页** `/scheduler/add`（新增）：
+  - 任务类型以卡片网格展示，每种类型显示图标、名称、描述。
+  - Cron 定时规则提供 10 种常用预设（每 5 分钟、每小时整点、每天 09:00 等），点击即填入，并实时预览中文描述。
+  - 选择类型后，下方动态渲染该类型的参数表单（字段、类型、必填、默认值、placeholder 均由后端 schema 驱动）。
+  - 支持 text / number / select / json / code 五种字段渲染。
+
+### 后端变更
+
+- `scheduler/manager.py`：新增 `_run_http_request`、`_run_python_script` handler；新增 `get_task_type_schemas()` 返回每种类型的表单字段 schema。
+- `api/routes/scheduler_routes.py`：`GET /api/scheduler/types?detail=1` 返回带 `fields` 和 `description` 的完整类型信息。
+- `web/routes.py`：新增 `/scheduler/add` 页面路由。
+- `base.html`：侧栏「定时任务」在新建页面也高亮。
+
+### 涉及文件
+
+- `src/scheduler/manager.py` — 新增 handler + schema
+- `src/scheduler/__init__.py` — 导出 `get_task_type_schemas`
+- `src/api/routes/scheduler_routes.py` — types API 增强
+- `src/web/routes.py` — 新增 /scheduler/add 路由
+- `src/web/templates/base.html` — 侧栏高亮条件
+- `src/web/templates/scheduler.html` — 移除新增表单，改为按钮
+- `src/web/templates/scheduler_add.html` — 新建任务独立页面（新增）
+
+---
+
+## 2026-04-07 - 任务运行日志独立分离 + 页面日志查看面板
+
+### 功能增强
+
+- **任务日志独立文件**（`utils/logger.py`）：新增 `get_task_logger()` 创建独立的 `TaskExec` 日志器，写入 `task_YYYY-MM-DD.log`（与 `app_*.log` 同目录）。该 logger 设置 `propagate=False`，不会混入应用日志文件，实现任务执行日志与页面/路由日志的完全分离。新增 `get_task_log_path()` 供 API 读取当天日志文件。
+
+- **任务执行路径日志分离**（`scheduler/manager.py`）：
+  - 引入 `tlog = get_task_logger("TaskExec")`，所有任务执行路径（`_run_task_by_id`、`run_task_by_id`）及 handler（`_run_order_1688_fill_detail`、`_run_pdd_erp_order_sync`、`_notify_pdd_erp_sync_result`）的日志改用 `_task_log()` / `tlog`，不再写入 app 日志。
+  - 调度器基础设施日志（启动、注册、配置加载等）仍使用原 `logger`（Scheduler）写入 `app_*.log`。
+  - 新增每个任务最近 200 条执行日志的内存缓冲（`_task_log_lines`），供页面实时查看。
+  - Handler 函数签名增加 `_tid` 参数，执行时自动关联 task_id。
+
+- **任务日志 API**（`api/routes/scheduler_routes.py`）：
+  - `GET /api/scheduler/tasks/<id>/logs?n=50`：获取指定任务最近 N 条内存日志行。
+  - `GET /api/scheduler/logs?n=100`：读取当天 `task_*.log` 文件最后 N 行（全局任务日志）。
+
+- **定时任务页面日志面板**（`scheduler.html`）：
+  - 每个任务卡片新增「日志」按钮，点击展开底部日志面板，显示该任务的执行日志。
+  - 日志面板支持 Tab 切换：「全部任务日志」（读取 task_*.log 文件）/ 各任务独立日志（内存缓冲）。
+  - 日志内容按级别着色：INFO 绿色、WARNING 黄色、ERROR 红色、DEBUG 蓝色。
+  - 日志面板每 5 秒自动刷新（打开时），支持手动刷新和关闭。
+
+### 日志分离策略
+
+| 日志文件 | 内容 | Logger |
+|---|---|---|
+| `app_YYYY-MM-DD.log` | 应用全局日志（路由、启动、调度器注册等） | `Scheduler` / 根 logger |
+| `task_YYYY-MM-DD.log` | 任务执行日志（开始、API 调用、结果、异常） | `TaskExec`（不 propagate） |
+
+### 涉及文件
+
+- `src/utils/logger.py` — 新增 `get_task_logger()`、`get_task_log_path()`
+- `src/scheduler/manager.py` — `_task_log()`、`get_task_log_lines()`、执行路径改用 tlog
+- `src/scheduler/__init__.py` — 导出 `get_task_log_lines`
+- `src/api/routes/scheduler_routes.py` — 新增日志读取 API
+- `src/web/templates/scheduler.html` — 日志面板 UI
+
+---
+
+## 2026-04-07 - 定时任务页面优化：执行状态追踪 + 任务暂停/恢复 + UI 重构
+
+### 功能增强
+
+- **执行状态追踪**（`scheduler/manager.py`）：新增内存级任务状态管理（`_task_status`），记录每个任务的 **运行中状态**、**开始时间**、**最后执行时间**、**最后执行结果**（成功/失败 + 消息摘要）。定时触发（`_run_task_by_id`）和手动触发（`run_task_by_id`）均自动追踪。`list_jobs` 返回字段增加 `running`、`started_at`、`last_run`、`last_success`、`last_message`、`type_name`、`enabled`。
+
+- **任务暂停/恢复**：
+  - `task_config.py`：新增 `update_task_field(task_id, field, value)` 方法，支持更新任务配置的任意字段（如 `enabled`）。
+  - `manager.py`：新增 `pause_task(task_id)` 从调度器移除 job 并标记 `enabled=false`；`resume_task(task_id)` 恢复注册。`_register_jobs_from_config` 跳过 `enabled=false` 的任务。
+  - API：`POST /api/scheduler/tasks/<id>/pause`、`POST /api/scheduler/tasks/<id>/resume`、`GET /api/scheduler/tasks/<id>/status`。
+
+- **定时任务页面 UI 重构**（`scheduler.html`）：
+  - 从表格布局改为 **任务卡片** 布局，每个任务一张卡片。
+  - **状态徽章**：实时显示「执行中」（蓝色脉冲动画）、「✓ 成功」（绿色）、「✗ 失败」（红色）、「已暂停」（黄色）、「待运行」（灰色）。
+  - **开关控件**：每个任务卡片内含启用/禁用 toggle switch，可直接暂停或恢复任务。
+  - **cron 可读描述**：除显示原始 cron 外，增加中文周期描述（如 `0 12,18 * * *` → `每天 12:00、18:00`）。
+  - **最后执行结果**：卡片底部展示上次执行的消息摘要，成功/失败用不同颜色左边框区分。
+  - **下次执行时间**、**上次执行时间**、**任务 ID** 等元数据行。
+  - **自动刷新**：默认每 10 秒轮询刷新（可关闭），执行中任务可实时看到状态变化。
+  - **新增表单默认折叠**，减少页面干扰。
+
+### 设计理念
+
+所有功能都遵循「对应功能页面可交互运行 + 定时任务配置自动运行」的模式：功能页面（如订单同步 `/pdd-erp-order-sync`）负责单次交互执行，定时任务页面 `/scheduler` 负责配置周期性自动执行。新增功能只需在 `manager.py` 的 `get_task_handlers()` 注册 type + handler 即可同时支持两种运行方式。
+
+### 涉及文件
+
+- `src/scheduler/manager.py` — 状态追踪 + pause/resume + list_jobs 增强
+- `src/scheduler/task_config.py` — `update_task_field`
+- `src/scheduler/__init__.py` — 导出 `pause_task`、`resume_task`、`get_task_status`
+- `src/api/routes/scheduler_routes.py` — 新增 pause / resume / status API
+- `src/web/templates/scheduler.html` — UI 重构
+
+---
+
 ## 2026-04-06 - 定时任务：拼多多 ERP 订单同步（12:00 / 18:00）+ 飞书结果通知
 
 - **`scheduler/manager.py`**：新增任务类型 **`pdd_erp_order_sync`**，对本机 **`POST /api/pinduoduo/sync-erp-orders`** 发起请求（`timeout` 默认 780s）；结束后 **`_notify_pdd_erp_sync_result`** 向飞书私聊发送摘要（需 `FEISHU_ENABLED`、应用凭证及 **`FEISHU_USER_ID`** 或任务 **`data.feishu_user_id`**）。

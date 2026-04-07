@@ -244,8 +244,10 @@ def _get_window_icon_path():
         # 获取当前文件所在目录
         current_dir = Path(__file__).parent
         
-        # 优先使用logo_default.jpg，转换为ICO格式
-        logo_path = current_dir / 'static' / 'images' / 'logo_default.jpg'
+        # 优先使用 log_default.png，其次 logo_default.jpg，转换为ICO格式
+        logo_path = current_dir / 'static' / 'images' / 'log_default.png'
+        if not logo_path.exists():
+            logo_path = current_dir / 'static' / 'images' / 'logo_default.jpg'
         icon_path = current_dir / 'static' / 'images' / 'window_icon.ico'
         
         if logo_path.exists():
@@ -597,6 +599,10 @@ def on_tray_quit():
 def main():
     """主函数"""
     global app, browser_pool, tool_manager, tray_icon, flask_thread
+    
+    # 单实例检查：若已有实例运行，激活已有窗口后退出
+    from utils.single_instance import ensure_single_instance
+    _single_lock = ensure_single_instance(Config.WINDOW_TITLE)
     
     try:
         # 检查并添加到开机启动（如果还没有）

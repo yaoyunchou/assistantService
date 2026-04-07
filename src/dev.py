@@ -2,8 +2,18 @@
 开发调试模式入口
 简化版本，只启动Flask服务，支持热重载
 不启动系统托盘、原生窗口等桌面应用功能
+
+与生产模式 (main.py) 的区别：
+  - 端口：开发 DEV_PORT(8886)  vs  生产 PORT(8887)
+  - 热重载：开发 use_reloader=True  vs  生产 use_reloader=False
+  - 页面标题：带「开发」标识
+  - 日志级别：开发默认 DEBUG
 """
+import os
 import sys
+
+# 在任何其他导入之前标记开发环境
+os.environ.setdefault('APP_ENV', 'development')
 
 from utils.win32_msvc_runtime import add_dll_search_paths_if_needed
 
@@ -16,6 +26,10 @@ from pathlib import Path
 from utils.logger import init_logging, get_logger
 from config import Config
 
+# 设置开发环境
+Config.APP_ENV = 'development'
+Config.PORT = Config.DEV_PORT
+
 # 将字符串日志级别转换为logging常量
 LOG_LEVEL_MAP = {
     'DEBUG': logging.DEBUG,
@@ -24,7 +38,7 @@ LOG_LEVEL_MAP = {
     'ERROR': logging.ERROR,
     'CRITICAL': logging.CRITICAL
 }
-log_level = LOG_LEVEL_MAP.get(Config.LOG_LEVEL.upper(), logging.INFO)
+log_level = LOG_LEVEL_MAP.get(Config.LOG_LEVEL.upper(), logging.DEBUG)
 
 # 初始化日志系统
 init_logging(log_dir=Config.LOG_DIR, level=log_level)
@@ -73,6 +87,18 @@ def main():
         # 注册路由
         setup_app(app, browser_pool, tool_manager)
         
+        # 启动定时任务调度器
+        # use_reloader=True 时 Flask 会启动两个进程，
+        # WERKZEUG_RUN_MAIN='true' 只在实际服务的子进程中设置，
+        # 调度器只在子进程中启动，避免重复执行。
+        if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+            try:
+                from scheduler import start_scheduler
+                if start_scheduler():
+                    logger.info("定时任务调度器已启动")
+            except Exception as e:
+                logger.warning(f"启动定时任务调度器失败: {e}")
+        
         logger.info("="*60)
         logger.info(f"服务地址: http://{Config.HOST}:{Config.PORT}")
         logger.info("按 Ctrl+C 停止服务")
@@ -94,6 +120,12 @@ def main():
         logger.error("应用启动失败！", exc_info=True)
         logger.error("="*60)
     finally:
+        # 关闭定时任务调度器
+        try:
+            from scheduler import shutdown_scheduler
+            shutdown_scheduler()
+        except Exception:
+            pass
         # 清理资源
         if 'browser_pool' in locals() and browser_pool:
             logger.info("正在关闭浏览器池...")

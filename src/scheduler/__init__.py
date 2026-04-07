@@ -12,6 +12,11 @@ from .manager import (
     add_task_and_register,
     remove_task_and_unregister,
     get_task_types,
+    get_task_type_schemas,
+    pause_task,
+    resume_task,
+    get_task_status,
+    get_task_log_lines,
 )
 
 __all__ = [
@@ -23,4 +28,9 @@ __all__ = [
     "add_task_and_register",
     "remove_task_and_unregister",
     "get_task_types",
+    "get_task_type_schemas",
+    "pause_task",
+    "resume_task",
+    "get_task_status",
+    "get_task_log_lines",
 ]

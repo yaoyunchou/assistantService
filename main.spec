@@ -169,6 +169,7 @@ pyz = PYZ(a.pure)
 # PyInstaller支持直接使用JPG/PNG格式，会自动转换为ICO格式
 icon_path = None
 possible_icon_paths = [
+    project_root / 'src' / 'static' / 'images' / 'log_default.png',
     project_root / 'src' / 'static' / 'images' / 'logo_default.jpg',
     project_root / 'src' / 'static' / 'images' / 'icon.ico',
     project_root / 'src' / 'static' / 'images' / 'icon.png',

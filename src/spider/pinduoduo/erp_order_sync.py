@@ -130,6 +130,39 @@ def _handle_login_intercept(
     }
 
 
+def _send_sync_report(
+    feishu_result: Dict[str, Any],
+    *,
+    row_count: int,
+    erp_url: str,
+) -> None:
+    """同步完成后，通过通用渠道通知发送运行报告卡片。"""
+    from tools.feishu.webhook.qudao_notify import CHANNEL_PINDUODUO, send_success, send_warning
+
+    success = bool(feishu_result.get('success'))
+    created = feishu_result.get('create_count', 0)
+    updated = feishu_result.get('update_count', 0)
+    failed = feishu_result.get('fail_count', 0)
+    skipped = feishu_result.get('update_skipped_no_delta', 0)
+    msg = feishu_result.get('message', '')
+
+    lines = [
+        f'**采集行数**：{row_count}',
+        f'**新建**：{created}　**更新**：{updated}　**跳过**：{skipped}　**失败**：{failed}',
+    ]
+    if msg:
+        lines.append(f'**详情**：{msg}')
+
+    notify = send_success if success else send_warning
+    notify(
+        CHANNEL_PINDUODUO,
+        title='订单同步（ERP）· 运行报告',
+        description='\n'.join(lines),
+        link_url=erp_url,
+        link_text='打开 ERP 全部订单',
+    )
+
+
 def sync_erp_orders_to_feishu(
     page: Page,
     app_token: Optional[str] = None,
@@ -256,6 +289,10 @@ def sync_erp_orders_to_feishu(
 
     # --- 飞书：新建 / 增量更新策略在 sync_erp_order_rows_to_feishu 内实现 ---
     feishu_result = sync_erp_order_rows_to_feishu(rows, app_token=app_token, table_id=table_id)
+
+    # --- 成功后通过 Webhook 发送运行报告（与登录通知同一个机器人） ---
+    _send_sync_report(feishu_result, row_count=len(rows), erp_url=erp_url)
+
     return {
         'success': bool(feishu_result.get('success')),
         'intercepted': False,

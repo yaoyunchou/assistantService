@@ -33,9 +33,13 @@ except Exception as e:
 
 class Config:
     """应用配置类"""
+    # 运行环境：'production' | 'development'，由入口文件设置
+    APP_ENV = os.getenv('APP_ENV', 'production')
+
     # HTTP服务配置
     HOST = '127.0.0.1'
-    PORT = 8887  # 端口范围：1024-65535
+    PORT = int(os.getenv('PORT', '8887'))          # 生产默认 8887
+    DEV_PORT = int(os.getenv('DEV_PORT', '8886'))  # 开发默认 8886
     
     # 浏览器配置
     # HEADLESS = True  # 是否使用无头模式

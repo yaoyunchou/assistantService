@@ -6,6 +6,7 @@
 <style>
 .scheduler-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
 .scheduler-header h2 { margin: 0; font-size: 22px; color: #2c3e50; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
 .btn { padding: 10px 20px; border: none; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
 .btn-primary { background: #3498db; color: white; }
 .btn-primary:hover { background: #2980b9; }
@@ -13,245 +14,434 @@
 .btn-secondary:hover { background: #7f8c8d; }
 .btn-danger { background: #e74c3c; color: white; }
 .btn-danger:hover { background: #c0392b; }
+.btn-success { background: #27ae60; color: white; }
+.btn-success:hover { background: #219a52; }
+.btn-warning { background: #f39c12; color: white; }
+.btn-warning:hover { background: #e67e22; }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.btn-sm { padding: 6px 12px; font-size: 13px; }
+.btn-sm { padding: 5px 10px; font-size: 13px; }
+.btn-xs { padding: 3px 8px; font-size: 12px; border-radius: 4px; }
 .card { background: white; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 24px; }
-.jobs-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.jobs-table th, .jobs-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #eee; }
-.jobs-table th { background: #f8f9fa; font-weight: 600; color: #495057; }
-.jobs-table tr:hover { background: #f8f9fa; }
-.jobs-table .col-id { width: 120px; font-family: monospace; font-size: 12px; }
-.jobs-table .col-name { width: 140px; }
-.jobs-table .col-type { width: 140px; }
-.jobs-table .col-cron { width: 120px; }
-.jobs-table .col-next { width: 180px; color: #7f8c8d; }
-.jobs-table .col-actions { white-space: nowrap; }
 .result-msg { padding: 12px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
 .result-msg.success { background: #d4edda; color: #155724; }
 .result-msg.error { background: #f8d7da; color: #721c24; }
 .result-msg.info { background: #d1ecf1; color: #0c5460; }
 .empty-tip { color: #7f8c8d; text-align: center; padding: 40px 20px; }
-.form-card { margin-bottom: 24px; }
-.form-row { margin-bottom: 12px; }
-.form-row label { display: block; margin-bottom: 4px; font-weight: 500; color: #495057; }
-.form-row input, .form-row select, .form-row textarea { width: 100%; max-width: 400px; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; }
-.form-row textarea { min-height: 60px; font-family: monospace; font-size: 12px; }
-.form-actions { margin-top: 16px; }
+
+/* 任务卡片 */
+.task-card { background: white; border: 1px solid #e8e8e8; border-radius: 10px; padding: 16px 20px; margin-bottom: 12px; transition: box-shadow 0.2s, border-color 0.2s; }
+.task-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.08); border-color: #d0d0d0; }
+.task-card.disabled { opacity: 0.6; background: #fafafa; }
+.task-card.running { border-left: 4px solid #3498db; }
+.task-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.task-title-area { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.task-name { font-size: 16px; font-weight: 600; color: #2c3e50; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task-type-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: #eaf2fb; color: #2980b9; white-space: nowrap; }
+.task-status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
+.badge-running { background: #d6eaff; color: #1a73e8; }
+.badge-running .dot { width: 6px; height: 6px; border-radius: 50%; background: #1a73e8; animation: pulse 1.2s infinite; }
+.badge-success { background: #d4edda; color: #155724; }
+.badge-error { background: #f8d7da; color: #721c24; }
+.badge-idle { background: #f0f0f0; color: #999; }
+.badge-paused { background: #fff3cd; color: #856404; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.task-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+.task-meta { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; font-size: 13px; color: #7f8c8d; }
+.task-meta-item { display: flex; align-items: center; gap: 4px; }
+.task-meta-item .label { color: #aaa; }
+
+.task-last-result { margin-top: 8px; padding: 8px 12px; border-radius: 6px; font-size: 13px; background: #f8f9fa; color: #555; max-height: 80px; overflow: auto; word-break: break-all; }
+.task-last-result.ok { border-left: 3px solid #27ae60; }
+.task-last-result.fail { border-left: 3px solid #e74c3c; }
+
+/* 开关 */
+.toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #ccc; border-radius: 20px; transition: 0.3s; }
+.toggle-slider:before { content: ""; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.3s; }
+.toggle-switch input:checked + .toggle-slider { background: #27ae60; }
+.toggle-switch input:checked + .toggle-slider:before { transform: translateX(16px); }
+
+.auto-refresh-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #7f8c8d; cursor: pointer; }
+
+/* 日志面板 */
+.log-panel { margin-top: 0; }
+.log-panel h3 { margin-top: 0; display: flex; align-items: center; justify-content: space-between; }
+.log-panel h3 span { font-size: 13px; font-weight: normal; color: #999; }
+.log-content { background: #1e1e2e; color: #cdd6f4; border-radius: 8px; padding: 12px 16px; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; line-height: 1.6; max-height: 400px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+.log-content:empty::after { content: '暂无日志'; color: #666; }
+.log-content .log-line-INFO { color: #a6e3a1; }
+.log-content .log-line-WARNING { color: #f9e2af; }
+.log-content .log-line-ERROR { color: #f38ba8; }
+.log-content .log-line-DEBUG { color: #89b4fa; }
+.log-tabs { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
+.log-tab { padding: 4px 12px; border-radius: 4px; font-size: 13px; cursor: pointer; border: 1px solid #ddd; background: #f8f9fa; color: #555; transition: all 0.2s; }
+.log-tab:hover { background: #e9ecef; }
+.log-tab.active { background: #3498db; color: white; border-color: #3498db; }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="card form-card">
-    <h3 style="margin-top:0;">新增任务</h3>
-    <div class="form-row">
-        <label>任务名称</label>
-        <input type="text" id="newName" placeholder="例如：1688 补详情" />
-    </div>
-    <div class="form-row">
-        <label>任务类型</label>
-        <select id="newType">
-            <option value="">请选择</option>
-        </select>
-    </div>
-    <div class="form-row">
-        <label>运行参数 data（JSON，可选）</label>
-        <textarea id="newData" placeholder='{}'></textarea>
-    </div>
-    <div class="form-row">
-        <label>定时 cron（分 时 日 月 周，如 0 * * * * 表示每小时整点）</label>
-        <input type="text" id="newCron" value="0 * * * *" placeholder="0 * * * *" />
-    </div>
-    <div class="form-actions">
-        <button type="button" class="btn btn-primary" id="btnAdd">新增任务</button>
-    </div>
-</div>
-
 <div class="card">
     <div class="scheduler-header">
-        <h2>⏰ 任务列表</h2>
-        <button type="button" class="btn btn-secondary" id="btnRefresh">刷新</button>
+        <h2>定时任务</h2>
+        <div class="header-actions">
+            <label class="auto-refresh-label">
+                <input type="checkbox" id="autoRefreshCb" checked /> 自动刷新
+            </label>
+            <button type="button" class="btn btn-secondary btn-sm" id="btnRefresh">刷新</button>
+            <a href="/scheduler/add" class="btn btn-primary btn-sm" style="text-decoration:none;">+ 新建任务</a>
+        </div>
     </div>
     <div id="jobsWrap">
         <div class="empty-tip" id="emptyTip">加载中…</div>
-        <table class="jobs-table" id="jobsTable" style="display: none;">
-            <thead>
-                <tr>
-                    <th class="col-id">任务 ID</th>
-                    <th class="col-name">名称</th>
-                    <th class="col-type">类型</th>
-                    <th class="col-cron">cron</th>
-                    <th class="col-next">下次执行</th>
-                    <th class="col-actions">操作</th>
-                </tr>
-            </thead>
-            <tbody id="jobsBody"></tbody>
-        </table>
+        <div id="taskCards"></div>
     </div>
     <div id="resultArea"></div>
 </div>
 
+<div class="card log-panel" id="logPanel" style="display:none;">
+    <h3>
+        <span id="logTitle">📋 执行日志</span>
+        <span>
+            <button class="btn btn-secondary btn-xs" onclick="refreshCurrentLog()">刷新</button>
+            <button class="btn btn-xs" style="background:#eee;color:#666;" onclick="closeLogPanel()">关闭</button>
+        </span>
+    </h3>
+    <div class="log-tabs" id="logTabs">
+        <span class="log-tab active" data-src="global" onclick="switchLogTab(this, 'global')">全部任务日志</span>
+    </div>
+    <div class="log-content" id="logContent"></div>
+</div>
+
 <script>
 (function() {
-    var jobsTable = document.getElementById('jobsTable');
-    var jobsBody = document.getElementById('jobsBody');
+    var taskCards = document.getElementById('taskCards');
     var emptyTip = document.getElementById('emptyTip');
     var resultArea = document.getElementById('resultArea');
     var btnRefresh = document.getElementById('btnRefresh');
-    var btnAdd = document.getElementById('btnAdd');
-    var newName = document.getElementById('newName');
-    var newType = document.getElementById('newType');
-    var newData = document.getElementById('newData');
-    var newCron = document.getElementById('newCron');
+    var autoRefreshCb = document.getElementById('autoRefreshCb');
+    var autoRefreshTimer = null;
 
     function showResult(text, type) {
-        resultArea.innerHTML = '<div class="result-msg ' + (type || 'info') + '">' + text + '</div>';
-        setTimeout(function() { resultArea.innerHTML = ''; }, 5000);
+        resultArea.innerHTML = '<div class="result-msg ' + (type || 'info') + '">' + esc(text) + '</div>';
+        setTimeout(function() { resultArea.innerHTML = ''; }, 6000);
     }
+
+    function esc(s) { return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
     function shortId(id) {
         if (!id) return '—';
-        return id.length > 8 ? id.substring(0, 8) + '…' : id;
+        return id.length > 12 ? id.substring(0, 12) + '…' : id;
     }
 
-    function loadTypes() {
-        fetch('/api/scheduler/types')
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (!data.success || !data.types) return;
-                newType.innerHTML = '<option value="">请选择</option>' + data.types.map(function(t) {
-                    return '<option value="' + (t.type || '').replace(/"/g, '&quot;') + '">' + (t.name || t.type || '').replace(/</g, '&lt;') + '</option>';
-                }).join('');
-            });
+    function cronDesc(cron) {
+        if (!cron) return '';
+        var p = cron.trim().split(/\s+/);
+        if (p.length < 5) return cron;
+        var min = p[0], hr = p[1], dom = p[2], mon = p[3], dow = p[4];
+        var parts = [];
+        if (mon !== '*') parts.push(mon + '月');
+        if (dow !== '*') {
+            var days = {'0':'日','1':'一','2':'二','3':'三','4':'四','5':'五','6':'六','7':'日'};
+            var ds = dow.split(',').map(function(d){ return '周' + (days[d] || d); }).join('/');
+            parts.push(ds);
+        }
+        if (dom !== '*') parts.push(dom + '日');
+        if (hr === '*' && min === '0') { parts.push('每小时整点'); }
+        else if (hr === '*') { parts.push('每小时第' + min + '分'); }
+        else {
+            var hrs = hr.split(',');
+            var times = hrs.map(function(h){
+                return h.padStart(2,'0') + ':' + min.padStart(2,'0');
+            }).join('、');
+            parts.push(times);
+        }
+        if (dom === '*' && mon === '*' && dow === '*') parts.unshift('每天');
+        return parts.join(' ');
+    }
+
+    function statusBadge(job) {
+        if (job.running) {
+            return '<span class="task-status-badge badge-running"><span class="dot"></span>执行中</span>';
+        }
+        if (!job.enabled) {
+            return '<span class="task-status-badge badge-paused">已暂停</span>';
+        }
+        if (job.last_run) {
+            if (job.last_success) return '<span class="task-status-badge badge-success">✓ 成功</span>';
+            return '<span class="task-status-badge badge-error">✗ 失败</span>';
+        }
+        return '<span class="task-status-badge badge-idle">待运行</span>';
+    }
+
+    function renderJobs(jobs) {
+        if (!jobs || jobs.length === 0) {
+            emptyTip.textContent = '暂无任务，请在上方新增。';
+            emptyTip.style.display = 'block';
+            taskCards.innerHTML = '';
+            return;
+        }
+        emptyTip.style.display = 'none';
+        taskCards.innerHTML = jobs.map(function(j) {
+            var cls = 'task-card';
+            if (!j.enabled) cls += ' disabled';
+            if (j.running) cls += ' running';
+            var id = esc(j.id || '');
+            var desc = cronDesc(j.cron);
+            var html = '<div class="' + cls + '" data-id="' + id + '">';
+            html += '<div class="task-header">';
+            html += '<div class="task-title-area">';
+            html += '<span class="task-name" title="' + esc(j.name) + '">' + esc(j.name || '—') + '</span>';
+            html += '<span class="task-type-badge">' + esc(j.type_name || j.type || '') + '</span>';
+            html += statusBadge(j);
+            html += '</div>';
+            html += '<div class="task-actions">';
+
+            html += '<label class="toggle-switch" title="' + (j.enabled ? '点击暂停' : '点击启用') + '">';
+            html += '<input type="checkbox" ' + (j.enabled ? 'checked' : '') + ' onchange="toggleTask(\'' + id + '\', this.checked)">';
+            html += '<span class="toggle-slider"></span></label>';
+
+            if (!j.running) {
+                html += '<button class="btn btn-primary btn-xs" onclick="triggerTask(\'' + id + '\', this)" ' + (j.enabled ? '' : 'disabled') + '>执行</button>';
+            } else {
+                html += '<button class="btn btn-secondary btn-xs" disabled>执行中…</button>';
+            }
+            html += '<button class="btn btn-secondary btn-xs" onclick="showTaskLog(\'' + id + '\', \'' + esc(j.name) + '\')">日志</button>';
+            html += '<button class="btn btn-danger btn-xs" onclick="deleteTask(\'' + id + '\')">删除</button>';
+            html += '</div></div>';
+
+            html += '<div class="task-meta">';
+            html += '<div class="task-meta-item"><span class="label">cron:</span> <code>' + esc(j.cron || '') + '</code></div>';
+            if (desc) html += '<div class="task-meta-item"><span class="label">周期:</span> ' + esc(desc) + '</div>';
+            if (j.next_run_time) html += '<div class="task-meta-item"><span class="label">下次:</span> ' + esc(j.next_run_time) + '</div>';
+            if (j.last_run) html += '<div class="task-meta-item"><span class="label">上次:</span> ' + esc(j.last_run) + '</div>';
+            if (j.running && j.started_at) html += '<div class="task-meta-item"><span class="label">开始于:</span> ' + esc(j.started_at) + '</div>';
+            html += '<div class="task-meta-item"><span class="label">ID:</span> <code title="' + id + '">' + shortId(j.id) + '</code></div>';
+            html += '</div>';
+
+            if (j.last_message) {
+                var resCls = j.last_success ? 'ok' : 'fail';
+                html += '<div class="task-last-result ' + resCls + '">' + esc(j.last_message) + '</div>';
+            }
+            html += '</div>';
+            return html;
+        }).join('');
     }
 
     function loadJobs() {
         btnRefresh.disabled = true;
-        emptyTip.textContent = '加载中…';
-        jobsTable.style.display = 'none';
         fetch('/api/scheduler/jobs')
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 btnRefresh.disabled = false;
                 if (!data.success) {
                     emptyTip.textContent = '加载失败：' + (data.error || '未知错误');
-                    return;
-                }
-                var jobs = data.jobs || [];
-                if (jobs.length === 0) {
-                    emptyTip.textContent = '暂无任务，请在上方新增。';
                     emptyTip.style.display = 'block';
                     return;
                 }
-                emptyTip.style.display = 'none';
-                jobsTable.style.display = 'table';
-                jobsBody.innerHTML = jobs.map(function(j) {
-                    var next = j.next_run_time ? j.next_run_time : '—';
-                    var id = (j.id || '').replace(/"/g, '&quot;');
-                    return '<tr>' +
-                        '<td class="col-id" title="' + (j.id || '') + '">' + shortId(j.id).replace(/</g, '&lt;') + '</td>' +
-                        '<td class="col-name">' + (j.name || '—').replace(/</g, '&lt;') + '</td>' +
-                        '<td class="col-type">' + (j.type || '—').replace(/</g, '&lt;') + '</td>' +
-                        '<td class="col-cron">' + (j.cron || '—').replace(/</g, '&lt;') + '</td>' +
-                        '<td class="col-next">' + next.replace(/</g, '&lt;') + '</td>' +
-                        '<td class="col-actions">' +
-                        '<button type="button" class="btn btn-primary btn-sm btn-trigger" data-id="' + id + '">执行</button> ' +
-                        '<button type="button" class="btn btn-danger btn-sm btn-delete" data-id="' + id + '">删除</button>' +
-                        '</td></tr>';
-                }).join('');
-                jobsBody.querySelectorAll('.btn-trigger').forEach(function(btn) {
-                    btn.addEventListener('click', function() {
-                        var id = btn.getAttribute('data-id');
-                        if (!id) return;
-                        btn.disabled = true;
-                        resultArea.innerHTML = '<div class="result-msg info">正在执行…</div>';
-                        fetch('/api/scheduler/trigger/' + encodeURIComponent(id), { method: 'POST' })
-                            .then(function(r) { return r.json(); })
-                            .then(function(res) {
-                                btn.disabled = false;
-                                if (res.success) {
-                                    showResult(res.message || '执行完成', 'success');
-                                    loadJobs();
-                                } else {
-                                    showResult('执行失败：' + (res.error || '未知错误'), 'error');
-                                }
-                            })
-                            .catch(function(e) {
-                                btn.disabled = false;
-                                showResult('请求失败：' + e.message, 'error');
-                            });
-                    });
-                });
-                jobsBody.querySelectorAll('.btn-delete').forEach(function(btn) {
-                    btn.addEventListener('click', function() {
-                        var id = btn.getAttribute('data-id');
-                        if (!id || !confirm('确定删除该任务？')) return;
-                        btn.disabled = true;
-                        fetch('/api/scheduler/tasks/' + encodeURIComponent(id), { method: 'DELETE' })
-                            .then(function(r) { return r.json(); })
-                            .then(function(res) {
-                                if (res.success) {
-                                    showResult('已删除', 'success');
-                                    loadJobs();
-                                } else {
-                                    showResult('删除失败：' + (res.error || '未知错误'), 'error');
-                                    btn.disabled = false;
-                                }
-                            })
-                            .catch(function(e) {
-                                btn.disabled = false;
-                                showResult('请求失败：' + e.message, 'error');
-                            });
-                    });
-                });
+                renderJobs(data.jobs || []);
             })
             .catch(function(e) {
                 btnRefresh.disabled = false;
                 emptyTip.textContent = '请求失败：' + e.message;
+                emptyTip.style.display = 'block';
             });
     }
 
-    btnAdd.addEventListener('click', function() {
-        var name = (newName.value || '').trim();
-        var typeVal = (newType.value || '').trim();
-        var cron = (newCron.value || '0 * * * *').trim();
-        if (!name) { showResult('请填写任务名称', 'error'); return; }
-        if (!typeVal) { showResult('请选择任务类型', 'error'); return; }
-        var data = {};
-        try {
-            var dataStr = (newData.value || '').trim();
-            if (dataStr) data = JSON.parse(dataStr);
-        } catch (e) {
-            showResult('data 不是合法 JSON', 'error');
-            return;
-        }
-        btnAdd.disabled = true;
-        fetch('/api/scheduler/tasks', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: name, type: typeVal, data: data, cron: cron })
-        })
+    window.triggerTask = function(id, btn) {
+        if (!id) return;
+        btn.disabled = true;
+        btn.textContent = '提交中…';
+        fetch('/api/scheduler/trigger/' + encodeURIComponent(id), { method: 'POST' })
             .then(function(r) { return r.json(); })
             .then(function(res) {
-                btnAdd.disabled = false;
                 if (res.success) {
-                    showResult('已新增任务：' + (res.task && res.task.id ? shortId(res.task.id) : ''), 'success');
-                    newName.value = '';
-                    newType.value = '';
-                    newData.value = '{}';
-                    loadJobs();
+                    showResult('任务已提交执行，可通过日志面板跟踪进度', 'success');
+                    pollUntilDone(id);
                 } else {
-                    showResult('新增失败：' + (res.error || '未知错误'), 'error');
+                    showResult('执行失败：' + (res.error || '未知错误'), 'error');
+                    loadJobs();
                 }
             })
             .catch(function(e) {
-                btnAdd.disabled = false;
                 showResult('请求失败：' + e.message, 'error');
+                loadJobs();
             });
+    };
+
+    function pollUntilDone(taskId) {
+        loadJobs();
+        var poll = setInterval(function() {
+            fetch('/api/scheduler/tasks/' + encodeURIComponent(taskId) + '/status')
+                .then(function(r) { return r.json(); })
+                .then(function(res) {
+                    var s = res.status || {};
+                    loadJobs();
+                    if (!s.running) {
+                        clearInterval(poll);
+                        if (s.last_success) {
+                            showResult('任务执行完成：' + (s.last_message || '成功'), 'success');
+                        } else if (s.last_run) {
+                            showResult('任务执行结束：' + (s.last_message || '失败'), 'error');
+                        }
+                    }
+                })
+                .catch(function() { clearInterval(poll); loadJobs(); });
+        }, 3000);
+    }
+
+    window.deleteTask = function(id) {
+        if (!id || !confirm('确定删除该任务？删除后无法恢复。')) return;
+        fetch('/api/scheduler/tasks/' + encodeURIComponent(id), { method: 'DELETE' })
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                if (res.success) {
+                    showResult('已删除', 'success');
+                    loadJobs();
+                } else {
+                    showResult('删除失败：' + (res.error || '未知错误'), 'error');
+                }
+            })
+            .catch(function(e) { showResult('请求失败：' + e.message, 'error'); });
+    };
+
+    window.toggleTask = function(id, enabled) {
+        var url = '/api/scheduler/tasks/' + encodeURIComponent(id) + (enabled ? '/resume' : '/pause');
+        fetch(url, { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                if (res.success) {
+                    showResult(enabled ? '已恢复任务' : '已暂停任务', 'success');
+                } else {
+                    showResult((enabled ? '恢复' : '暂停') + '失败：' + (res.error || ''), 'error');
+                }
+                loadJobs();
+            })
+            .catch(function(e) { showResult('请求失败：' + e.message, 'error'); loadJobs(); });
+    };
+
+    function startAutoRefresh() {
+        stopAutoRefresh();
+        if (autoRefreshCb.checked) {
+            autoRefreshTimer = setInterval(loadJobs, 10000);
+        }
+    }
+    function stopAutoRefresh() {
+        if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+    }
+    autoRefreshCb.addEventListener('change', function() {
+        if (this.checked) startAutoRefresh(); else stopAutoRefresh();
     });
 
+    /* ---------- 日志面板 ---------- */
+    var logPanel = document.getElementById('logPanel');
+    var logTitle = document.getElementById('logTitle');
+    var logContent = document.getElementById('logContent');
+    var logTabs = document.getElementById('logTabs');
+    var currentLogSrc = null;      // 'global' | task_id
+    var currentLogTaskName = '';
+    var logAutoTimer = null;
+
+    function colorizeLogLine(line) {
+        var level = 'INFO';
+        if (/\[WARNING\]/.test(line)) level = 'WARNING';
+        else if (/\[ERROR\]/.test(line)) level = 'ERROR';
+        else if (/\[DEBUG\]/.test(line)) level = 'DEBUG';
+        return '<span class="log-line-' + level + '">' + esc(line) + '</span>';
+    }
+
+    function renderLogLines(lines) {
+        if (!lines || !lines.length) {
+            logContent.innerHTML = '';
+            return;
+        }
+        logContent.innerHTML = lines.map(colorizeLogLine).join('\n');
+        logContent.scrollTop = logContent.scrollHeight;
+    }
+
+    function fetchLog(src, taskName) {
+        var url;
+        if (src === 'global') {
+            url = '/api/scheduler/logs?n=200';
+        } else {
+            url = '/api/scheduler/tasks/' + encodeURIComponent(src) + '/logs?n=200';
+        }
+        fetch(url)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    renderLogLines(data.lines || []);
+                } else {
+                    logContent.textContent = '加载失败: ' + (data.error || '');
+                }
+            })
+            .catch(function(e) { logContent.textContent = '请求失败: ' + e.message; });
+    }
+
+    function openLogPanel(src, taskName) {
+        logPanel.style.display = 'block';
+        currentLogSrc = src;
+        currentLogTaskName = taskName || '';
+        if (src === 'global') {
+            logTitle.textContent = '📋 全部任务执行日志（task_*.log）';
+        } else {
+            logTitle.textContent = '📋 ' + (taskName || '任务') + ' - 执行日志';
+        }
+        // 更新 tab 高亮
+        var tabs = logTabs.querySelectorAll('.log-tab');
+        for (var i = 0; i < tabs.length; i++) {
+            tabs[i].classList.toggle('active', tabs[i].getAttribute('data-src') === src);
+        }
+        fetchLog(src, taskName);
+        startLogAutoRefresh();
+        logPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    window.showTaskLog = function(id, name) {
+        // 确保 tab 存在
+        var existing = logTabs.querySelector('[data-src="' + id + '"]');
+        if (!existing) {
+            var tab = document.createElement('span');
+            tab.className = 'log-tab';
+            tab.setAttribute('data-src', id);
+            tab.textContent = name || shortId(id);
+            tab.onclick = function() { switchLogTab(tab, id, name); };
+            logTabs.appendChild(tab);
+        }
+        openLogPanel(id, name);
+    };
+
+    window.switchLogTab = function(el, src, taskName) {
+        openLogPanel(src, taskName || '');
+    };
+
+    window.refreshCurrentLog = function() {
+        if (currentLogSrc) fetchLog(currentLogSrc, currentLogTaskName);
+    };
+
+    window.closeLogPanel = function() {
+        logPanel.style.display = 'none';
+        stopLogAutoRefresh();
+        currentLogSrc = null;
+    };
+
+    function startLogAutoRefresh() {
+        stopLogAutoRefresh();
+        logAutoTimer = setInterval(function() {
+            if (currentLogSrc && logPanel.style.display !== 'none') {
+                fetchLog(currentLogSrc, currentLogTaskName);
+            }
+        }, 5000);
+    }
+    function stopLogAutoRefresh() {
+        if (logAutoTimer) { clearInterval(logAutoTimer); logAutoTimer = null; }
+    }
+
     btnRefresh.addEventListener('click', loadJobs);
-    loadTypes();
     loadJobs();
+    startAutoRefresh();
 })();
 </script>
 {% endblock %}

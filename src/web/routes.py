@@ -155,6 +155,16 @@ def register_web_routes(app, tool_manager: ToolManager):
             routes_logger.error(f"定时任务页面渲染错误: {e}", exc_info=True)
             return render_template('error.html', message='定时任务页面加载失败', tools=tool_manager.get_tools_info(), config=Config), 500
 
+    @app.route('/scheduler/add')
+    def scheduler_add_page():
+        """新建定时任务页面"""
+        try:
+            tools_info = tool_manager.get_tools_info()
+            return render_template('scheduler_add.html', tools=tools_info, config=Config)
+        except Exception as e:
+            routes_logger.error(f"新建任务页面渲染错误: {e}", exc_info=True)
+            return render_template('error.html', message='新建任务页面加载失败', tools=tool_manager.get_tools_info(), config=Config), 500
+
     @app.route('/settings')
     def settings():
         """配置页面"""
