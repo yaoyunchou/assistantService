@@ -4,8 +4,22 @@
       "id": "order_1688_fill_detail",
       "name": "1688 订单补详情",
       "type": "order_1688_fill_detail",
-      "data": {},
+      "data": {
+        "method": "get",
+        "url": "http://localhost:8099/api/order_1688/fill_detail",
+        "data": {}
+      },
       "cron": "0 * * * *"
+    },
+    {
+      "id": "pdd_erp_order_sync_noon_evening",
+      "name": "拼多多 ERP 订单同步（12点与18点）",
+      "type": "pdd_erp_order_sync",
+      "data": {
+        "data": {},
+        "timeout": 780
+      },
+      "cron": "0 12,18 * * *"
     }
   ]
 }

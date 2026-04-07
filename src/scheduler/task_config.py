@@ -16,6 +16,59 @@ TASKS_FILE = CONFIG_DIR / "tasks.json"
 
 # 规范种子文件：与 task_config.py 同目录的 tasks.json，运行时若本地无配置则按此初始化
 _SEED_TASKS_FILE = Path(__file__).resolve().parent / "tasks.json"
+# 种子合并版本：在种子中新增「内置任务 id」后递增，老用户启动时会自动把缺失 id 追加进本地 tasks.json
+_SCHEDULER_SEED_MERGE_VERSION = "1"
+_SEED_MERGE_MARKER = CONFIG_DIR / ".scheduler_seed_merge_version"
+
+
+def _merge_missing_tasks_from_seed_inplace(data: Dict[str, Any]) -> bool:
+    """
+    当本地 `.scheduler_seed_merge_version` 落后于代码中的版本时，
+    将种子 tasks.json 里存在、而本地 tasks 列表中缺少的 **任务 id** 整段追加。
+
+    说明：页面与调度器读的是 get_safe_data_path('scheduler')/tasks.json（开发环境多为项目根目录
+    scheduler/tasks.json），与仓库里的 src/scheduler/tasks.json 不是同一个文件；改种子后需提版本号才能合并到已有环境。
+    """
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        applied = _SEED_MERGE_MARKER.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        applied = ""
+    if applied == _SCHEDULER_SEED_MERGE_VERSION:
+        return False
+    if not _SEED_TASKS_FILE.exists():
+        try:
+            _SEED_MERGE_MARKER.write_text(_SCHEDULER_SEED_MERGE_VERSION, encoding="utf-8")
+        except OSError:
+            pass
+        return False
+    try:
+        with open(_SEED_TASKS_FILE, "r", encoding="utf-8") as f:
+            seed = json.load(f)
+    except Exception as e:
+        logger.warning("读取种子 tasks.json 失败: %s", e)
+        return False
+    seed_tasks = seed.get("tasks") if isinstance(seed.get("tasks"), list) else []
+    tasks = list(data.get("tasks") or [])
+    ids = {t.get("id") for t in tasks if t.get("id")}
+    changed = False
+    for st in seed_tasks:
+        tid = st.get("id")
+        if tid and tid not in ids:
+            tasks.append(st)
+            ids.add(tid)
+            changed = True
+    if changed:
+        data["tasks"] = tasks
+        logger.info(
+            "已从 src/scheduler/tasks.json 合并缺失的定时任务（合并版本 %s）",
+            _SCHEDULER_SEED_MERGE_VERSION,
+        )
+    try:
+        _SEED_MERGE_MARKER.write_text(_SCHEDULER_SEED_MERGE_VERSION, encoding="utf-8")
+    except OSError as e:
+        logger.warning("写入种子合并标记失败: %s", e)
+    return changed
 
 
 def _load_raw() -> Dict[str, Any]:
@@ -29,16 +82,27 @@ def _load_raw() -> Dict[str, Any]:
                     with open(TASKS_FILE, "w", encoding="utf-8") as f:
                         json.dump(data, f, ensure_ascii=False, indent=2)
                     logger.info("已按规范从种子文件初始化 tasks.json")
+                    try:
+                        _SEED_MERGE_MARKER.write_text(
+                            _SCHEDULER_SEED_MERGE_VERSION, encoding="utf-8"
+                        )
+                    except OSError:
+                        pass
                     return data
             except Exception as e:
                 logger.warning("从种子文件初始化 tasks.json 失败: %s", e)
         return {"tasks": []}
     try:
         with open(TASKS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except Exception as e:
         logger.warning("读取任务配置失败: %s", e)
         return {"tasks": []}
+    if not isinstance(data.get("tasks"), list):
+        data["tasks"] = []
+    if _merge_missing_tasks_from_seed_inplace(data):
+        _save_raw(data)
+    return data
 
 
 def _save_raw(data: Dict[str, Any]) -> None:

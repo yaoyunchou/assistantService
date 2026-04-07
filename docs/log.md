@@ -3,7 +3,8 @@
 ## 2026-04-06 - 定时任务：拼多多 ERP 订单同步（12:00 / 18:00）+ 飞书结果通知
 
 - **`scheduler/manager.py`**：新增任务类型 **`pdd_erp_order_sync`**，对本机 **`POST /api/pinduoduo/sync-erp-orders`** 发起请求（`timeout` 默认 780s）；结束后 **`_notify_pdd_erp_sync_result`** 向飞书私聊发送摘要（需 `FEISHU_ENABLED`、应用凭证及 **`FEISHU_USER_ID`** 或任务 **`data.feishu_user_id`**）。
-- **`scheduler/tasks.json`（种子）**：增加默认任务 **`pdd_erp_order_sync_noon_evening`**，cron **`0 12,18 * * *`**。用户数据目录若已有 **`scheduler/tasks.json`** 则不会自动合并，需手动在定时任务页添加或删旧配置后重启以初始化。
+- **双份配置**：界面读**运行时** `scheduler/tasks.json`（开发多为**仓库根** `scheduler/tasks.json`），种子为 **`src/scheduler/tasks.json`**；根目录 `scheduler/tasks.json` 已与种子同步包含 ERP 任务。
+- **`task_config`**：版本文件 **`scheduler/.scheduler_seed_merge_version`** + **`_SCHEDULER_SEED_MERGE_VERSION`**，版本递增时把种子里缺失的 **任务 id** 自动合并进本地列表。
 
 ---
 

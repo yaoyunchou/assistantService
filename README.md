@@ -191,6 +191,12 @@ python src/main.py
 - `POST /api/pinduoduo/execute` - 执行自动化操作（TODO）
 - `POST /api/pinduoduo/sync-erp-orders` - ERP 全部订单表抓取并同步飞书（JSON 可选 `app_token`、`table_id`、`scroll_max_steps`）
 
+**定时执行（中午 12:00、下午 18:00）**：
+
+- 侧栏 **定时任务** 读取的是**运行时**的 `scheduler/tasks.json`（开发环境一般为**项目根目录**下的 `scheduler/tasks.json`），与源码里的 `src/scheduler/tasks.json`（种子）不是同一路径；仅改 `src/scheduler/tasks.json` 时，若本地已有旧配置，需**重启应用**后由程序按版本合并缺失任务，或直接把 ERP 任务段复制进根目录 `scheduler/tasks.json`。
+- 种子合并：首次启动或 `scheduler/.scheduler_seed_merge_version` 版本低于代码内版本时，会自动把种子里有、本地没有的 **任务 id** 追加进去（升级种子时需递增 `task_config._SCHEDULER_SEED_MERGE_VERSION`）。
+- 任务类型 **`pdd_erp_order_sync`**：请求本机 `POST /api/pinduoduo/sync-erp-orders`，执行结束后向飞书 **`FEISHU_USER_ID`** 发一条结果摘要（需已配置飞书应用）。
+
 ### 途强助手
 
 途强助手提供途强智能设备管理平台（https://iot.tqiot.com）的自动化功能，支持自动登录与最近 30 天记录获取。
