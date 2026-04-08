@@ -444,24 +444,36 @@ def _convert_order_to_fields(order: Dict[str, Any]) -> Dict[str, Any]:
     return fields
 
 
-def feishu_field_to_text(val: Any) -> str:
-    """将飞书多维表格单元格值转为纯文本（兼容 text / 数字 / 富文本片段等）。"""
+def feishu_field_to_text(val: Any, _depth: int = 0) -> str:
+    """将飞书多维表格单元格值转为纯文本（兼容 text / 数字 / 富文本多段 / 嵌套 text 等）。"""
+    if _depth > 14:
+        return ''
     if val is None:
         return ''
     if isinstance(val, str):
         return val.strip()
     if isinstance(val, (int, float)):
         return str(val)
-    if isinstance(val, list) and val:
-        first = val[0]
-        if isinstance(first, dict) and 'text' in first:
-            return str(first.get('text', '')).strip()
-        return str(first).strip()
+    if isinstance(val, list):
+        if not val:
+            return ''
+        parts: List[str] = []
+        for item in val:
+            t = feishu_field_to_text(item, _depth + 1)
+            if t:
+                parts.append(t)
+        return ''.join(parts).strip()
     if isinstance(val, dict):
         if 'text' in val:
-            return str(val.get('text', '')).strip()
+            return feishu_field_to_text(val.get('text'), _depth + 1)
         if 'value' in val:
-            return feishu_field_to_text(val.get('value'))
+            return feishu_field_to_text(val.get('value'), _depth + 1)
+        # 单选/关联/公式等偶见独立可读字段
+        for k in ('name', 'caption', 'display_value', 'title', 'label'):
+            if k in val and val.get(k) not in (None, '', []):
+                t = feishu_field_to_text(val.get(k), _depth + 1)
+                if t:
+                    return t
     return str(val).strip()
 
 

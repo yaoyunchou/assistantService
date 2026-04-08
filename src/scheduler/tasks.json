@@ -20,6 +20,14 @@
         "timeout": 780
       },
       "cron": "0 12,18 * * *"
+    },
+    {
+      "id": "pdd_inventory_sync_from_erp_feishu",
+      "name": "拼多多库存：飞书 ERP→库存信息与扣减日志",
+      "type": "pdd_inventory_sync",
+      "enabled": false,
+      "data": {},
+      "cron": "30 */2 * * *"
     }
   ]
 }

@@ -338,3 +338,46 @@ def pinduoduo_sync_erp_orders():
     except Exception as e:
         routes_logger.error(f'同步 ERP 订单异常: {e}', exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/inventory-sync-from-erp-feishu', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '定时逻辑：读飞书 ERP 全部店铺表，写库存信息表与扣减日志表（无需浏览器）',
+    'parameters': [{
+        'in': 'body',
+        'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'app_token': {'type': 'string'},
+                'erp_table_id': {'type': 'string'},
+                'erp_view_id': {'type': 'string'},
+                'inventory_info_table_id': {'type': 'string'},
+                'inventory_log_table_id': {'type': 'string'},
+                'pay_after_date': {'type': 'string'},
+                'require_express': {'type': 'boolean'},
+                'return_keywords': {'type': 'array', 'items': {'type': 'string'}},
+                'inventory_product_name_field': {'type': 'string'},
+                'stock_link_score_weights': {
+                    'type': 'object',
+                    'description': '库存关联分项权重：weight_char_cover / weight_symmetric_jaccard / weight_power / weight_kind',
+                },
+                'stock_link_match_min_score': {'type': 'integer', 'description': '0–100，≥ 则库存关联写商品名称原文，默认 80'},
+            },
+        },
+    }],
+    'responses': {200: {'description': '执行结果'}},
+})
+def pinduoduo_inventory_sync_from_erp_feishu():
+    """读飞书多维表（ERP 订单 → 库存信息 + 扣减日志），详见 spider.pinduoduo.inventory_sync_job。"""
+    try:
+        from spider.pinduoduo.inventory_sync_job import run_inventory_sync_job
+
+        body = request.get_json(silent=True) or {}
+        result = run_inventory_sync_job(body if isinstance(body, dict) else {})
+        code = 200 if result.get('success') else 400
+        return jsonify(result if isinstance(result, dict) else {'success': False, 'message': str(result)}), code
+    except Exception as e:
+        routes_logger.error('库存飞书同步任务异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500

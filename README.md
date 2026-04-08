@@ -17,7 +17,7 @@
 - 🚀 **开机自启** - 支持开机自动启动
 - 📱 **API接口** - 提供完整的RESTful API接口
 - 🔌 **Socket.IO 客户端** - 对接 `docs/websocket-api.md`，连接 path `/ws`、监听事件 `forward`，默认测试环境 `http://localhost:3000`，Flask 启动时自动连接，支持管理页连接/断开与配置保存
-- ⏰ **定时任务** - APScheduler，支持「拼多多 ERP 订单同步」等类型；默认种子含每日 12:00 / 18:00 同步，执行后飞书私聊结果摘要
+- ⏰ **定时任务** - APScheduler，支持「拼多多 ERP 订单同步」「拼多多库存（飞书 ERP→库存/日志）」等类型；默认种子含每日 12:00 / 18:00 ERP 同步，执行后飞书私聊结果摘要
 - 💾 **低资源占用** - 优化资源使用，空闲时内存占用<200MB
 
 ## 技术栈
@@ -183,6 +183,15 @@ python src/main.py
 - 若被登录拦截：发送飞书提醒、Webhook 卡片（若已配置）、并返回二维码供页面展示（与「同步 PDD 订单地址」一致）。
 - **定时同步**：侧栏 **定时任务** 中类型为「拼多多 ERP 订单同步」的任务会按 cron 调用 `POST /api/pinduoduo/sync-erp-orders`。仓库种子 `src/scheduler/tasks.json` 含一条 **`0 12,18 * * *`**（每天 12:00 与 18:00）。首次运行若用户数据目录无 `scheduler/tasks.json`，会从种子复制；若你已有旧配置，需在定时任务页手动添加该任务或删掉旧文件后重启。每次执行结束会向飞书 **私聊**（`.env` 中 `FEISHU_USER_ID`，须为有效 open_id 等）发送结果摘要；未配置飞书则仅写日志。任务 `data` 可选：`url`（默认本机 API）、`data`（请求体）、`timeout`（默认 780 秒）、`feishu_user_id`（覆盖默认接收人）。
 
+**库存飞书同步（定时，无需浏览器）**：
+
+- 逻辑在 `src/spider/pinduoduo/inventory_sync_job.py`：读取飞书 ERP 全部店铺表（默认 `tblyAX9t4DJK2wuJ`），对「付款时间严格晚于配置日整天」且有平台订单号的行，在 **库存信息表** 中按订单号补建记录，并在 **扣减库存日志表** 中维护出库/退货等列（与表内已有值相同则跳过更新）。
+- **表 ID**：库存信息表默认 `tbljLwzLLKafXl0h`，扣减日志表默认 `tblXXipFcgH1EQH7`，分别可用 `PINDUODUO_FEISHU_INVENTORY_INFO_TABLE_ID`、`PINDUODUO_FEISHU_INVENTORY_LOG_TABLE_ID` 覆盖（与你们飞书实际表不一致时必改）。
+- **选配**：`PINDUODUO_INVENTORY_PAY_AFTER_DATE`（默认 `2026-04-07`，语义为仅 **4 月 8 日 0 点起**的付款满足条件）、`PINDUODUO_INVENTORY_LOG_REQUIRE_EXPRESS`（默认要求快递单号非空才写日志）、`PINDUODUO_INVENTORY_RETURN_KEYWORDS`（提醒列命中则写退货时间/数量）。
+- **库存关联**（扣减日志表列）：用**库存信息表**中的短名称与 ERP「商品信息」算分。名称列默认依次尝试配置列、`商品名称`、`名称`、`产品名称` 及表头含「商品」且以「名称」结尾的列；也可用 **`PINDUODUO_INVENTORY_PRODUCT_NAME_FIELD`** 指定与飞书完全一致的列名。**分数 ≥ `PINDUODUO_INVENTORY_STOCK_LINK_MATCH_MIN_SCORE`（默认 80）且解析到名称**时写入该名称原文。**达标但未解析到名称**时写说明。**未匹配**时写入 `未匹配(分数/阈值)｜原因：…｜商品信息：…｜店铺：…`。权重见 **`PINDUODUO_INVENTORY_STOCK_LINK_WEIGHTS_JSON`** 或 `data.stock_link_score_weights`。
+- **手动触发**：`POST /api/pinduoduo/inventory-sync-from-erp-feishu`（JSON 可覆盖表 id、日期等，与任务 `data` 字段一致）。
+- **定时任务**：种子含 **`pdd_inventory_sync_from_erp_feishu`**（`pdd_inventory_sync`，默认 **`enabled`: false**），表 id 有默认值；确认指向正确飞书表后在任务页启用并调整 cron 即可。
+
 **API接口**：
 - `GET /api/pinduoduo/status` - 获取最后执行状态
 - `POST /api/pinduoduo/login` - 启动登录流程
@@ -190,12 +199,14 @@ python src/main.py
 - `POST /api/pinduoduo/logout` - 清除登录状态
 - `POST /api/pinduoduo/execute` - 执行自动化操作（TODO）
 - `POST /api/pinduoduo/sync-erp-orders` - ERP 全部订单表抓取并同步飞书（JSON 可选 `app_token`、`table_id`、`scroll_max_steps`）
+- `POST /api/pinduoduo/inventory-sync-from-erp-feishu` - 仅飞书 API：ERP 表 → 库存信息表 + 扣减日志表（无需浏览器）
 
 **定时执行（中午 12:00、下午 18:00）**：
 
 - 侧栏 **定时任务** 读取的是**运行时**的 `scheduler/tasks.json`（开发环境一般为**项目根目录**下的 `scheduler/tasks.json`），与源码里的 `src/scheduler/tasks.json`（种子）不是同一路径；仅改 `src/scheduler/tasks.json` 时，若本地已有旧配置，需**重启应用**后由程序按版本合并缺失任务，或直接把 ERP 任务段复制进根目录 `scheduler/tasks.json`。
 - 种子合并：首次启动或 `scheduler/.scheduler_seed_merge_version` 版本低于代码内版本时，会自动把种子里有、本地没有的 **任务 id** 追加进去（升级种子时需递增 `task_config._SCHEDULER_SEED_MERGE_VERSION`）。
 - 任务类型 **`pdd_erp_order_sync`**：请求本机 `POST /api/pinduoduo/sync-erp-orders`，执行结束后向飞书 **`FEISHU_USER_ID`** 发一条结果摘要（需已配置飞书应用）。
+- 任务类型 **`pdd_inventory_sync`**：进程内直接调用 `run_inventory_sync_job`（不调 HTTP）；库存/日志表 `table_id` 有默认值，可按需在 `.env` 覆盖并在任务页启用。
 
 ### 途强助手
 

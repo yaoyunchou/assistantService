@@ -1,5 +1,148 @@
 # 变更日志
 
+## 2026-04-08 - 修复定时任务重启后错过触发（misfire）问题
+
+- **问题**：「拼多多 ERP 订单同步（12点与18点）」cron `0 12,18 * * *` 未在 12:00 执行。
+- **根因**：服务在 `11:56:54` 关停，`12:05:34` 才重启，跨过了 12:00 窗口；APScheduler 默认 `misfire_grace_time=1秒`，超时即跳过，不会补跑。
+- **修复**：在 `src/scheduler/manager.py` 的所有 `add_job` 调用中加入 `misfire_grace_time=600`（允许 10 分钟内补跑）和 `coalesce=True`（多次 misfire 只补跑一次），影响 `_register_jobs_from_config`、`add_task_and_register`、`resume_task` 三处。
+
+---
+
+## 2026-04-08 - 扣减日志表新增三列：商品名称 / 商品信息 / 组合
+
+- **需求**：在日志表 `tblXXipFcgH1EQH7` 新增三个字段，便于区分套装和非套装、查询单品名称。
+- **字段说明**：
+  | 字段 | 非套装 | 套装（充电头行）| 套装（数据线行）|
+  |---|---|---|---|
+  | 商品信息 | ERP 原始商品信息文本 | 同左 | 同左 |
+  | 商品名称 | 同商品信息（ERP 原文）| 匹配到的充电头 SKU 名（同库存关联）| 匹配到的数据线 SKU 名（同库存关联）|
+  | 组合 | "否" | "是" | "是" |
+- **变更**：
+  - `inventory_sync_job.py`：新增三个列名常量 `_LOG_COL_PRODUCT_INFO` / `_LOG_COL_PRODUCT_NAME` / `_LOG_COL_IS_BUNDLE`。
+  - 主循环提前提取 `info_raw`，套装先计算 `charger_link` / `cable_link`，再将三个新字段写入 `proposed_log_fields_list`。
+  - `_filter_delta` 自动将三个新字段按文本比对，无需额外修改。
+
+---
+
+## 2026-04-08 - 库存同步：修复套装数据线颜色匹配过严问题
+
+- **问题**：套装 `【蓝色套装】...1.2米PD快充线` 中，线材用的是套装整体颜色（蓝色）去约束匹配，但库存里 1.2米 PD线可能只有粉色/橙色，导致 AI 无法匹配。
+- **根因**：套装颜色标签（如`【蓝色套装】`）代表充电头颜色，不代表线材颜色。
+- **修复**：
+  - 新增三个常量 prompt：`_SYSTEM_PROMPT_NORMAL`（普通订单）、`_SYSTEM_PROMPT_BUNDLE_CHARGER`（套装充电头，颜色=套装颜色）、`_SYSTEM_PROMPT_BUNDLE_CABLE`（套装数据线，颜色不强制对齐套装颜色，优先按长度和接口类型匹配）。
+  - `_ai_match_product_name` 新增 `system_prompt` 参数（默认 `_SYSTEM_PROMPT_NORMAL`）。
+  - `_find_stock_link_for_kind` 新增 `system_prompt` 参数并透传。
+  - 主循环中充电头传 `_SYSTEM_PROMPT_BUNDLE_CHARGER`，数据线传 `_SYSTEM_PROMPT_BUNDLE_CABLE`。
+
+---
+
+## 2026-04-08 - 库存同步：套装订单拆两条日志（方案 A）
+
+- **背景**：ERP 中"套装"订单（充电头 + 数据线组合）原来只写一条日志记录，无法分别扣减两个 SKU 的库存。
+- **方案 A 实现**：
+  - `log_by_order` 数据结构从 `Dict[str, Dict]` 改为 `Dict[str, List[Dict]]`，允许一个订单号对应多条日志行（套装最多 2 条）。
+  - **新增 `_find_stock_link_for_kind`**：针对套装拆解场景，接受"充电头候选列表"或"数据线候选列表"，分别调 AI 匹配，cache_key 包含类别标签避免与非套装缓存冲突。
+  - **主循环**：检测到套装 (`_detect_is_bundle`) 时生成 2 条 `log_fields`（第 0 条=充电头，第 1 条=数据线），按位置与 `log_by_order` 已有条目对应：若不存在则新建，若已存在则计算 delta 更新。
+  - **`flush_log`**：新建成功后用 `setdefault(...,[]).append(...)` 追加到 list，避免覆盖套装另一条。
+  - **退货处理**：改为 `for entry in log_by_order.get(pk_key, [])` 遍历，套装两条日志都写入退货时间/数量。
+  - **`outbound_updates` / `return_updates` 缓存回写**：改为双层循环 `for entries in ... for meta in entries` 按 record_id 精确定位。
+- **文件**：`src/spider/pinduoduo/inventory_sync_job.py`（763 → 818 行）。
+
+---
+
+## 2026-04-07 - 库存同步：AI 匹配「库存关联」，替换旧加权打分
+
+- **方案**：接入 DMXAPI（OpenAI 兼容接口），用 `deepseek-v3` 模型做商品名称匹配，彻底解决功率/颜色/类型/长度/套装等复杂变体问题。
+- **主要变更**：
+  - `requirements.txt`：新增 `openai>=1.0.0`。
+  - `config.py`：新增 `AI_BASE_URL`、`AI_API_KEY`、`AI_STOCK_LINK_MODEL`（从 `.env` 读取，已有配置无需改动）。
+  - `inventory_sync_job.py`（852→763 行）：
+    - 删除所有旧打分基础设施：`_parse_stock_link_match_min_score`、`_extract_wattages`、`_norm_stock_match_text`、`_char_counter`、`_multiset_cover_name_in_info`、`_multiset_jaccard`、`_score_power_match`、`_score_kind_match`、`compute_stock_link_match_score`、`_failure_reasons_from_parts`。
+    - 新增 `_detect_is_bundle`：识别套装（充电头+线组合或含"套装"字）。
+    - 扩充 `_detect_accessory_kind` 关键词：新增 `PD线`、`双C线`、`C线`、`L线` 等缩写。
+    - 新增 `_ai_match_product_name`：lazy import openai，调用 AI 从候选列表选最佳名称；含 ImportError 和网络异常兜底。
+    - `_find_best_stock_link` 重写：① 类型预筛（套装/充电头/线分开）→ ② AI 匹配 → ③ 同次任务内 `ai_cache` 去重复用。
+    - `_stock_link_unmatched_text` 简化：去掉 score/min_score 参数。
+    - `run_inventory_sync_job`：读取 AI 配置，初始化 `ai_cache`，传入 `_find_best_stock_link`。
+- **行数变化**：852 → 763 行。
+
+---
+
+## 2026-04-07 - 库存同步：重构「库存关联」匹配逻辑
+
+- **问题根因**：原实现按订单号从库存表找对应行再读「商品名称」，但库存表里的订单行是由同步任务自动新建的（不含「商品名称」列），导致永远读不到名称。
+- **修复思路**：库存信息表本身就是一个 SKU 产品目录（含「30W 充电头-白色」等短名），匹配应**扫描全部行的「商品名称」作为候选集**，对每个候选打分后取最优——这才是 ERP「商品信息」包含库存表「商品名称」字符的正确利用方式。
+- **主要变更**（`inventory_sync_job.py`）：
+  - 删除 `_inventory_product_name_from_fields`、`_inv_record_quality`、`_stock_link_text` 三个函数。
+  - 新增 `_find_best_stock_link(erp_fields, product_names, ...)` ：接收预先从库存表提取的所有「商品名称」列表，逐一打分取最优，达标则写入名称，不达标则写原因说明。
+  - `inv_by_order: Dict` → `inv_order_keys: Set[str]`（只需判断订单是否已建库存行，不再存字段）。
+  - 去掉主循环里的 `pending_inv_f` 临时缓存逻辑。
+  - `flush_inv` 简化为只往 `inv_order_keys` 中 `.add()`，无需 `_merge_feishu_fields`。
+  - 初始化阶段同时建 `product_names` 候选列表（去重），日志打印候选数量。
+- **行数变化**：949 → 893 行（减少约 56 行）。
+
+---
+
+## 2026-04-07 - 库存同步：名称列多别名 + 飞书单元格结构扩展
+
+- **说明**：用户反馈库存表可见「30W 充电头-白色」等仍报名称为空。增加 `_inventory_product_name_from_fields`：在配置列外依次尝试 `商品名称/名称/产品名称/…` 及表头含「商品」且以「名称」结尾的列；`feishu_field_to_text` 增加 `name/caption/display_value` 等键以兼容单选、关联返回值。同订单多行选优时「有名称」判定与此一致。
+- **涉及文件**：`inventory_sync_job.py`、`feishutable.py`、`README.md`。
+
+---
+
+## 2026-04-07 - 库存同步：扣减日志「库存关联」仅写库存表「商品名称」
+
+- **规则**：匹配达标时「库存关联」只填库存信息表 `商品名称` 列原文，不再用「商品信息」长文案顶替；达标但该列为空时写说明（请补名称后重跑）。未达标仍为未匹配原因 + 商品信息/店铺等。
+- **涉及文件**：`inventory_sync_job.py`。
+
+---
+
+## 2026-04-07 - 库存同步：库存关联「无商品名称」误报与同订单多行
+
+- **原因**：仅读 `商品名称` 做比对，而任务新建库存行只从 ERP 复制了「商品信息」；或同「平台订单号」多行时原先只保留飞书返回的**第一条**，易拿到无名称行。
+- **修复**：`_stock_link_text` 在名称为空时用库存「商品信息」参与 `compute_stock_link_match_score`；达标后若有短名写短名否则写比对文案。`inv_by_order` 合并同订单多行时按「有名称 > 信息更长 > 复制列更多」选优。
+- **涉及文件**：`inventory_sync_job.py`。
+
+---
+
+## 2026-04-07 - 库存同步：临时付款对比日覆盖（测试）
+
+- **说明**：`inventory_sync_job.py` 增加 `INVENTORY_SYNC_PAY_AFTER_OVERRIDE = '2026-04-05'`，在未传 `pay_after_date` 时覆盖 Config，便于多看数据；测完改为 `None` 即恢复环境变量默认。
+- **涉及文件**：`inventory_sync_job.py`。
+
+---
+
+## 2026-04-07 - 库存同步：默认 table_id 与模块注释对齐
+
+- **说明**：`PINDUODUO_FEISHU_INVENTORY_INFO_TABLE_ID` 与日志表一样提供代码默认（`tbljLwzLLKafXl0h`）；`inventory_sync_job.py` 顶部 docstring 列出 ERP / 库存 / 日志三张默认表 id，并标明对应 `Config` 项及 env、options 可覆盖。
+- **涉及文件**：`config.py`、`README.md`、`.env.example`、`inventory_sync_job.py`。
+
+---
+
+## 2026-04-07 - 库存同步：同批新建库存行时「库存关联」误报未找到
+
+- **问题**：同一轮循环里先排队 `batch_create` 库存信息、再写扣减日志时，`inv_by_order` 尚未包含该订单（要等 `flush_inv`），`_stock_link_text` 收到 `inv_fields=None`，误显示「未找到该订单对应的库存信息记录」，且无法按商品名称算分。
+- **修复**：排队新建库存时保留 `pending_inv_f`；解析库存关联时优先 `inv_by_order`，否则用本行待写入的库存字段。
+- **涉及文件**：`src/spider/pinduoduo/inventory_sync_job.py`。
+
+---
+
+## 2026-04-07 - 库存同步：「库存关联」匹配分 + 达标写商品名称原文
+
+- **需求**：库存信息「商品名称」与 ERP「商品信息」顺序不同、需区分功率与头/线；**达标后「库存关联」与库存表「商品名称」文字一致**。
+- **实现**：`compute_stock_link_match_score`（multiset 覆盖、Jaccard、功率、头/线）；**分数 ≥ 阈值则「库存关联」=「商品名称」原文**；**未匹配**时写 `未匹配(分/阈值)｜原因：…｜商品信息：…｜店铺：…`（区分无库存行、无商品名称、功率/字符/类别等原因）。权重与阈值见 `README`。
+- **涉及文件**：`inventory_sync_job.py`、`config.py`、`README.md`、`pinduoduo_routes.py`。
+
+---
+
+## 2026-04-07 - 拼多多：飞书 ERP → 库存信息表 + 扣减日志（定时任务 + API）
+
+- **业务**：定时读取飞书「全部店铺」ERP 订单表，筛选付款时间晚于配置日、有平台订单号的行；在 **库存信息表** 按订单号补建记录；在 **扣减库存日志表** 写入/更新出库列（默认需快递单号）；「提醒」列命中退货关键词时在日志中更新退货时间/数量；待写字段与表中已有值一致则跳过 API。
+- **实现**：新增 `src/spider/pinduoduo/inventory_sync_job.py`；`config.py` 增加 `PINDUODUO_FEISHU_INVENTORY_INFO_TABLE_ID`、`PINDUODUO_FEISHU_INVENTORY_LOG_TABLE_ID` 等环境项；`POST /api/pinduoduo/inventory-sync-from-erp-feishu`；调度器类型 `pdd_inventory_sync` 与种子任务 `pdd_inventory_sync_from_erp_feishu`（默认 `enabled: false`）；种子合并版本号递增至 `2`。
+- **涉及文件**：`inventory_sync_job.py`、`config.py`、`api/routes/pinduoduo_routes.py`、`scheduler/manager.py`、`scheduler/task_config.py`、`src/scheduler/tasks.json`、`scheduler/tasks.json`、`web/templates/scheduler_add.html`、`README.md`。
+
+---
+
 ## 2026-04-07 - 修复：定时任务手动触发死锁
 
 - **问题**：Flask 使用 `threaded=False` 单线程模式，点击"立即执行"时，`/api/scheduler/trigger/` 路由同步调用 `run_task_by_id()`，任务内部又 `requests.post()` 回调本机 Flask API（如 `/api/pinduoduo/sync-erp-orders`），形成死锁——Flask 被第一个请求占用，无法处理第二个请求。

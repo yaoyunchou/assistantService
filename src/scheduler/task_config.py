@@ -17,7 +17,7 @@ TASKS_FILE = CONFIG_DIR / "tasks.json"
 # 规范种子文件：与 task_config.py 同目录的 tasks.json，运行时若本地无配置则按此初始化
 _SEED_TASKS_FILE = Path(__file__).resolve().parent / "tasks.json"
 # 种子合并版本：在种子中新增「内置任务 id」后递增，老用户启动时会自动把缺失 id 追加进本地 tasks.json
-_SCHEDULER_SEED_MERGE_VERSION = "1"
+_SCHEDULER_SEED_MERGE_VERSION = "2"
 _SEED_MERGE_MARKER = CONFIG_DIR / ".scheduler_seed_merge_version"
 
 

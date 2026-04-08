@@ -120,6 +120,50 @@ class Config:
         'PINDUODUO_ERP_FEISHU_VIEW_ID',
         'vew1HQrDsN',
     )
+    # 库存同步：ERP 全部店铺表 → 库存信息表 + 扣减日志表（定时任务 inventory_sync_job）
+    # 库存信息表 / 扣减日志表均有默认 table_id，可用环境变量覆盖（与你们飞书实际表不一致时请改 .env）
+    PINDUODUO_FEISHU_INVENTORY_INFO_TABLE_ID = os.getenv(
+        'PINDUODUO_FEISHU_INVENTORY_INFO_TABLE_ID',
+        'tbljLwzLLKafXl0h',
+    ).strip()
+    PINDUODUO_FEISHU_INVENTORY_LOG_TABLE_ID = os.getenv(
+        'PINDUODUO_FEISHU_INVENTORY_LOG_TABLE_ID',
+        'tblXXipFcgH1EQH7',
+    ).strip()
+    # 付款时间须严格晚于该日「整天」后（见 inventory_sync_job._parse_pay_after_cutoff_ms）
+    PINDUODUO_INVENTORY_PAY_AFTER_DATE = os.getenv(
+        'PINDUODUO_INVENTORY_PAY_AFTER_DATE',
+        '2026-04-07',
+    ).strip()
+    # 日志出库行：是否要求快递单号非空才写入/更新（1/true/yes 为是）
+    _inv_req_ex = (os.getenv('PINDUODUO_INVENTORY_LOG_REQUIRE_EXPRESS', '1') or '1').strip().lower()
+    PINDUODUO_INVENTORY_LOG_REQUIRE_EXPRESS = _inv_req_ex not in ('0', 'false', 'no', 'off')
+    # 提醒列包含以下任一子串则更新日志退货列（逗号分隔）
+    PINDUODUO_INVENTORY_RETURN_KEYWORDS = os.getenv(
+        'PINDUODUO_INVENTORY_RETURN_KEYWORDS',
+        '退货,退款,售后,换货',
+    ).strip()
+    # 库存信息表中与 ERP「平台订单号」对应的列名（表结构一致时勿改）
+    PINDUODUO_INVENTORY_INFO_ORDER_FIELD = (
+        os.getenv('PINDUODUO_INVENTORY_INFO_ORDER_FIELD') or '平台订单号'
+    ).strip()
+    # 库存信息表中「商品名称」列名（用于与 ERP「商品信息」算库存关联匹配分）
+    PINDUODUO_INVENTORY_PRODUCT_NAME_FIELD = (
+        os.getenv('PINDUODUO_INVENTORY_PRODUCT_NAME_FIELD') or '商品名称'
+    ).strip()
+    # 匹配分权重 JSON，可选。键：weight_char_cover, weight_power, weight_kind, weight_symmetric_jaccard
+    # 示例：{"weight_char_cover":0.45,"weight_power":0.3,"weight_kind":0.15,"weight_symmetric_jaccard":0.1}
+    PINDUODUO_INVENTORY_STOCK_LINK_WEIGHTS_JSON = (
+        os.getenv('PINDUODUO_INVENTORY_STOCK_LINK_WEIGHTS_JSON') or ''
+    ).strip()
+    # 匹配分 ≥ 此值（0–100）时，扣减日志「库存关联」写入与库存表「商品名称」相同文案；否则仍为「店铺 / 商品信息」
+    _slm = (os.getenv('PINDUODUO_INVENTORY_STOCK_LINK_MATCH_MIN_SCORE') or '80').strip()
+    try:
+        _slm_v = int(_slm)
+        PINDUODUO_INVENTORY_STOCK_LINK_MATCH_MIN_SCORE = _slm_v if 0 <= _slm_v <= 100 else 80
+    except ValueError:
+        PINDUODUO_INVENTORY_STOCK_LINK_MATCH_MIN_SCORE = 80
+
     # PINDUODUO_TARGET_URL = 'https://www.doubao.com/chat/28899721294850?open_from_ext=1'
 
     
@@ -146,6 +190,13 @@ class Config:
     WS_CLIENT_HOST = os.getenv('WS_CLIENT_HOST', 'https://nestapi.xfysj.top')  # 服务端地址，测试环境 localhost
     WS_CLIENT_PORT = int(os.getenv('WS_CLIENT_PORT', '8080'))  # 服务端端口，测试环境 3000
     WS_CLIENT_PATH = os.getenv('WS_CLIENT_PATH', '/xcx/ws')  # Socket.IO path，与服务端一致
+
+    # AI API 配置（兼容 OpenAI 接口格式，用于库存关联商品名称匹配等 AI 任务）
+    # 使用 DMXAPI 时：AI_BASE_URL=https://www.dmxapi.cn/v1
+    AI_BASE_URL = os.getenv('AI_BASE_URL', '').strip()
+    AI_API_KEY = os.getenv('AI_API_KEY', '').strip()
+    # 库存关联匹配模型（推荐高性价比国产模型：deepseek-v3 / qwen3-flash 等）
+    AI_STOCK_LINK_MODEL = os.getenv('AI_STOCK_LINK_MODEL', 'qwen-flash-2025-07-28').strip()
 
 
 # 在Config类定义后，尝试从配置文件加载配置

@@ -31,3 +31,6 @@ python-socketio[client]>=5.10.0
 
 # 定时任务
 APScheduler>=3.10.0
+
+# AI API（OpenAI 兼容接口，用于库存关联匹配等）
+openai>=1.0.0
