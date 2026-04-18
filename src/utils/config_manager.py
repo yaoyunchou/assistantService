@@ -1,12 +1,16 @@
 """
 配置管理器
-支持配置的保存、加载和热重载
+支持配置的保存、加载和热重载（TOML 格式）
 """
-import json
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 from config import Config
+from utils.toml_helper import load_toml, dump_toml, migrate_json_to_toml
+
+_APP_CONFIG_HEADER = """\
+===== 如意助手 应用配置 =====
+修改后重启应用生效（部分配置支持热重载）"""
 
 
 class ConfigManager:
@@ -22,15 +26,19 @@ class ConfigManager:
         if config_file:
             self.config_file = Path(config_file)
         else:
-            # 默认路径：项目根目录或exe同目录下的app_config.json
             if getattr(sys, 'frozen', False):
                 exe_dir = Path(sys.executable).parent
-                self.config_file = exe_dir / 'app_config.json'
+                base = exe_dir
             else:
-                current_dir = Path(__file__).parent.parent.parent
-                self.config_file = current_dir / 'app_config.json'
+                base = Path(__file__).parent.parent.parent
+            self.config_file = base / 'app_config.toml'
+            # 首次升级：自动把旧 JSON 迁移为 TOML
+            migrate_json_to_toml(
+                base / 'app_config.json',
+                self.config_file,
+                header=_APP_CONFIG_HEADER,
+            )
         
-        # 确保目录存在
         self.config_file.parent.mkdir(parents=True, exist_ok=True)
     
     def get_config(self) -> Dict[str, Any]:
@@ -70,38 +78,32 @@ class ConfigManager:
         Returns:
             配置字典，如果文件不存在返回空字典
         """
-        if not self.config_file.exists():
-            return {}
-        
         try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+            return load_toml(self.config_file)
         except Exception as e:
             print(f"[ConfigManager] 加载配置文件失败: {e}")
             return {}
     
     def save_config(self, config: Dict[str, Any]) -> bool:
         """
-        保存配置到文件
-        
+        保存配置到文件（合并写入：仅覆盖入参中出现的 key，其他 key 原样保留）。
+
         Args:
-            config: 配置字典
-            
+            config: 待更新的配置字典（可以是部分 key）
+
         Returns:
             是否保存成功
         """
         try:
-            # 验证端口号
             if 'port' in config:
                 port = int(config['port'])
                 if port < 1024 or port > 65535:
                     raise ValueError(f"端口号必须在1024-65535之间，当前值: {port}")
                 config['port'] = port
-            
-            # 保存配置
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, ensure_ascii=False, indent=2)
-            
+
+            existing = self.load_config() or {}
+            existing.update(config)
+            dump_toml(existing, self.config_file, header=_APP_CONFIG_HEADER)
             return True
         except Exception as e:
             print(f"[ConfigManager] 保存配置文件失败: {e}")

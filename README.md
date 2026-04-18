@@ -8,6 +8,7 @@
 - 🐍 **Python脚本执行** - 支持执行Python脚本，支持参数传递和结果返回
 - 🛒 **拼多多助手** - 拼多多商家后台自动化工具，支持登录管理和飞书通知
 - 📋 **订单同步（ERP）** - 官方 ERP 全部订单表抓取，按「平台订单号」同步到指定飞书多维表格（独立页面 `/pdd-erp-order-sync`）
+- ✅ **ERP 待审核 / 入库 / 打印** - `/tools/pinduoduo` 加载待审核列表并提交审核（SQLite + 可选飞书审核表）；独立页 `/pdd-erp-delivering-print` 一键「打印并发货」待发货列表
 - 📡 **途强助手** - 途强智能设备管理平台（iot.tqiot.com）自动化，支持自动登录与最近 30 天记录获取
 - 📦 **1688 订单提取** - 从 1688 待收货订单列表提取订单与收货信息，支持同步到飞书多维表格（Web 页与命令行脚本）
 - ⚙️ **模块化配置** - 支持通过配置控制功能模块的启用/禁用和启动时机
@@ -181,6 +182,8 @@ python src/main.py
 - 侧栏进入 **订单同步**，或访问 `http://127.0.0.1:8889/pdd-erp-order-sync`（端口以实际配置为准）。
 - 使用 `src/spider/pinduoduo/scripts/pdd-erp-order-all-table.js` 在 `https://mms.pinduoduo.com/erp/order/all` 页抓取 `beast-core-table` 数据；默认写入飞书表 `tblyAX9t4DJK2wuJ`（与视图 `vew1HQrDsN` 同属应用 `ORSHbpajoaANQ4sFg25c917jnTc`），可通过环境变量 `PINDUODUO_ERP_FEISHU_TABLE_ID` / 页面输入覆盖。
 - 若被登录拦截：发送飞书提醒、Webhook 卡片（若已配置）、并返回二维码供页面展示（与「同步 PDD 订单地址」一致）。
+- 飞书写入若有失败，`feishu_sync.message` 与接口 JSON 中的 `feishu_sync.failed_order_sns` 会列出对应**平台订单号**；应用日志与定时任务摘要中也会打印「失败订单号」行。
+- 新建行时默认**不传**「发货剩余」至飞书（`feishutable.ERP_FEISHU_OMIT_FIELD_KEYS`），避免表内未建该列时出现 `FieldNameNotFound`；若日后在多维表格增加同名列，可从该集合中移除对应字段名。
 - **定时同步**：侧栏 **定时任务** 中类型为「拼多多 ERP 订单同步」的任务会按 cron 调用 `POST /api/pinduoduo/sync-erp-orders`。仓库种子 `src/scheduler/tasks.json` 含一条 **`0 12,18 * * *`**（每天 12:00 与 18:00）。首次运行若用户数据目录无 `scheduler/tasks.json`，会从种子复制；若你已有旧配置，需在定时任务页手动添加该任务或删掉旧文件后重启。每次执行结束会向飞书 **私聊**（`.env` 中 `FEISHU_USER_ID`，须为有效 open_id 等）发送结果摘要；未配置飞书则仅写日志。任务 `data` 可选：`url`（默认本机 API）、`data`（请求体）、`timeout`（默认 780 秒）、`feishu_user_id`（覆盖默认接收人）。
 
 **库存飞书同步（定时，无需浏览器）**：
@@ -267,6 +270,10 @@ pyinstaller main.spec
 
 - 确保Playwright浏览器驱动已安装
 - 打包后的exe需要与浏览器驱动在同一目录
+- **`.env`**：程序从 **exe 同目录** 读取 `.env`（含 `AI_BASE_URL`、`AI_API_KEY`、飞书等）。执行 `pyinstaller main.spec` 时若项目根已有 `.env`，会**自动复制**到 `dist/如意助手/`；若未复制，请手动把 `.env` 放到与 `如意助手.exe` 同一文件夹。
+- **库存映射**：`config/inventory_product_mapping.json` 会打入 `dist/如意助手/_internal/config/`（PyInstaller 6 onedir 模式）；代码通过 `get_bundled_data_root()` 读取默认值，用户修改的映射写入可写路径并与默认合并。
+- **定时任务**：仓库根目录 `scheduler/tasks.toml` 会打入 `dist/如意助手/_internal/scheduler/`。重新打包前请在该文件中保存你的任务；若只改过 `dist` 里文件，`main.spec` 会清空 `dist` 后重建，未写回仓库的修改会丢失。
+- **JS 注入脚本**：`src/spider/pinduoduo/scripts/` 目录会打入 `_internal/spider/pinduoduo/scripts/`；新增脚本文件时务必检查 `main.spec` 的 `datas` 是否已包含。
 - 首次运行会自动添加到开机启动项
 
 ## 开发指南

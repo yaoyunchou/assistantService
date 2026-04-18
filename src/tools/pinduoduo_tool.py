@@ -10,13 +10,13 @@ logger = get_logger('PinduoduoTool')
 
 
 class PinduoduoTool(BaseTool):
-    """拼多多助手工具"""
+    """订单助手工具"""
 
     def __init__(self):
         super().__init__(
             name="pinduoduo",
-            display_name="拼多多助手",
-            description="拼多多商家后台自动化工具，支持登录管理和自动化操作"
+            display_name="订单助手",
+            description="订单后台自动化工具，支持登录管理和自动化操作"
         )
         self.browser_pool = None
 

@@ -16,7 +16,70 @@
             <div class="sidebar-header">
                 <h1>{{ config.APP_NAME }}</h1>
                 <p class="version">v{{ config.APP_VERSION }}{% if config.APP_ENV == 'development' %} <span style="background:#f39c12;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;margin-left:4px;">DEV</span>{% endif %}</p>
+                <div class="sidebar-headless-toggle" title="开 = 浏览器后台运行（不弹窗）；关 = 显示浏览器窗口（调试用）。改后立即生效，正在跑的任务结束后切换。">
+                    <label class="hl-switch">
+                        <input type="checkbox" id="sidebar-headless-cb" {% if config.HEADLESS %}checked{% endif %}>
+                        <span class="hl-slider"></span>
+                    </label>
+                    <span class="hl-label" id="sidebar-headless-label">{{ '后台运行' if config.HEADLESS else '显示窗口' }}</span>
+                </div>
             </div>
+            <style>
+                .sidebar-headless-toggle {
+                    display: flex; align-items: center; gap: 8px;
+                    margin-top: 8px; padding: 6px 10px;
+                    background: rgba(255,255,255,0.08);
+                    border-radius: 6px; font-size: 12px;
+                    user-select: none;
+                }
+                .hl-switch { position: relative; display: inline-block; width: 36px; height: 20px; flex: none; }
+                .hl-switch input { opacity: 0; width: 0; height: 0; }
+                .hl-slider {
+                    position: absolute; cursor: pointer; inset: 0;
+                    background: #adb5bd; border-radius: 20px;
+                    transition: background .2s;
+                }
+                .hl-slider::before {
+                    content: ''; position: absolute;
+                    height: 16px; width: 16px; left: 2px; top: 2px;
+                    background: #fff; border-radius: 50%;
+                    transition: transform .2s;
+                }
+                .hl-switch input:checked + .hl-slider { background: #2ecc71; }
+                .hl-switch input:checked + .hl-slider::before { transform: translateX(16px); }
+                .hl-switch input:disabled + .hl-slider { opacity: .55; cursor: progress; }
+                .hl-label { color: #e9ecef; font-weight: 500; }
+            </style>
+            <script>
+                (function(){
+                    const cb = document.getElementById('sidebar-headless-cb');
+                    const label = document.getElementById('sidebar-headless-label');
+                    if (!cb) return;
+                    cb.addEventListener('change', async () => {
+                        const target = cb.checked;
+                        cb.disabled = true;
+                        const oldText = label.textContent;
+                        label.textContent = '切换中…';
+                        try {
+                            const r = await fetch('/api/settings/headless', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ headless: target }),
+                            });
+                            const d = await r.json();
+                            if (!d.success) throw new Error(d.error || '切换失败');
+                            label.textContent = target ? '后台运行' : '显示窗口';
+                            if (d.message) console.log('[headless]', d.message);
+                        } catch (e) {
+                            cb.checked = !target;
+                            label.textContent = oldText;
+                            alert('切换 headless 失败: ' + e.message);
+                        } finally {
+                            cb.disabled = false;
+                        }
+                    });
+                })();
+            </script>
             <nav class="sidebar-nav">
                 <a href="{{ url_for('index') }}" class="nav-item {% if request.endpoint == 'index' %}active{% endif %}">
                     <span class="nav-icon">🏠</span>
@@ -32,6 +95,10 @@
                 <a href="{{ url_for('pinduoduo_erp_order_sync') }}" class="nav-item {% if request.endpoint == 'pinduoduo_erp_order_sync' %}active{% endif %}">
                     <span class="nav-icon">📋</span>
                     <span class="nav-text">订单同步</span>
+                </a>
+                <a href="{{ url_for('pinduoduo_erp_delivering_print') }}" class="nav-item {% if request.endpoint == 'pinduoduo_erp_delivering_print' %}active{% endif %}">
+                    <span class="nav-icon">🖨️</span>
+                    <span class="nav-text">待发货打印</span>
                 </a>
                 <a href="{{ url_for('browser_status') }}" class="nav-item {% if request.endpoint == 'browser_status' %}active{% endif %}">
                     <span class="nav-icon">🌐</span>

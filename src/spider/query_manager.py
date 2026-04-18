@@ -299,6 +299,34 @@ class BrowserPool:
 
     # ─── 关闭与状态 ────────────────────────────────────────────
 
+    def restart_browser_context(self, *, timeout: float = 15.0) -> bool:
+        """
+        软重启：关闭当前 context 和 page，下次 execute() 会按当前 self.headless 重建。
+
+        executor 是单线程，本任务会自动排在正在执行的任务之后，因此即使
+        调用瞬间 page 正被业务使用也不会拦腰打断（业务结束 → 我们关闭 → 下次重建）。
+
+        Returns:
+            是否成功执行（False 表示提交超时或异常）
+        """
+        def _task():
+            self._page = None
+            if self._context is not None:
+                try:
+                    self._context.close()
+                except Exception as e:
+                    print(f"[BrowserPool] 软重启关闭 context 时异常（已忽略）: {e}")
+                self._context = None
+            return True
+
+        try:
+            self._executor.submit(_task).result(timeout=timeout)
+            print(f"[BrowserPool] 软重启完成，下次任务将以 headless={self.headless} 启动")
+            return True
+        except Exception as e:
+            print(f"[BrowserPool] 软重启失败: {e}")
+            return False
+
     def close(self):
         """关闭浏览器，释放所有资源"""
         print("[BrowserPool] 开始关闭...")

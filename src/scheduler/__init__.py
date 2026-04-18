@@ -1,7 +1,7 @@
 """
 定时任务模块
 
-任务配置存 scheduler/tasks.json（id=uuid, name, type, data, cron），按 type 执行对应 handler。
+任务配置存 scheduler/tasks.toml（id=uuid, name, type, data, cron），按 type 执行对应 handler。
 """
 from .manager import (
     get_scheduler,

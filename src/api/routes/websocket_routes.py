@@ -66,7 +66,7 @@ def websocket_config_get():
     'responses': {200: {'description': 'success'}},
 })
 def websocket_config_post():
-    """更新 WebSocket 客户端配置并保存到 app_config.json"""
+    """更新 WebSocket 客户端配置并保存到 app_config.toml"""
     try:
         data = request.get_json() or {}
         client = get_websocket_client()

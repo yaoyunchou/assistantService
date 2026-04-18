@@ -125,6 +125,14 @@ a = Analysis(
     datas=[
         # config 包通过路径动态加载同级 config.py，需显式打入包（否则打包后找不到）
         (str(src_dir / 'config.py'), '.'),
+        # 模块开关（需浏览器）；缺省时用代码内 DEFAULT_MODULE_CONFIG，但打入文件便于用户修改
+        (str(project_root / 'module_config.toml'), '.'),
+        # 库存商品信息→商品名称映射（库存同步 / 映射页）；与 exe 同目录 config/ 可继续编辑
+        (str(project_root / 'config' / 'inventory_product_mapping.json'), 'config'),
+        # 定时任务默认列表（与仓库 scheduler/tasks.toml 一致；运行时可继续改 exe 旁 scheduler/tasks.toml）
+        (str(project_root / 'scheduler' / 'tasks.toml'), 'scheduler'),
+        # Playwright 注入脚本（erp_order_sync / order_address_sync 通过 __file__ 引用）
+        (str(src_dir / 'spider' / 'pinduoduo' / 'scripts'), 'spider/pinduoduo/scripts'),
         # Web模板文件
         (str(src_dir / 'web' / 'templates'), 'web/templates'),
         # 静态资源文件
@@ -209,6 +217,31 @@ coll = COLLECT(
     name=APP_NAME,
 )
 
+
+def copy_dotenv_to_dist():
+    """若项目根存在 .env，复制到 dist/<APP_NAME>/，与 exe 同目录，避免打包后读不到 AI/飞书等配置。"""
+    dist_dir = project_root / 'dist' / APP_NAME
+    src = project_root / '.env'
+    dst = dist_dir / '.env'
+    print("\n" + "=" * 60)
+    if not src.is_file():
+        print("提示: 项目根目录无 .env 文件，未自动复制。")
+        print(f"  若需 AI/飞书密钥，请将 .env 放到 exe 同目录: {dist_dir}")
+        print("=" * 60 + "\n")
+        return
+    if not dist_dir.is_dir():
+        print(f"警告: 打包输出目录不存在，跳过复制 .env: {dist_dir}")
+        print("=" * 60 + "\n")
+        return
+    try:
+        shutil.copy2(src, dst)
+        print(f"已复制 .env 到打包目录（exe 同目录）: {dst}")
+        print("=" * 60 + "\n")
+    except Exception as e:
+        print(f"复制 .env 失败: {e}")
+        print("=" * 60 + "\n")
+
+
 # 打包后处理：自动复制浏览器驱动
 def copy_playwright_drivers():
     """复制 Playwright 浏览器驱动到打包目录"""
@@ -282,5 +315,6 @@ def copy_playwright_drivers():
         return False
 
 # 执行后处理
+copy_dotenv_to_dist()
 if not copy_playwright_drivers():
         print(f"警告: 浏览器驱动未复制，请手动复制到 dist/{APP_NAME}/playwright_drivers/ 目录")

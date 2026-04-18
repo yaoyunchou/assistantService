@@ -116,6 +116,66 @@ def manage_app_config():
         return jsonify({'success': False, 'error': f'服务器内部错误: {str(e)}'}), 500
 
 
+@bp.route('/headless', methods=['GET', 'POST'])
+@swag_from({
+    'tags': ['配置'],
+    'summary': '快捷开关：浏览器无头模式（修改后即时生效）',
+    'responses': {200: {'description': '当前/已更新的状态'}, 400: {'description': '参数错误'}}
+})
+def quick_toggle_headless():
+    """
+    GET: 返回当前 headless 状态
+    POST: body = { "headless": bool }；
+          - 持久化到 app_config.toml（合并保存）
+          - 更新 Config.HEADLESS 与 BrowserPool.headless
+          - 软重启浏览器 context（如非空且未占用），下次任务以新模式启动
+    """
+    try:
+        from config import Config
+        from api.routes.context import get_browser_pool
+
+        if request.method == 'GET':
+            pool = get_browser_pool()
+            return jsonify({
+                'success': True,
+                'headless': bool(Config.HEADLESS),
+                'pool_headless': bool(pool.headless) if pool else None,
+                'pool_busy': bool(pool._busy) if pool else False,
+            }), 200
+
+        data = request.get_json(silent=True) or {}
+        if 'headless' not in data:
+            return jsonify({'success': False, 'error': '缺少 headless 字段'}), 400
+        new_val = bool(data['headless'])
+        old_val = bool(Config.HEADLESS)
+
+        config_manager.save_config({'headless': new_val})
+        Config.HEADLESS = new_val
+
+        restarted = False
+        restart_msg = ''
+        pool = get_browser_pool()
+        if pool is not None:
+            pool.headless = new_val
+            if old_val != new_val:
+                if pool._busy:
+                    restart_msg = '当前有浏览器任务在跑，软重启已排队，任务结束后立即生效'
+                else:
+                    restart_msg = '已立即重启浏览器'
+                restarted = pool.restart_browser_context()
+
+        return jsonify({
+            'success': True,
+            'headless': new_val,
+            'changed': old_val != new_val,
+            'restarted': restarted,
+            'message': restart_msg or ('headless 已切换为 ' + str(new_val)),
+        }), 200
+    except Exception as e:
+        routes_logger.error(f"切换 headless 异常: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': f'服务器内部错误: {str(e)}'}), 500
+
+
 @bp.route('/reload', methods=['POST'])
 @swag_from({
     'tags': ['配置'],

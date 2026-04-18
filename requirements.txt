@@ -31,6 +31,11 @@ python-socketio[client]>=5.10.0
 
 # 定时任务
 APScheduler>=3.10.0
+croniter>=2.0.0
 
 # AI API（OpenAI 兼容接口，用于库存关联匹配等）
 openai>=1.0.0
+
+# TOML 配置文件读写（Python 3.11+ 自带 tomllib 读取，但写入仍需 tomli-w）
+tomli>=2.0.0
+tomli-w>=1.0.0

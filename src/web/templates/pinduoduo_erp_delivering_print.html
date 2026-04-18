@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+
+{% block title %}待发货打印 - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.status-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 30px;
+    margin-bottom: 24px;
+}
+.status-title { font-size: 20px; font-weight: 600; color: #2c3e50; margin-bottom: 12px; }
+.desc { color: #7f8c8d; line-height: 1.65; margin-bottom: 16px; font-size: 14px; }
+.btn {
+    padding: 14px 28px;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    background: #3498db;
+    color: white;
+}
+.btn:hover { background: #2980b9; }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.result-box {
+    margin-top: 16px;
+    padding: 14px;
+    border-radius: 8px;
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    font-size: 13px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    display: none;
+}
+.qrcode-container {
+    display: none;
+    text-align: center;
+    padding: 24px;
+    margin-bottom: 20px;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+}
+.qrcode-container.show { display: block; }
+.qrcode-image { max-width: 280px; border: 2px solid #e0e0e0; border-radius: 8px; padding: 8px; }
+.qrcode-status { margin-top: 12px; padding: 10px; border-radius: 6px; font-size: 14px; }
+.qrcode-status.waiting { background: #fff3cd; color: #856404; }
+.qrcode-status.success { background: #d4edda; color: #155724; }
+.audit-goods-mini { font-size: 12px; color: #495057; margin-top: 16px; max-height: 360px; overflow-y: auto; }
+.audit-goods-mini table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.audit-goods-mini th, .audit-goods-mini td { border-bottom: 1px solid #eee; padding: 6px 8px; text-align: left; }
+.loading {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 3px solid rgba(52, 152, 219, 0.3);
+    border-radius: 50%;
+    border-top-color: #3498db;
+    animation: spin 0.9s linear infinite;
+    vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>待发货 · 打印并发货</h2>
+    <p class="subtitle">在 <code>{{ config.PINDUODUO_ERP_ORDER_DELIVERING_URL }}</code> 执行「全选 → 打印快递单 → 打印并发货」。需已登录拼多多商家后台。</p>
+</div>
+
+<div id="qrcode-container" class="qrcode-container">
+    <h3 style="margin-bottom:12px;">请使用拼多多 APP 扫码登录</h3>
+    <img id="qrcode-image" class="qrcode-image" src="" alt="二维码">
+    <div id="qrcode-status" class="qrcode-status waiting"><span class="loading"></span> 等待扫码...</div>
+</div>
+
+<div class="status-card">
+    <div class="status-title">执行打印并发货</div>
+    <p class="desc">将处理当前「待发货」列表中的全部订单（与脚本逻辑一致）。列表为空时会提示 empty。</p>
+    <button type="button" id="print-ship-btn" class="btn">打印并发货（待发货列表）</button>
+    <div id="print-result" class="result-box"></div>
+</div>
+
+<div class="status-card">
+    <div class="status-title">今日已审核商品（本地记录）</div>
+    <p class="desc">来自审核成功后写入 SQLite 的数据，便于核对；实际打印仍以上方按钮为准。</p>
+    <div id="today-audit-wrap" class="audit-goods-mini">
+        <p style="color:#adb5bd;">加载中...</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function showQR(dataUrl) {
+    const box = document.getElementById('qrcode-container');
+    document.getElementById('qrcode-image').src = dataUrl;
+    document.getElementById('qrcode-status').className = 'qrcode-status waiting';
+    document.getElementById('qrcode-status').innerHTML = '<span class="loading"></span> 等待扫码...';
+    box.classList.add('show');
+}
+let pollTimer = null;
+function startPoll() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+        const r = await fetch('/api/pinduoduo/check_login_complete');
+        const d = await r.json();
+        if (d.success && d.logged_in) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            document.getElementById('qrcode-status').className = 'qrcode-status success';
+            document.getElementById('qrcode-status').textContent = '✓ 登录成功';
+            setTimeout(() => document.getElementById('qrcode-container').classList.remove('show'), 2500);
+        }
+    }, 2000);
+}
+
+document.getElementById('print-ship-btn').addEventListener('click', async function () {
+    const btn = this;
+    const out = document.getElementById('print-result');
+    btn.disabled = true;
+    out.style.display = 'none';
+    try {
+        const r = await fetch('/api/pinduoduo/erp-delivering/print-ship', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const d = await r.json();
+        if (d.intercepted && d.qrcode) {
+            showQR(d.qrcode);
+            startPoll();
+        }
+        out.style.display = 'block';
+        let t = d.message || '';
+        if (d.script_result && d.script_result.log) {
+            t += '\n' + (d.script_result.log || []).join('\n');
+        }
+        out.textContent = t || JSON.stringify(d);
+        out.style.color = d.success ? '#155724' : '#721c24';
+    } catch (e) {
+        out.style.display = 'block';
+        out.style.color = '#721c24';
+        out.textContent = String(e);
+    } finally {
+        btn.disabled = false;
+    }
+});
+
+async function loadToday() {
+    const wrap = document.getElementById('today-audit-wrap');
+    try {
+        const r = await fetch('/api/pinduoduo/erp-audit/today');
+        const d = await r.json();
+        if (!d.success || !d.rows || !d.rows.length) {
+            wrap.innerHTML = '<p style="color:#adb5bd;">暂无今日审核记录</p>';
+            return;
+        }
+        let html = '<table><thead><tr><th>订单号</th><th>商品</th></tr></thead><tbody>';
+        for (const row of d.rows) {
+            const goods = row.goods || [];
+            const lines = goods.map(g => {
+                const t = (g.title || '').trim();
+                const s = (g.spec || '').trim();
+                const q = g.qty != null ? g.qty : '';
+                return (t + ' ' + s + ' x' + q).trim();
+            }).join('<br>');
+            html += '<tr><td style="word-break:break-all;">' + (row.order_no || '') + '</td><td>' + (lines || '-') + '</td></tr>';
+        }
+        html += '</tbody></table>';
+        wrap.innerHTML = html;
+    } catch (e) {
+        wrap.innerHTML = '<p style="color:#e74c3c;">加载失败</p>';
+    }
+}
+loadToday();
+</script>
+{% endblock %}

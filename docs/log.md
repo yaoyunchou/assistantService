@@ -1,10 +1,142 @@
 # 变更日志
 
+## 2026-04-18 - 侧边栏头部新增 headless 快捷开关（即时生效）
+
+- **背景**：`headless=false` 用完容易忘记关回去，每次都要去配置页改太繁琐。
+- **新增**：`base.html` 侧边栏头部加 toggle 开关，开 = 后台运行（headless=true），关 = 显示浏览器窗口（headless=false）；变更后立即调 `POST /api/settings/headless`，由后端：
+  1. 合并写入 `app_config.toml`（注意：`config_manager.save_config` 已改为合并保存，避免覆盖未传字段）；
+  2. 同步 `Config.HEADLESS` 与 `BrowserPool.headless`；
+  3. 触发 `BrowserPool.restart_browser_context()` 软重启（关闭当前 context 与 page，下次 `execute()` 自动用新 headless 重建）；executor 单线程能保证排队在当前任务之后，不会拦腰打断。
+- **改动文件**：
+  - `src/spider/query_manager.py`：新增 `restart_browser_context()`，仅关 context+page，不关 playwright/executor，下次任务自动重建。
+  - `src/utils/config_manager.py`：`save_config` 改为「合并保存」（先 `load_config()` 再 `update`），修复部分保存会清空其他键的潜在问题。
+  - `src/api/routes/settings_routes.py`：新增 `GET/POST /api/settings/headless`，支持「持久化 + 立即生效 + 浏览器软重启」一站式切换。
+  - `src/web/templates/base.html`：sidebar-header 新增开关 + 内联 CSS + 内联 JS（绿色拨杆，附 tooltip 说明）。
+- **不影响**：现有配置页 `/settings` → `POST /api/settings/app` 仍可用；现 `save_config` 合并语义对其完全透明（仅更新自己提交的字段，反而更安全）。
+
+---
+
+## 2026-04-18 - 「拼多多助手」改名「订单助手」（弱化平台品牌）
+
+- **改名**：侧边栏导航 + 页面 `<h2>` + 浏览器 tab 标题中的「拼多多助手」统一改为「订单助手」（含 description 配套调整为「订单后台自动化工具，支持登录管理和自动化操作」）。
+- **改动文件**：
+  - `src/tools/pinduoduo_tool.py`：`PinduoduoTool.__init__` 的 `display_name`/`description`（这是 `tool.display_name` 真正的数据源——`tool_manager.get_tools_info()` → `tool.get_info()`）。
+  - `module_config.toml`：`[pinduoduo]` 段 `display_name`/`description`（保持与 toml 一致，仅 enable/初始化时使用）。
+  - `src/config/modules.py`：`DEFAULT_MODULES['pinduoduo']` 默认值同步（打包后无 toml 时的兜底）。
+- **未改**：`tool.name` 仍为 `pinduoduo`，所有路由 `/api/pinduoduo/*` 与 `/tools/pinduoduo` URL 保持不变；图标 `🛒` 暂保留。其他历史 `docs/`、`README` 等文档以及 `pinduoduo_routes.py` 模块描述未做大规模改名，保留以便检索历史脉络。
+
+---
+
+## 2026-04-18 - 待审核列表前端新增「店铺 / 实收」列
+
+- **前端**：`/tools/pinduoduo` 待审核表格新增「店铺 / 实收」列（位于「商品/规格/数量」与「平台订单号」之间），渲染脚本返回的 `row.shopName`（蓝色徽标）与 `row.actualAmount`（橙色「实收 ¥xx.xx」）。
+- **改动文件**：`src/web/templates/tools/pinduoduo.html`：`<thead>` 加 `<th>店铺 / 实收</th>`，所有 `colspan="4"` 同步改为 `colspan="5"`；`renderTable` 增加 `escapeHtml`、`shopHtml` 拼接。
+- **范围**：纯展示，不改 `audit_store` / 飞书同步链路；店铺写入飞书表 / SQLite 仍待后续按 `docs/next/pinduoduo-erp-audit-feishu-table.md` 增列后实现。
+
+---
+
+## 2026-04-18 - 拼多多 ERP 待审核列表、SQLite、飞书审核表与待发货打印
+
+- **前端**：`/tools/pinduoduo` 顶部新增「待审核订单」卡片，进入页面自动调用 `POST /api/pinduoduo/erp-audit/pending`，支持勾选、`POST .../erp-audit/submit`、登录二维码与 `/api/pinduoduo/login`（与 ERP 同步页一致的拦截处理）；侧链「待发货打印」。
+- **后端**：新增 `login_intercept.py`、`erp_audit.py`、`audit_store.py`（SQLite：`data/pdd_erp_audit.sqlite`）；`feishutable.sync_audit_events_to_feishu`；路由 `erp-audit/pending|submit|today|sync-feishu`、`erp-delivering/print-ship`。`erp_order_sync` 改用公共登录拦截。
+- **脚本**：`pdd-erp-order-audit-goods.js` 勾选阶段改为虚拟列表下按订单号滚动定位后再勾。
+- **文档**：飞书审核表字段说明见 `docs/next/pinduoduo-erp-audit-feishu-table.md`。独立路由 `/pdd-erp-delivering-print`，侧栏「待发货打印」。
+- **配置**：`PINDUODUO_ERP_ORDER_AUDIT_URL`、`PINDUODUO_ERP_ORDER_DELIVERING_URL`、`PINDUODUO_ERP_AUDIT_FEISHU_TABLE_ID`（默认 `tblVgYVKU5DbyKdM`，与文档一致；未配置时不再静默跳过同步）、`PINDUODUO_ERP_AUDIT_DB_PATH`（可选）。
+- **修复**：`/api/pinduoduo/erp-audit/submit` 在 SQLite 入库后增加飞书同步进度日志；当未配置 table_id 时输出 WARNING 而非静默跳过。`/tools/pinduoduo` 待审核缩略图放大并支持悬停预览/点击查看原图；`pdd-erp-order-delivering-print-ship.js` 在判空前增加 5–15s 弹性等待，避免列表请求慢被误判为空。
+
+---
+
+## 2026-04-13 - 打包后库存映射配置不回显（PyInstaller 6 _internal 路径不匹配）
+
+- **现象**：打包后页面「库存映射配置」加载数据时，已保存的映射全部为空，不能正常回显。
+- **原因**：PyInstaller 6 onedir 模式下 `datas` 文件放在 `_internal/` 子目录，而 `load_mappings()` 用 `get_project_root()`（= `exe_dir/`）拼接路径，实际去找 `exe_dir/config/inventory_product_mapping.json`；真实文件在 `exe_dir/_internal/config/`，路径不匹配导致读到空字典。
+- **修复**：`path_helper.py` 新增 `get_bundled_data_root()` 函数，frozen 时优先返回 `_internal` 目录；`inventory_mapping.load_mappings()` 改用 `get_bundled_data_root()` 读默认内嵌文件，`get_project_root()` 作为回退兼容手动放置场景。
+
+---
+
+## 2026-04-13 - 打包遗漏 Playwright 注入脚本导致 ERP 订单同步失败
+
+- **现象**：打包后执行「拼多多 ERP 订单同步」报 `No such file or directory: ..._internal\spider\pinduoduo\scripts\pdd-erp-order-all-table.js`。
+- **原因**：`erp_order_sync.py` 和 `order_address_sync.py` 通过 `Path(__file__) / 'scripts' / *.js` 加载注入脚本，但 `main.spec` 的 `datas` 未包含 `src/spider/pinduoduo/scripts/` 目录，打包后 `_internal` 下缺少该文件夹。
+- **修复**：`main.spec` 的 `datas` 增加 `(src/spider/pinduoduo/scripts, spider/pinduoduo/scripts)`，将整个 scripts 目录（含 `pdd-erp-order-all-table.js`、`pdd-order-search-receiver.js`）打入包。
+
+---
+
+## 2026-04-12 - 定时任务 `scheduler/tasks.toml` 随 exe 分发
+
+- **现象**：打包后定时任务列表为空或恢复默认，与仓库里编辑的 `scheduler/tasks.toml` 不一致。
+- **原因**：运行时数据在 `get_safe_data_path("scheduler")/tasks.toml`（exe 旁 `scheduler/`）；`main.spec` 未打入该文件；且种子原仅从 `src/scheduler/tasks.toml` 读取，与仓库根目录 `scheduler/tasks.toml` 易脱节。
+- **修复**：`main.spec` 的 `datas` 增加 `scheduler/tasks.toml` → 输出目录 `scheduler/`；`task_config._load_seed` 优先读 `get_project_root()/scheduler/tasks.toml`；`src/scheduler/tasks.toml` 与根目录种子对齐作兼容回退。
+
+---
+
+## 2026-04-12 - 库存映射 JSON 随 exe 打包与合并加载
+
+- **需求**：`config/inventory_product_mapping.json` 需在打包后可用，避免每次重新生成；支持在本地增改配置。
+- **说明**：映射由 `inventory_mapping.load_mappings` 使用，库存同步与 `/inventory-mapping/*` API 均依赖。
+- **实现**：`main.spec` 的 `datas` 增加该文件到输出目录 `config/`；`load_mappings` 先读安装目录（项目根 / exe 同目录）默认文件，再与 `get_safe_data_path` 可写路径合并，后者覆盖同名键；`save_mappings` 仍只写入可写路径。
+
+---
+
+## 2026-04-12 - 打包 exe 后读不到根目录 .env（AI 配置失效）
+
+- **原因**：开发时 `.env` 在项目根；PyInstaller **不会**自动把 `.env` 打进包，冻结模式下原逻辑只从 **`exe 同目录`** 加载，若未手动复制则 `AI_BASE_URL` / `AI_API_KEY` 等为空。
+- **修复**：`src/config.py` 冻结时依次尝试 **exe 目录**、**当前工作目录** 的 `.env`；`main.spec` 打包结束若项目根存在 `.env` 则 **复制到 `dist/<应用名>/`**；README「打包注意事项」补充说明。
+
+---
+
+## 2026-04-11 - 打包 exe：默认启用拼多多模块以初始化浏览器池
+
+- **现象**：`task_*.log` 中 ERP 同步返回 `浏览器池未初始化`，与飞书字段无关。
+- **原因**：冻结模式下 `module_config.toml` 需在 exe 同目录；若缺失则仅用 `DEFAULT_MODULE_CONFIG`，原默认无 `pinduoduo`，`get_modules_requiring_browser()` 为空，跳过 `init_browser_pool()`。
+- **修复**：`config/modules.py` 的 `DEFAULT_MODULE_CONFIG` 增加 `pinduoduo`（enabled + requires_browser）；`main.spec` 的 `datas` 增加 `module_config.toml` 复制到打包根目录。
+
+---
+
+## 2026-04-11 - ERP 写飞书：默认不传「发货剩余」
+
+- **原因**：飞书表未建「发货剩余」列时，新建记录报 `1254045 FieldNameNotFound`。
+- **实现**：`feishutable._erp_row_to_fields` 跳过 `ERP_FEISHU_OMIT_FIELD_KEYS`（当前仅 `发货剩余`）。增量更新子集本就不含该列。
+
+---
+
+## 2026-04-11 - ERP 同步失败：日志中带飞书 API 错误与字段快照
+
+- **需求**：某平台订单号写入失败时需明确原因（如单选字段选项不匹配）。
+- **实现**：`FeishuTableClient` 增加 `_make_request_detail`、`create_record_with_error`、`update_record_with_error`；`sync_erp_order_rows_to_feishu` 在单条失败及批量部分失败路径调用并打 `ERP 同步飞书写入失败 reason=… 平台订单号=… err=… fields=…`。
+
+---
+
+## 2026-04-11 - ERP 订单同步：日志与摘要中输出失败的平台订单号
+
+- **需求**：飞书同步统计「失败 N 条」时无法对应到具体订单。
+- **实现**：`feishutable.sync_erp_order_rows_to_feishu` 在各类失败路径收集 `failed_order_sns`，写入返回字段并在 `message` 中追加「失败订单号: …」；`logger.warning` 同步打印。调度器 `_format_pdd_erp_sync_summary` 增加一行「失败订单号: …」。Webhook 详情沿用完整 `message`，已含失败单号。
+
+---
+
+## 2026-04-08 - 恢复调度器 `pdd_inventory_sync` 任务类型
+
+- **问题**：`tasks.json` 中「拼多多库存」任务类型为 `pdd_inventory_sync`，但 `manager.get_task_handlers()` 未注册，定时触发报「未知任务类型」。
+- **修复**：恢复 `_run_pdd_inventory_sync`、`get_task_handlers` / `get_task_type_schemas` 中对该类型的注册；成功/失败用返回元组第一元 `(eligible_count | -1)` 配合 `_infer_handler_success` 区分。
+
+---
+
 ## 2026-04-08 - 修复定时任务重启后错过触发（misfire）问题
 
 - **问题**：「拼多多 ERP 订单同步（12点与18点）」cron `0 12,18 * * *` 未在 12:00 执行。
 - **根因**：服务在 `11:56:54` 关停，`12:05:34` 才重启，跨过了 12:00 窗口；APScheduler 默认 `misfire_grace_time=1秒`，超时即跳过，不会补跑。
 - **修复**：在 `src/scheduler/manager.py` 的所有 `add_job` 调用中加入 `misfire_grace_time=600`（允许 10 分钟内补跑）和 `coalesce=True`（多次 misfire 只补跑一次），影响 `_register_jobs_from_config`、`add_task_and_register`、`resume_task` 三处。
+
+## 2026-04-08 - 定时任务：启动漏跑补执行（方案 2）
+
+- **场景**：进程在 12:00 前后长时间未运行，14:00 启动时仍希望补跑「上一档」cron（如当天 12:00），仅靠 misfire 无法覆盖冷启动。
+- **实现**：
+  - 依赖 `croniter` 计算当前时刻之前最近一次计划触发点；若距该点不超过 24 小时，且持久化中该任务的「上次成功时间」早于该点（或无记录），则在 `sched.start()` 后由后台线程执行一次 `_run_task_by_id(..., trigger_label="启动补跑")`。
+  - 成功完成时写入 `scheduler/task_last_success.json`（路径同 `get_safe_data_path("scheduler")`）。
+  - 任务项可选 `catch_up_on_start`（默认不补跑）；种子与 `scheduler/tasks.json` 中为「拼多多 ERP 订单同步（12点与18点）」设为 `true`。
+  - `task_config._merge_seed_fields_for_existing_tasks_inplace`：从种子为已存在任务补全缺失的 `catch_up_on_start`，不覆盖用户已有键。
+  - `_infer_handler_success`：按任务类型推断业务成败，修正原先「凡返回 tuple 即记成功」的问题；`pdd_erp_order_sync` 依据摘要中的 `成功: 是`。
+- **依赖**：`requirements.txt` 增加 `croniter>=2.0.0`。
 
 ---
 
@@ -3881,3 +4013,145 @@ kuaidi/
 
 **修改文件**:
 - `src/spider/pinduoduo/client.py` - 修改 `fetch_recent_orders` 方法中的请求体格式
+
+## 2026-04-10 - 项目架构与逻辑全面梳理
+
+### 文档新增（2026-04-10）
+
+**新增内容**:
+- 创建 `docs/project.md` — 项目架构与逻辑完整梳理文档
+
+**文档覆盖范围**:
+- 项目概览与核心功能矩阵（10 个功能模块）
+- 技术栈与依赖清单（13 个核心依赖）
+- 完整目录结构（74 个 Python 源文件、15 个 HTML 模板）
+- 启动流程与生命周期（10 步启动序列、7 个线程模型）
+- 核心架构设计：分层架构、BrowserPool 流程、BaseTool 体系
+- 6 大业务模块详细梳理：拼多多（含 ERP 同步/库存同步）、途强、1688、快递查询、脚本执行器
+- API 路由总览：10 个 Blueprint、30+ 端点
+- Web 页面与模板体系
+- 定时任务系统：5 种任务类型、种子合并机制、启动补跑
+- 飞书集成：7 个同步场景、12 个配置项
+- WebSocket 客户端：Socket.IO + action 映射
+- 配置体系：5 层优先级、20+ 配置项
+- 数据存储与路径策略
+- 打包与部署
+- 已知问题与优化方向（架构/代码/性能/安全 4 个维度、20+ 条优化建议）
+- 附录：数据流总图、环境变量完整列表（30+ 变量）
+
+**新增文件**:
+- `docs/project.md` — 项目完整架构梳理文档
+
+## 2026-04-10 - 配置文件格式从 JSON 迁移到 TOML
+
+### 重构（2026-04-10）
+
+**变更原因**:
+- JSON 不支持注释，配置项无法附带说明，维护体验差
+- TOML 是 Python 生态事实标准（pyproject.toml），语法简洁、类型原生、支持 `#` 注释
+
+**变更内容**:
+- `app_config.json` → `app_config.toml`（应用配置）
+- `module_config.json` → `module_config.toml`（模块配置）
+- `scheduler/tasks.json` → `scheduler/tasks.toml`（定时任务配置）
+- `src/scheduler/tasks.json` → `src/scheduler/tasks.toml`（种子配置）
+- `task_last_success.json` 保持 JSON（纯内部数据，不需要注释）
+
+**新增文件**:
+- `src/utils/toml_helper.py` — TOML 读写兼容层（Python 3.8-3.10 用 tomli，3.11+ 用内置 tomllib）
+
+**修改文件**:
+- `src/utils/config_manager.py` — 读写逻辑从 json 切换到 toml_helper
+- `src/config.py` — module_config 读写逻辑切换到 toml_helper
+- `src/scheduler/task_config.py` — 任务配置读写切换到 toml_helper，种子加载兼容 .toml 和旧 .json
+- `src/api/routes/websocket_routes.py` — 更新注释引用
+- `requirements.txt` — 新增 tomli>=2.0.0、tomli-w>=1.0.0
+
+**迁移兼容**:
+- 首次升级时自动把旧 JSON 迁移为 TOML（迁移后删除旧 JSON）
+- 种子文件加载优先 .toml，兼容旧 .json
+- 已有用户无需手动操作，程序自动完成迁移
+
+## 2026-04-10 - 库存扣减测算逻辑（带开关）
+
+### 新增功能（2026-04-10）
+
+**变更原因**:
+- `inventory_sync_job.py` 原来只写日志表（出库/退货记录），不做实际库存扣减
+- 参考 `xixidan_inventory_reconcile.py` 的扣减逻辑，在同一文件中实现真实库存扣减
+
+**实现要点**:
+- 新增常量 `_INVENTORY_DEDUCT_APPLY`（默认 `False`），作为库存扣减开关
+- 开关关闭时：只打印测算日志（汇总每个商品的净出库量、当前库存、扣后库存），不写飞书
+- 开关开启时：写回库存信息表 `数量` 列，并勾选日志行 `库存已核销` 复选框
+- 扣减公式：`净出库 = 出库数量 - 退货数量`，按 `库存关联`（商品名称）分组汇总
+- 自动跳过已核销、空链接、未匹配的日志行
+- 孤儿链接（日志有分组但库存表无同名商品）单独 warning 日志
+
+**修改文件**:
+- `src/spider/pinduoduo/inventory_sync_job.py`
+  - 新增常量：`_LOG_COL_CONSUMED`、`_INV_COL_STOCK`、`_INVENTORY_DEDUCT_APPLY`
+  - 新增辅助函数：`_is_consumed()` — 判断飞书复选框值
+  - 在 `run_inventory_sync_job()` 退货更新之后新增库存扣减测算阶段
+  - 返回值增加 `deduct_*` 系列字段
+
+## 2026-04-12 - 库存映射配置页面
+
+### 新增功能（2026-04-12）
+
+**变更原因**:
+- AI 匹配商品名称过程不够直观，用户无法控制哪些商品信息对应哪些库存商品
+- 需要人工维护「商品信息 → 商品名称」的映射关系，替代或优先于 AI 匹配
+- 部分商品不需要库存匹配，需要提供「空」占位符来跳过
+
+**实现要点**:
+- 在 `/tools/pinduoduo` 页面新增「库存映射配置」卡片
+- 左列显示扣减日志表的「商品信息」（去重、可搜索过滤）
+- 右列为库存信息表「商品名称」的多选下拉（含搜索、标签展示）
+- 特殊选项「空」表示跳过该商品的库存匹配
+- 映射数据以 JSON 持久化到本地 `config/inventory_product_mapping.json`
+
+**新增文件**:
+- `src/spider/pinduoduo/inventory_mapping.py` — 映射持久化模块（load/save/query）
+
+**修改文件**:
+- `src/api/routes/pinduoduo_routes.py`
+  - `GET /api/pinduoduo/inventory-mapping/data` — 获取商品信息列表 + 商品名称列表 + 已保存映射
+  - `POST /api/pinduoduo/inventory-mapping/save` — 保存映射到本地
+- `src/web/templates/tools/pinduoduo.html` — 新增映射配置 UI 卡片（CSS + JS 内联）
+
+## 2026-04-18 - 移除拼多多页面冗余卡片
+
+### UI 清理（2026-04-18）
+
+**变更原因**:
+- 「登录状态」卡片、「同步到飞书表格」卡片、「🚀 自动化功能（开发中）」TODO 卡片不再需要，予以移除
+
+**修改文件**:
+- `src/web/templates/tools/pinduoduo.html`
+  - 删除「登录状态」`.status-card` 区块（登录/同步订单/刷新/清除登录按钮）
+  - 删除「同步到飞书表格」`.feishu-sync-card` 区块（飞书同步、清理订单号、同步地址按钮）
+  - 删除「🚀 自动化功能（开发中）」`.todo-card` 区块及二维码展示区块
+  - 移除与上述卡片相关的 CSS（`.status-indicator*`、`.status-info*`、`.qrcode-*`、`.todo-*`、`.feishu-sync-*`）
+  - 移除与上述卡片相关的所有 JS 事件监听和函数（refreshStatus、syncOrders、startLogin、clearCookies、syncToFeishu 等）
+  - 页面现仅保留「库存映射配置」卡片
+
+---
+
+## 2026-04-12 - 库存映射集成到同步任务
+
+### 修复（2026-04-12）
+
+**变更原因**:
+- 库存映射配置页面已可保存映射数据，但 `inventory_sync_job.py` 未使用该映射
+- 所有订单仍走 AI 匹配，导致大量不必要的 API 调用
+
+**修改文件**:
+- `src/spider/pinduoduo/inventory_sync_job.py`
+  - 导入 `load_mappings` 和 `SKIP_PLACEHOLDER`
+  - 在匹配逻辑前加载手动映射，优先查映射：
+    - 映射为 `["空"]` → 跳过该订单（不写日志行）
+    - 映射命中 → 直接使用映射的商品名称作为库存关联，跳过 AI
+    - 多个映射名称 → 按套装逻辑生成多条日志行
+    - 未配置映射 → 走原有 AI 匹配流程
+  - 返回值和日志增加 `mapping_hit` / `mapping_skip` 统计

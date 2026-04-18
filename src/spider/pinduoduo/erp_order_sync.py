@@ -27,6 +27,7 @@ from playwright.sync_api import Page
 
 from config import Config
 from spider.pinduoduo.feishutable import sync_erp_order_rows_to_feishu
+from spider.pinduoduo.login_intercept import handle_pdd_login_intercept
 from utils.logger import get_logger
 
 logger = get_logger('PinduoduoErpOrderSync')
@@ -60,74 +61,6 @@ def _load_erp_script_source() -> str:
     raw = raw.lstrip('\ufeff')
     raw = re.sub(r'^/\*[\s\S]*?\*/\s*', '', raw, count=1)
     return raw.strip()
-
-
-def _handle_login_intercept(
-    page: Page,
-    *,
-    title: str,
-    link_url: str,
-    link_text: str,
-) -> Optional[Dict[str, Any]]:
-    """
-    当前页已被重定向到登录时的统一处理。
-
-    - 飞书应用内消息（若已配置）：提醒需登录。
-    - 截取登录二维码；若配置了拼多多渠道 Webhook，则发卡片（含图）。
-    - 返回给前端的 dict 中带 ``intercepted``、``qrcode``，与订单地址同步页行为一致。
-    """
-    from spider.pinduoduo.client import PinduoduoClient
-
-    pd_client = PinduoduoClient(page=page)
-    if pd_client.feishu_sender.is_available():
-        try:
-            pd_client.feishu_sender.send_pinduoduo_login_alert()
-            logger.info('已发送拼多多需登录的飞书提醒')
-        except Exception as ex:
-            logger.warning('飞书登录提醒发送失败: %s', ex)
-
-    qr_data = pd_client.show_login_qrcode(skip_initial_navigation=True)
-    if qr_data and qr_data != 'ALREADY_LOGGED_IN':
-        from tools.feishu.webhook.qudao_notify import (
-            CHANNEL_PINDUODUO,
-            get_custom_bot_keyword,
-            get_webhook_url,
-        )
-
-        wh = get_webhook_url(CHANNEL_PINDUODUO)
-        if wh:
-            try:
-                from tools.feishu.webhook.notify import send_sync_notification
-
-                send_sync_notification(
-                    webhook_url=wh,
-                    system_title=title,
-                    description='需要登录拼多多商家后台，请尽快扫码。',
-                    link_url=link_url,
-                    link_text=link_text,
-                    image_base64=qr_data,
-                    custom_bot_keyword=get_custom_bot_keyword(CHANNEL_PINDUODUO),
-                )
-            except Exception as ex:
-                logger.warning('飞书 Webhook 登录通知发送失败: %s', ex, exc_info=True)
-        else:
-            logger.debug('未配置拼多多 Webhook，跳过')
-
-        return {
-            'success': False,
-            'intercepted': True,
-            'message': '打开 ERP 订单页时被要求登录，请用拼多多 APP 扫码；二维码已返回前端展示，并已尝试飞书提醒。',
-            'qrcode': qr_data,
-            'page_url': page.url,
-        }
-
-    return {
-        'success': False,
-        'intercepted': True,
-        'message': '已跳转登录页但未成功截取二维码，请在本页点击「重新登录」完成扫码后再试。',
-        'qrcode': None,
-        'page_url': page.url,
-    }
 
 
 def _send_sync_report(
@@ -205,11 +138,14 @@ def sync_erp_orders_to_feishu(
     # --- 登录拦截：与 mms 其它流程一致，URL 含 login 即视为未登录 ---
     cur = (page.url or '').lower()
     if 'login' in cur:
-        return _handle_login_intercept(
+        return handle_pdd_login_intercept(
             page,
             title='订单同步（ERP）',
             link_url=erp_url,
             link_text='打开 ERP 全部订单',
+            success_message_with_qr=(
+                '打开 ERP 订单页时被要求登录，请用拼多多 APP 扫码；二维码已返回前端展示，并已尝试飞书提醒。'
+            ),
         )
 
     # --- 等待表格表头：无则可能是未开通 ERP、结构变更或仍被拦在登录 ---
@@ -222,11 +158,14 @@ def sync_erp_orders_to_feishu(
     except Exception as e:
         logger.warning('等待 ERP 表格表头超时: %s', e)
         if 'login' in (page.url or '').lower():
-            return _handle_login_intercept(
+            return handle_pdd_login_intercept(
                 page,
                 title='订单同步（ERP）',
                 link_url=erp_url,
                 link_text='打开 ERP 全部订单',
+                success_message_with_qr=(
+                    '打开 ERP 订单页时被要求登录，请用拼多多 APP 扫码；二维码已返回前端展示，并已尝试飞书提醒。'
+                ),
             )
         return {
             'success': False,

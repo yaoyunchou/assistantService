@@ -1,0 +1,42 @@
+# ===== 功能模块配置 =====
+# enabled: 是否启用   init_on_startup: 启动时初始化   requires_browser: 是否需要浏览器
+
+[logistics]
+category = "tools"
+description = "快递查询工具"
+display_name = "快递查询"
+enabled = false                # 默认禁用
+icon = "📦"
+init_on_startup = false
+memory_mb = 150
+requires_browser = true
+
+[pinduoduo]
+category = "tools"
+description = "订单自动化工具"
+display_name = "订单助手"
+enabled = true
+icon = "🛒"
+init_on_startup = false
+memory_mb = 100
+requires_browser = true
+
+[resource_monitor]
+category = "system"
+description = "资源监控"
+display_name = "资源监控"
+enabled = true
+icon = "📊"
+init_on_startup = true
+memory_mb = 10
+requires_browser = false
+
+[script_executor]
+category = "tools"
+description = "Python脚本执行器"
+display_name = "脚本执行"
+enabled = true
+icon = "🐍"
+init_on_startup = true
+memory_mb = 20
+requires_browser = false

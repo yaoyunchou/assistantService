@@ -1,244 +1,10 @@
 {
-  "fetch_time": "2026-04-06T22:56:35.297063",
-  "start_date": "2026-03-07",
-  "end_date": "2026-04-06",
+  "fetch_time": "2026-04-11T15:03:23.201428",
+  "start_date": "2026-03-12",
+  "end_date": "2026-04-11",
   "days": 30,
   "device_id": "14165920973",
   "records": [
-    {
-      "sn": "14165920973",
-      "type": 2,
-      "start": {
-        "devTime": "2026-03-08 09:49:55",
-        "satNum": 21,
-        "speed": 6,
-        "direct": 316,
-        "lat": 22.615905,
-        "lng": 114.032356,
-        "altitude": 121
-      },
-      "end": {
-        "devTime": "2026-03-08 10:05:10",
-        "satNum": 36,
-        "speed": 6,
-        "direct": 224,
-        "lat": 22.626554,
-        "lng": 114.018196,
-        "altitude": 74
-      },
-      "maxSpeed": 33,
-      "mileage": 3076,
-      "duration": 915,
-      "averageSpeed": 12.102295081967213
-    },
-    {
-      "sn": "14165920973",
-      "type": 2,
-      "start": {
-        "devTime": "2026-03-08 12:56:23",
-        "satNum": 34,
-        "speed": 11,
-        "direct": 226,
-        "lat": 22.626477,
-        "lng": 114.018066,
-        "altitude": 92
-      },
-      "end": {
-        "devTime": "2026-03-08 13:10:55",
-        "satNum": 33,
-        "speed": 11,
-        "direct": 333,
-        "lat": 22.615568,
-        "lng": 114.032356,
-        "altitude": 69
-      },
-      "maxSpeed": 27,
-      "mileage": 2573,
-      "duration": 872,
-      "averageSpeed": 10.622477064220183
-    },
-    {
-      "sn": "14165920973",
-      "type": 2,
-      "start": {
-        "devTime": "2026-03-08 14:10:27",
-        "satNum": 5,
-        "speed": 10,
-        "direct": 146,
-        "lat": 22.615344,
-        "lng": 114.03055,
-        "altitude": 0
-      },
-      "end": {
-        "devTime": "2026-03-08 14:22:12",
-        "satNum": 31,
-        "speed": 9,
-        "direct": 329,
-        "lat": 22.627396,
-        "lng": 114.020312,
-        "altitude": 76
-      },
-      "maxSpeed": 34,
-      "mileage": 2611,
-      "duration": 705,
-      "averageSpeed": 13.33276595744681
-    },
-    {
-      "sn": "14165920973",
-      "type": 2,
-      "start": {
-        "devTime": "2026-03-08 18:09:40",
-        "satNum": 34,
-        "speed": 12,
-        "direct": 151,
-        "lat": 22.627539,
-        "lng": 114.020328,
-        "altitude": 109
-      },
-      "end": {
-        "devTime": "2026-03-08 18:21:21",
-        "satNum": 38,
-        "speed": 10,
-        "direct": 167,
-        "lat": 22.615954,
-        "lng": 114.032438,
-        "altitude": 103
-      },
-      "maxSpeed": 33,
-      "mileage": 2461,
-      "duration": 701,
-      "averageSpeed": 12.63851640513552
-    },
-    {
-      "sn": "14165920973",
-      "type": 2,
-      "start": {
-        "devTime": "2026-03-09 07:35:07",
-        "satNum": 27,
-        "speed": 6,
-        "direct": 8,
-        "lat": 22.615917,
-        "lng": 114.032356,
-        "altitude": 81
-      },
-      "end": {
-        "devTime": "2026-03-09 07:54:10",
-        "satNum": 35,
-        "speed": 8,
-        "direct": 62,
-        "lat": 22.610937,
-        "lng": 114.027034,
-        "altitude": 80
-      },
-      "maxSpeed": 33,
-      "mileage": 3367,
-      "duration": 1143,
-      "averageSpeed": 10.604724409448819
-    },
-    {
-      "sn": "14165920973",
-      "type": 2,
-      "start": {
-        "devTime": "2026-03-09 23:31:12",
-        "satNum": 28,
-        "speed": 7,
-        "direct": 197,
-        "lat": 22.611035,
-        "lng": 114.027652,
-        "altitude": 92
-      },
-      "end": {
-        "devTime": "2026-03-09 23:39:22",
-        "satNum": 20,
-        "speed": 6,
-        "direct": 229,
-        "lat": 22.615938,
-        "lng": 114.033544,
-        "altitude": 96
-      },
-      "maxSpeed": 24,
-      "mileage": 1231,
-      "duration": 490,
-      "averageSpeed": 9.044081632653063
-    },
-    {
-      "sn": "14165920973",
-      "type": 2,
-      "start": {
-        "devTime": "2026-03-10 07:23:34",
-        "satNum": 32,
-        "speed": 25,
-        "direct": 237,
-        "lat": 22.616129,
-        "lng": 114.034537,
-        "altitude": 88
-      },
-      "end": {
-        "devTime": "2026-03-10 07:39:57",
-        "satNum": 35,
-        "speed": 8,
-        "direct": 64,
-        "lat": 22.611108,
-        "lng": 114.027115,
-        "altitude": 76
-      },
-      "maxSpeed": 37,
-      "mileage": 3352,
-      "duration": 983,
-      "averageSpeed": 12.27589013224822
-    },
-    {
-      "sn": "14165920973",
-      "type": 2,
-      "start": {
-        "devTime": "2026-03-10 23:14:37",
-        "satNum": 28,
-        "speed": 12,
-        "direct": 149,
-        "lat": 22.611047,
-        "lng": 114.027327,
-        "altitude": 53
-      },
-      "end": {
-        "devTime": "2026-03-10 23:20:12",
-        "satNum": 30,
-        "speed": 6,
-        "direct": 171,
-        "lat": 22.615767,
-        "lng": 114.032519,
-        "altitude": 94
-      },
-      "maxSpeed": 22,
-      "mileage": 999,
-      "duration": 335,
-      "averageSpeed": 10.735522388059703
-    },
-    {
-      "sn": "14165920973",
-      "type": 2,
-      "start": {
-        "devTime": "2026-03-11 07:28:21",
-        "satNum": 19,
-        "speed": 7,
-        "direct": 318,
-        "lat": 22.61573,
-        "lng": 114.032438,
-        "altitude": 124
-      },
-      "end": {
-        "devTime": "2026-03-11 07:45:19",
-        "satNum": 37,
-        "speed": 6,
-        "direct": 53,
-        "lat": 22.611079,
-        "lng": 114.027246,
-        "altitude": 85
-      },
-      "maxSpeed": 36,
-      "mileage": 3373,
-      "duration": 1018,
-      "averageSpeed": 11.92809430255403
-    },
     {
       "sn": "14165920973",
       "type": 2,
@@ -1174,7 +940,215 @@
       "mileage": 1184,
       "duration": 350,
       "averageSpeed": 12.178285714285714
+    },
+    {
+      "sn": "14165920973",
+      "type": 2,
+      "start": {
+        "devTime": "2026-04-07 07:42:50",
+        "satNum": 26,
+        "speed": 7,
+        "direct": 350,
+        "lat": 22.615816,
+        "lng": 114.032389,
+        "altitude": 107
+      },
+      "end": {
+        "devTime": "2026-04-07 07:58:06",
+        "satNum": 29,
+        "speed": 7,
+        "direct": 55,
+        "lat": 22.610974,
+        "lng": 114.027311,
+        "altitude": 71
+      },
+      "maxSpeed": 76,
+      "mileage": 3357,
+      "duration": 916,
+      "averageSpeed": 13.193449781659387
+    },
+    {
+      "sn": "14165920973",
+      "type": 2,
+      "start": {
+        "devTime": "2026-04-08 00:04:59",
+        "satNum": 35,
+        "speed": 24,
+        "direct": 62,
+        "lat": 22.611511,
+        "lng": 114.028304,
+        "altitude": 82
+      },
+      "end": {
+        "devTime": "2026-04-08 00:11:14",
+        "satNum": 20,
+        "speed": 8,
+        "direct": 299,
+        "lat": 22.615995,
+        "lng": 114.033593,
+        "altitude": 86
+      },
+      "maxSpeed": 31,
+      "mileage": 1082,
+      "duration": 375,
+      "averageSpeed": 10.3872
+    },
+    {
+      "sn": "14165920973",
+      "type": 2,
+      "start": {
+        "devTime": "2026-04-08 07:29:53",
+        "satNum": 17,
+        "speed": 12,
+        "direct": 94,
+        "lat": 22.616035,
+        "lng": 114.033479,
+        "altitude": 196
+      },
+      "end": {
+        "devTime": "2026-04-08 07:47:20",
+        "satNum": 30,
+        "speed": 6,
+        "direct": 54,
+        "lat": 22.610949,
+        "lng": 114.027034,
+        "altitude": 81
+      },
+      "maxSpeed": 35,
+      "mileage": 3610,
+      "duration": 1047,
+      "averageSpeed": 12.412607449856733
+    },
+    {
+      "sn": "14165920973",
+      "type": 2,
+      "start": {
+        "devTime": "2026-04-08 21:39:59",
+        "satNum": 31,
+        "speed": 11,
+        "direct": 108,
+        "lat": 22.610909,
+        "lng": 114.027473,
+        "altitude": 87
+      },
+      "end": {
+        "devTime": "2026-04-08 21:47:57",
+        "satNum": 36,
+        "speed": 7,
+        "direct": 236,
+        "lat": 22.616056,
+        "lng": 114.032454,
+        "altitude": 90
+      },
+      "maxSpeed": 32,
+      "mileage": 960,
+      "duration": 478,
+      "averageSpeed": 7.2301255230125525
+    },
+    {
+      "sn": "14165920973",
+      "type": 2,
+      "start": {
+        "devTime": "2026-04-09 07:37:01",
+        "satNum": 25,
+        "speed": 9,
+        "direct": 352,
+        "lat": 22.61584,
+        "lng": 114.032356,
+        "altitude": 121
+      },
+      "end": {
+        "devTime": "2026-04-09 07:57:01",
+        "satNum": 31,
+        "speed": 8,
+        "direct": 54,
+        "lat": 22.611088,
+        "lng": 114.027132,
+        "altitude": 78
+      },
+      "maxSpeed": 37,
+      "mileage": 3296,
+      "duration": 1200,
+      "averageSpeed": 9.888
+    },
+    {
+      "sn": "14165920973",
+      "type": 2,
+      "start": {
+        "devTime": "2026-04-09 20:27:36",
+        "satNum": 27,
+        "speed": 7,
+        "direct": 167,
+        "lat": 22.610965,
+        "lng": 114.027473,
+        "altitude": 30
+      },
+      "end": {
+        "devTime": "2026-04-09 20:48:36",
+        "satNum": 29,
+        "speed": 12,
+        "direct": 228,
+        "lat": 22.616153,
+        "lng": 114.032503,
+        "altitude": 91
+      },
+      "maxSpeed": 28,
+      "mileage": 1339,
+      "duration": 1260,
+      "averageSpeed": 3.825714285714286
+    },
+    {
+      "sn": "14165920973",
+      "type": 2,
+      "start": {
+        "devTime": "2026-04-10 07:26:35",
+        "satNum": 26,
+        "speed": 9,
+        "direct": 348,
+        "lat": 22.615889,
+        "lng": 114.032373,
+        "altitude": 92
+      },
+      "end": {
+        "devTime": "2026-04-10 07:42:38",
+        "satNum": 30,
+        "speed": 12,
+        "direct": 57,
+        "lat": 22.611083,
+        "lng": 114.027229,
+        "altitude": 81
+      },
+      "maxSpeed": 35,
+      "mileage": 3193,
+      "duration": 963,
+      "averageSpeed": 11.936448598130841
+    },
+    {
+      "sn": "14165920973",
+      "type": 2,
+      "start": {
+        "devTime": "2026-04-10 21:41:41",
+        "satNum": 33,
+        "speed": 8,
+        "direct": 110,
+        "lat": 22.610961,
+        "lng": 114.027425,
+        "altitude": 65
+      },
+      "end": {
+        "devTime": "2026-04-10 21:48:05",
+        "satNum": 39,
+        "speed": 7,
+        "direct": 239,
+        "lat": 22.615987,
+        "lng": 114.032405,
+        "altitude": 90
+      },
+      "maxSpeed": 33,
+      "mileage": 957,
+      "duration": 384,
+      "averageSpeed": 8.971874999999999
     }
   ],
-  "total": 45
+  "total": 44
 }

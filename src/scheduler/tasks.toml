@@ -1,0 +1,46 @@
+# ===== 定时任务种子（兼容路径，与仓库根目录 scheduler/tasks.toml 保持一致）=====
+# 优先以项目根 scheduler/tasks.toml 为准；见 task_config._seed_tasks_file
+
+# ===== 定时任务配置 =====
+# 每个 [[tasks]] 块为一条任务，字段说明：
+#   id   = 任务唯一标识（UUID 或自定义）
+#   name = 显示名称
+#   type = 任务类型（http_request / python_script / pdd_erp_order_sync / pdd_inventory_sync / order_1688_fill_detail）
+#   cron = cron 表达式（分 时 日 月 周）
+#   enabled = 是否启用（默认 true）
+#   catch_up_on_start = 启动时补跑漏执行的任务（可选）
+#   [tasks.data] = 任务参数（按类型不同）
+
+[[tasks]]
+id = "order_1688_fill_detail"
+name = "1688 订单补详情"
+type = "order_1688_fill_detail"
+cron = "0 * * * *"
+enabled = false
+
+[tasks.data]
+method = "get"
+url = "http://localhost:8099/api/order_1688/fill_detail"
+
+[tasks.data.data]
+
+[[tasks]]
+id = "pdd_erp_order_sync_noon_evening"
+name = "拼多多 ERP 订单同步（12点与18点）"
+type = "pdd_erp_order_sync"
+cron = "0 12,18 * * *"
+catch_up_on_start = true
+
+[tasks.data]
+timeout = 780
+
+[tasks.data.data]
+
+[[tasks]]
+id = "pdd_inventory_sync_from_erp_feishu"
+name = "拼多多库存：飞书 ERP→库存信息与扣减日志"
+type = "pdd_inventory_sync"
+enabled = true
+cron = "30 */2 * * *"
+
+[tasks.data]

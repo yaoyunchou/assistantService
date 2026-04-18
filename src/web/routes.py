@@ -123,7 +123,17 @@ def register_web_routes(app, tool_manager: ToolManager):
             tools=tools_info,
             config=Config,
         )
-    
+
+    @app.route('/pdd-erp-delivering-print')
+    def pinduoduo_erp_delivering_print():
+        """ERP 待发货：打印快递单并发货"""
+        tools_info = tool_manager.get_tools_info()
+        return render_template(
+            'pinduoduo_erp_delivering_print.html',
+            tools=tools_info,
+            config=Config,
+        )
+
     @app.route('/websocket')
     def websocket_page():
         """WebSocket 客户端管理页面"""

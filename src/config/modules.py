@@ -25,6 +25,17 @@ DEFAULT_MODULE_CONFIG: Dict[str, Dict[str, Any]] = {
         'icon': '🐍',
         'category': 'tools'
     },
+    # 与 module_config.toml 一致；打包后若 exe 旁无 TOML，仍依赖此项触发浏览器池初始化
+    'pinduoduo': {
+        'enabled': True,
+        'init_on_startup': False,
+        'requires_browser': True,
+        'memory_mb': 100,
+        'description': '订单自动化工具',
+        'display_name': '订单助手',
+        'icon': '🛒',
+        'category': 'tools'
+    },
     'resource_monitor': {
         'enabled': True,
         'init_on_startup': True,

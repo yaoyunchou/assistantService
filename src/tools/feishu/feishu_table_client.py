@@ -88,29 +88,30 @@ class FeishuTableClient:
         
         return final_app_token, final_table_id
     
-    def _make_request(self, method: str, url: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
+    def _make_request_detail(
+        self,
+        method: str,
+        url: str,
+        data: Optional[Dict] = None,
+        params: Optional[Dict] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """
-        发送HTTP请求
-        
-        Args:
-            method: HTTP方法（GET, POST, PUT, DELETE）
-            url: 请求URL
-            data: 请求体数据
-            params: URL参数
-            
+        发送 HTTP 并解析飞书 JSON。
+
         Returns:
-            响应数据字典，如果失败返回None
+            (data, None) 成功，data 为响应中的 data 字段；
+            (None, err_str) 失败，err_str 供上层按订单号记录。
         """
         access_token = self._get_access_token()
         if not access_token:
-            logger.error("无法获取access_token，请求失败")
-            return None
-        
+            logger.error('无法获取access_token，请求失败')
+            return None, '无法获取access_token'
+
         headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json; charset=utf-8"
+            'Authorization': f'Bearer {access_token}',
+            'Content-Type': 'application/json; charset=utf-8',
         }
-        
+
         try:
             response = requests.request(
                 method=method,
@@ -118,25 +119,25 @@ class FeishuTableClient:
                 json=data,
                 params=params,
                 headers=headers,
-                timeout=30
+                timeout=30,
             )
             try:
                 result = response.json()
             except Exception as json_err:
+                body_prefix = (response.text or '')[:500]
                 logger.error(
                     '飞书API响应非JSON method=%s url_suffix=%s status=%s err=%s body_prefix=%r',
                     method,
                     url.split('/open-apis', 1)[-1][:120] if '/open-apis' in url else url[-120:],
                     response.status_code,
                     json_err,
-                    (response.text or '')[:500],
+                    body_prefix,
                 )
-                return None
+                return None, f'响应非JSON http={response.status_code} err={json_err} body_prefix={body_prefix!r}'
 
             if result.get('code') == 0:
-                return result.get('data')
+                return result.get('data'), None
 
-            # 失败时打出完整业务体（常含字段级原因）；避免单行过长用截断
             try:
                 full = json.dumps(result, ensure_ascii=False)
             except Exception:
@@ -151,14 +152,34 @@ class FeishuTableClient:
                 result.get('msg'),
                 full,
             )
-            return None
-        
+            err = (
+                f"code={result.get('code')} msg={result.get('msg')} "
+                f"http={response.status_code} body={full}"
+            )
+            return None, err
+
         except requests.RequestException as e:
-            logger.error(f"请求飞书API失败: {e}")
-            return None
+            logger.error('请求飞书API失败: %s', e)
+            return None, str(e)
         except Exception as e:
-            logger.error(f"请求飞书API时发生错误: {e}", exc_info=True)
-            return None
+            logger.error('请求飞书API时发生错误: %s', e, exc_info=True)
+            return None, str(e)
+
+    def _make_request(self, method: str, url: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
+        """
+        发送HTTP请求
+        
+        Args:
+            method: HTTP方法（GET, POST, PUT, DELETE）
+            url: 请求URL
+            data: 请求体数据
+            params: URL参数
+            
+        Returns:
+            响应数据字典，如果失败返回None
+        """
+        data_out, _err = self._make_request_detail(method, url, data=data, params=params)
+        return data_out
     
     def create_record(self, fields: Dict[str, Any], app_token: Optional[str] = None, table_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
@@ -291,6 +312,57 @@ class FeishuTableClient:
             _feishu_fields_debug_str(fields),
         )
         return None
+
+    def create_record_with_error(
+        self,
+        fields: Dict[str, Any],
+        app_token: Optional[str] = None,
+        table_id: Optional[str] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """
+        创建单条记录，失败时返回 (None, 飞书/网络错误文案)，供业务层按订单号打日志。
+        """
+        app_token, table_id = self._get_app_token_and_table_id(app_token, table_id)
+        url = f'{self.BASE_URL}/bitable/v1/apps/{app_token}/tables/{table_id}/records'
+        logger.info('正在创建记录到表格: %s', table_id)
+        result, err = self._make_request_detail('POST', url, data={'fields': fields})
+        if result:
+            logger.info('记录创建成功，record_id: %s', result.get('record', {}).get('record_id'))
+            return result.get('record'), None
+        logger.error(
+            '记录创建失败 table_id=%s fields=%s err=%s',
+            table_id,
+            _feishu_fields_debug_str(fields),
+            err,
+        )
+        return None, err
+
+    def update_record_with_error(
+        self,
+        record_id: str,
+        fields: Dict[str, Any],
+        app_token: Optional[str] = None,
+        table_id: Optional[str] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """
+        更新单条记录，失败时返回 (None, 飞书/网络错误文案)。
+        """
+        app_token, table_id = self._get_app_token_and_table_id(app_token, table_id)
+        url = f'{self.BASE_URL}/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}'
+        logger.info('正在更新记录: %s', record_id)
+        result, err = self._make_request_detail('PUT', url, data={'fields': fields})
+        if result is not None:
+            logger.info('记录更新成功: %s', record_id)
+            rec = result.get('record')
+            return (rec if rec is not None else {}), None
+        logger.error(
+            '记录更新失败 record_id=%s table_id=%s fields=%s err=%s',
+            record_id,
+            table_id,
+            _feishu_fields_debug_str(fields),
+            err,
+        )
+        return None, err
     
     def batch_update_records(self, records: List[Dict[str, Any]], app_token: Optional[str] = None, table_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """

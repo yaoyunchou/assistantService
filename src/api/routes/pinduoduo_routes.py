@@ -340,6 +340,106 @@ def pinduoduo_sync_erp_orders():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@bp.route('/inventory-mapping/data', methods=['GET'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '获取库存映射配置数据（商品信息列表 + 商品名称列表 + 已保存映射）',
+    'responses': {200: {'description': '映射数据'}},
+})
+def pinduoduo_inventory_mapping_data():
+    """从飞书扣减日志表读去重的商品信息，从库存信息表读商品名称，加载已保存的映射。"""
+    try:
+        from config import Config
+        from tools.feishu.feishu_table_client import FeishuTableClient
+        from spider.pinduoduo.feishutable import feishu_field_to_text
+        from spider.pinduoduo.inventory_mapping import load_mappings
+
+        app_token = (Config.PINDUODUO_FEISHU_APP_TOKEN or '').strip()
+        log_table = (Config.PINDUODUO_FEISHU_INVENTORY_LOG_TABLE_ID or '').strip()
+        inv_table = (Config.PINDUODUO_FEISHU_INVENTORY_INFO_TABLE_ID or '').strip()
+        inv_name_field = (Config.PINDUODUO_INVENTORY_PRODUCT_NAME_FIELD or '商品名称').strip()
+
+        if not app_token or not log_table or not inv_table:
+            return jsonify({
+                'success': False,
+                'message': '缺少飞书配置（app_token / log_table / inv_table）',
+            }), 200
+
+        log_client = FeishuTableClient(app_token, log_table)
+        inv_client = FeishuTableClient(app_token, inv_table)
+
+        log_records = log_client.get_all_records()
+        inv_records = inv_client.get_all_records()
+
+        product_infos_seen = set()
+        product_infos = []
+        for rec in log_records:
+            f = rec.get('fields') or {}
+            info = feishu_field_to_text(f.get('商品信息')).strip()
+            if info and info not in product_infos_seen:
+                product_infos_seen.add(info)
+                product_infos.append(info)
+
+        product_names_seen = set()
+        product_names = []
+        for rec in inv_records:
+            f = rec.get('fields') or {}
+            name = feishu_field_to_text(f.get(inv_name_field)).strip()
+            if name and name not in product_names_seen:
+                product_names_seen.add(name)
+                product_names.append(name)
+
+        mappings = load_mappings()
+
+        return jsonify({
+            'success': True,
+            'product_infos': sorted(product_infos),
+            'product_names': sorted(product_names),
+            'mappings': mappings,
+        }), 200
+    except Exception as e:
+        routes_logger.error('获取库存映射数据异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/inventory-mapping/save', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '保存库存映射配置',
+    'parameters': [{
+        'in': 'body', 'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'mappings': {
+                    'type': 'object',
+                    'description': '商品信息→商品名称列表 的映射字典',
+                },
+            },
+        },
+    }],
+    'responses': {200: {'description': '保存结果'}},
+})
+def pinduoduo_inventory_mapping_save():
+    """保存库存映射配置到本地文件。"""
+    try:
+        from spider.pinduoduo.inventory_mapping import save_mappings
+
+        body = request.get_json(silent=True) or {}
+        mappings = body.get('mappings')
+        if not isinstance(mappings, dict):
+            return jsonify({'success': False, 'message': 'mappings 字段必须是对象'}), 400
+
+        ok = save_mappings(mappings)
+        return jsonify({
+            'success': ok,
+            'message': f'已保存 {len(mappings)} 条映射' if ok else '保存失败',
+        }), 200
+    except Exception as e:
+        routes_logger.error('保存库存映射异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @bp.route('/inventory-sync-from-erp-feishu', methods=['POST'])
 @swag_from({
     'tags': ['拼多多'],
@@ -380,4 +480,221 @@ def pinduoduo_inventory_sync_from_erp_feishu():
         return jsonify(result if isinstance(result, dict) else {'success': False, 'message': str(result)}), code
     except Exception as e:
         routes_logger.error('库存飞书同步任务异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/erp-audit/pending', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': 'ERP 待审核订单列表（抓取商品明细）',
+    'responses': {200: {'description': '执行结果'}, 500: {'description': '异常'}},
+})
+def pinduoduo_erp_audit_pending():
+    """打开审核页并执行采集脚本。"""
+    try:
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'success': False, 'error': '浏览器池未初始化'}), 500
+
+        body = request.get_json(silent=True) or {}
+        sms = body.get('scroll_max_steps')
+        spm = body.get('scroll_pause_ms')
+        try:
+            sms = int(sms) if sms is not None else None
+        except (TypeError, ValueError):
+            sms = None
+        try:
+            spm = int(spm) if spm is not None else None
+        except (TypeError, ValueError):
+            spm = None
+
+        from spider.pinduoduo import erp_audit
+
+        result = pool.execute(
+            lambda page: erp_audit.fetch_pending_audit_rows(
+                page,
+                scroll_max_steps=sms,
+                scroll_pause_ms=spm,
+            ),
+            timeout=620,
+        )
+        return jsonify(result if isinstance(result, dict) else {'success': False, 'message': str(result)}), 200
+    except Exception as e:
+        routes_logger.error('ERP 待审核列表异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/erp-audit/submit', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '勾选并提交审核指定订单号',
+    'responses': {200: {'description': '执行结果'}, 500: {'description': '异常'}},
+})
+def pinduoduo_erp_audit_submit():
+    """审核选中订单；成功后写入 SQLite 并尝试同步飞书。"""
+    try:
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'success': False, 'error': '浏览器池未初始化'}), 500
+
+        body = request.get_json(silent=True) or {}
+        order_nos = body.get('order_nos') or body.get('orderNos') or []
+        if not isinstance(order_nos, list):
+            return jsonify({'success': False, 'message': 'order_nos 须为数组'}), 400
+
+        sms = body.get('scroll_max_steps')
+        spm = body.get('scroll_pause_ms')
+        try:
+            sms = int(sms) if sms is not None else None
+        except (TypeError, ValueError):
+            sms = None
+        try:
+            spm = int(spm) if spm is not None else None
+        except (TypeError, ValueError):
+            spm = None
+
+        from spider.pinduoduo import erp_audit
+
+        result = pool.execute(
+            lambda page: erp_audit.submit_audit_orders(
+                page,
+                order_nos,
+                scroll_max_steps=sms,
+                scroll_pause_ms=spm,
+            ),
+            timeout=620,
+        )
+        if not isinstance(result, dict):
+            return jsonify({'success': False, 'message': str(result)}), 200
+
+        out = dict(result)
+        feishu_sync = None
+        if result.get('success') and result.get('rows'):
+            from spider.pinduoduo import audit_store
+            from spider.pinduoduo.feishutable import sync_audit_events_to_feishu
+            from config import Config
+
+            chk = result.get('check_result') or []
+            ok_set = {c.get('orderNo') for c in chk if c.get('ok')}
+            rows_src = result['rows']
+            if ok_set:
+                rows_store = [
+                    r for r in rows_src
+                    if (r.get('orderNo') or '').strip() in ok_set
+                ]
+            else:
+                rows_store = rows_src
+
+            inserted = audit_store.insert_batch_from_submit_rows(rows_store)
+            out['sqlite_inserted'] = len(inserted)
+            tbl = (Config.PINDUODUO_ERP_AUDIT_FEISHU_TABLE_ID or '').strip()
+            if inserted and tbl:
+                routes_logger.info(
+                    'ERP 审核：本地新增 %d 条，开始同步飞书 table=%s',
+                    len(inserted), tbl,
+                )
+                feishu_sync = sync_audit_events_to_feishu(inserted)
+                out['feishu_sync'] = feishu_sync
+                routes_logger.info(
+                    'ERP 审核飞书同步结果: 成功 %s / 失败 %s / 总 %s',
+                    feishu_sync.get('success_count'),
+                    feishu_sync.get('fail_count'),
+                    feishu_sync.get('total_count'),
+                )
+                pairs = feishu_sync.get('record_pairs') or []
+                if pairs:
+                    local_ids = [p[0] for p in pairs if p[0] is not None]
+                    fr_ids = [p[1] for p in pairs if p[0] is not None]
+                    audit_store.mark_synced(local_ids, fr_ids)
+            else:
+                if inserted and not tbl:
+                    routes_logger.warning(
+                        'ERP 审核：本地新增 %d 条，但 PINDUODUO_ERP_AUDIT_FEISHU_TABLE_ID 未配置，跳过飞书同步',
+                        len(inserted),
+                    )
+                out['feishu_sync'] = None
+
+        return jsonify(out), 200
+    except Exception as e:
+        routes_logger.error('ERP 审核提交异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/erp-delivering/print-ship', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '待发货页：全选并打印快递单、打印并发货',
+    'responses': {200: {'description': '执行结果'}, 500: {'description': '异常'}},
+})
+def pinduoduo_erp_delivering_print_ship():
+    try:
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'success': False, 'error': '浏览器池未初始化'}), 500
+
+        from spider.pinduoduo import erp_audit
+
+        result = pool.execute(
+            lambda page: erp_audit.run_delivering_print_ship(page),
+            timeout=180,
+        )
+        return jsonify(result if isinstance(result, dict) else {'success': False, 'message': str(result)}), 200
+    except Exception as e:
+        routes_logger.error('待发货打印异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/erp-audit/today', methods=['GET'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '今日已审核订单（本地 SQLite）',
+    'responses': {200: {'description': '列表'}},
+})
+def pinduoduo_erp_audit_today():
+    try:
+        from spider.pinduoduo import audit_store
+
+        rows = audit_store.list_today_local()
+        return jsonify({'success': True, 'rows': rows, 'count': len(rows)}), 200
+    except Exception as e:
+        routes_logger.error('读取今日审核记录异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/erp-audit/sync-feishu', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '将未同步的本地审核记录推送到飞书',
+    'responses': {200: {'description': '同步结果'}},
+})
+def pinduoduo_erp_audit_sync_feishu():
+    try:
+        from spider.pinduoduo import audit_store
+        from spider.pinduoduo.feishutable import sync_audit_events_to_feishu
+        from config import Config
+
+        body = request.get_json(silent=True) or {}
+        limit = body.get('limit', 200)
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 200
+        limit = max(1, min(limit, 500))
+
+        if not (Config.PINDUODUO_ERP_AUDIT_FEISHU_TABLE_ID or '').strip():
+            return jsonify({
+                'success': False,
+                'message': '未配置 PINDUODUO_ERP_AUDIT_FEISHU_TABLE_ID',
+            }), 200
+
+        unsynced = audit_store.list_unsynced_for_feishu(limit=limit)
+        fs = sync_audit_events_to_feishu(unsynced)
+        pairs = fs.get('record_pairs') or []
+        if pairs:
+            local_ids = [p[0] for p in pairs if p[0] is not None]
+            fr_ids = [p[1] for p in pairs if p[0] is not None]
+            audit_store.mark_synced(local_ids, fr_ids)
+        return jsonify({'success': True, **fs}), 200
+    except Exception as e:
+        routes_logger.error('审核记录同步飞书异常: %s', e, exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500

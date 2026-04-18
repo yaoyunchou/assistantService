@@ -140,3 +140,18 @@ def get_project_root() -> Path:
     else:
         # 开发环境
         return Path(__file__).parent.parent.parent
+
+
+def get_bundled_data_root() -> Path:
+    """获取 PyInstaller 打包时通过 datas 嵌入的只读资源根目录。
+
+    PyInstaller 6 onedir 模式下 datas 放在 ``exe_dir/_internal/``；
+    开发环境等价于项目根目录。
+    """
+    if getattr(sys, 'frozen', False):
+        exe_dir = Path(sys.executable).parent
+        internal = exe_dir / '_internal'
+        if internal.is_dir():
+            return internal
+        return exe_dir
+    return Path(__file__).parent.parent.parent

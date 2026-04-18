@@ -5,26 +5,41 @@ import os
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
-# 加载环境变量
+# 加载环境变量（打包后 .env 须放在 exe 同目录，或由 main.spec 从项目根复制到 dist）
 try:
     from dotenv import load_dotenv
-    # 获取项目根目录
-    if getattr(sys, 'frozen', False):
-        # 打包后的exe环境
-        root_dir = Path(sys.executable).parent
-    else:
-        # 开发环境
-        root_dir = Path(__file__).parent.parent
-    
-    # 加载.env文件
-    env_file = root_dir / '.env'
-    if env_file.exists():
-        load_dotenv(env_file)
-        print(f"[Config] 已加载环境变量文件: {env_file}")
-    else:
-        print(f"[Config] 未找到.env文件: {env_file}")
+
+    def _dotenv_candidates() -> List[Path]:
+        """开发：项目根 .env。冻结：优先 exe 同目录，其次当前工作目录（快捷方式 cwd 不同时兜底）。"""
+        paths: List[Path] = []
+        if getattr(sys, 'frozen', False):
+            exe_dir = Path(sys.executable).resolve().parent
+            paths.append(exe_dir / '.env')
+            paths.append(Path.cwd() / '.env')
+        else:
+            paths.append(Path(__file__).resolve().parent.parent / '.env')
+        seen: set[str] = set()
+        out: List[Path] = []
+        for p in paths:
+            k = str(p.resolve())
+            if k not in seen:
+                seen.add(k)
+                out.append(p)
+        return out
+
+    _loaded = False
+    _cands = _dotenv_candidates()
+    for env_file in _cands:
+        if env_file.is_file():
+            load_dotenv(env_file, encoding='utf-8')
+            print(f"[Config] 已加载环境变量文件: {env_file}")
+            _loaded = True
+            break
+    if not _loaded:
+        _hint = Path(sys.executable).resolve().parent / '.env' if getattr(sys, 'frozen', False) else _cands[0]
+        print(f"[Config] 未找到.env文件（已尝试: {', '.join(str(p) for p in _cands)}）。AI/飞书等依赖 .env 时请放在: {_hint}")
 except ImportError:
     print("[Config] python-dotenv 未安装，跳过环境变量加载")
 except Exception as e:
@@ -51,7 +66,7 @@ class Config:
     
     # Web界面配置
     APP_NAME = '如意助手'
-    APP_VERSION = '2.0.0'
+    APP_VERSION = '2.0.1'
     AUTO_OPEN_BROWSER = True  # 启动时自动打开浏览器（已废弃，使用 USE_NATIVE_WINDOW）
     USE_NATIVE_WINDOW = True  # 使用原生窗口（True）还是浏览器（False）
     
@@ -120,6 +135,23 @@ class Config:
         'PINDUODUO_ERP_FEISHU_VIEW_ID',
         'vew1HQrDsN',
     )
+    # ERP 待审核订单页（脚本 pdd-erp-order-audit-goods.js）
+    PINDUODUO_ERP_ORDER_AUDIT_URL = os.getenv(
+        'PINDUODUO_ERP_ORDER_AUDIT_URL',
+        'https://mms.pinduoduo.com/erp/order/audit',
+    ).strip()
+    # ERP 待发货页（脚本 pdd-erp-order-delivering-print-ship.js）
+    PINDUODUO_ERP_ORDER_DELIVERING_URL = os.getenv(
+        'PINDUODUO_ERP_ORDER_DELIVERING_URL',
+        'https://mms.pinduoduo.com/erp/order/delivering',
+    ).strip()
+    # 审核记录同步目标（飞书多维表格 table_id；与 docs/next/pinduoduo-erp-audit-feishu-table.md 一致）
+    # 未在 .env 中显式配置时使用默认值，避免「审核完没自动同步飞书」的静默失败
+    PINDUODUO_ERP_AUDIT_FEISHU_TABLE_ID = (
+        os.getenv('PINDUODUO_ERP_AUDIT_FEISHU_TABLE_ID') or 'tblVgYVKU5DbyKdM'
+    ).strip()
+    # 可选：SQLite 绝对路径；留空则用 get_safe_data_path('data/pdd_erp_audit.sqlite')
+    PINDUODUO_ERP_AUDIT_DB_PATH = (os.getenv('PINDUODUO_ERP_AUDIT_DB_PATH') or '').strip()
     # 库存同步：ERP 全部店铺表 → 库存信息表 + 扣减日志表（定时任务 inventory_sync_job）
     # 库存信息表 / 扣减日志表均有默认 table_id，可用环境变量覆盖（与你们飞书实际表不一致时请改 .env）
     PINDUODUO_FEISHU_INVENTORY_INFO_TABLE_ID = os.getenv(
@@ -257,6 +289,11 @@ except:
     pass
 
 
+_MODULE_CONFIG_HEADER = """\
+===== 功能模块配置 =====
+enabled: 是否启用  init_on_startup: 启动时初始化  requires_browser: 是否需要浏览器"""
+
+
 def get_module_config_file_path() -> Path:
     """
     获取模块配置文件路径
@@ -267,15 +304,18 @@ def get_module_config_file_path() -> Path:
     if Config.MODULE_CONFIG_FILE:
         return Path(Config.MODULE_CONFIG_FILE)
     
-    # 默认路径：项目根目录或exe同目录
     if getattr(__import__('sys'), 'frozen', False):
-        # 打包后的exe环境
-        exe_dir = Path(__import__('sys').executable).parent
-        return exe_dir / 'module_config.json'
+        base = Path(__import__('sys').executable).parent
     else:
-        # 开发环境
-        current_dir = Path(__file__).parent.parent
-        return current_dir / 'module_config.json'
+        base = Path(__file__).parent.parent
+
+    toml_path = base / 'module_config.toml'
+
+    # 首次升级：自动把旧 JSON 迁移为 TOML
+    from utils.toml_helper import migrate_json_to_toml
+    migrate_json_to_toml(base / 'module_config.json', toml_path, header=_MODULE_CONFIG_HEADER)
+
+    return toml_path
 
 
 def load_module_config() -> Dict[str, Dict[str, Any]]:
@@ -285,26 +325,21 @@ def load_module_config() -> Dict[str, Dict[str, Any]]:
     Returns:
         模块配置字典
     """
-    # 延迟导入避免循环导入
     from config.modules import get_default_module_config
+    from utils.toml_helper import load_toml
     
-    # 获取默认配置
     config = get_default_module_config()
     
-    # 尝试从文件加载用户配置
     config_file = get_module_config_file_path()
     if config_file.exists():
         try:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                user_config = json.load(f)
-            
-            # 合并用户配置到默认配置
+            user_config = load_toml(config_file)
             for module_name, module_config in user_config.items():
+                if not isinstance(module_config, dict):
+                    continue
                 if module_name in config:
-                    # 只更新用户提供的字段
                     config[module_name].update(module_config)
                 else:
-                    # 新模块，直接添加
                     config[module_name] = module_config
         except Exception as e:
             print(f"[Config] 加载模块配置文件失败: {e}")
@@ -322,15 +357,11 @@ def save_module_config(config: Dict[str, Dict[str, Any]]) -> bool:
     Returns:
         是否保存成功
     """
+    from utils.toml_helper import dump_toml
+
     config_file = get_module_config_file_path()
     try:
-        # 确保目录存在
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        # 保存配置
-        with open(config_file, 'w', encoding='utf-8') as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        
+        dump_toml(config, config_file, header=_MODULE_CONFIG_HEADER)
         return True
     except Exception as e:
         print(f"[Config] 保存模块配置文件失败: {e}")

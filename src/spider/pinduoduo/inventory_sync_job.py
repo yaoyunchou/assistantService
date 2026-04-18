@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from config import Config
 from spider.pinduoduo.feishutable import feishu_field_to_text
+from spider.pinduoduo.inventory_mapping import SKIP_PLACEHOLDER, load_mappings
 from spider.pinduoduo.order_address_sync import _feishu_cell_to_epoch_ms
 from tools.feishu.feishu_table_client import FeishuTableClient
 from utils.logger import get_logger
@@ -57,6 +58,25 @@ _LOG_COL_RET_QTY = '退货数量'
 _LOG_COL_PRODUCT_INFO = '商品信息'   # ERP 原始商品信息文本
 _LOG_COL_PRODUCT_NAME = '商品标题'   # 非套装=商品信息原文；套装=匹配到的单品名称（对应飞书「商品标题」列）
 _LOG_COL_IS_BUNDLE = '组合'          # "是"（套装）/ "否"（非套装）
+_LOG_COL_CONSUMED = '库存已核销'     # 复选框：扣减写回库存表后勾选
+
+# 库存信息表列名
+_INV_COL_STOCK = '数量'
+
+# ── 库存扣减开关 ──────────────────────────────────────────────
+# False = 仅打印测算日志，不写飞书；确认日志无误后改为 True 即可写回
+_INVENTORY_DEDUCT_APPLY =True
+
+
+def _is_consumed(val: Any) -> bool:
+    """判断飞书复选框「库存已核销」是否为 True。"""
+    if val is True:
+        return True
+    if isinstance(val, (list, tuple)) and val and val[0] is True:
+        return True
+    if isinstance(val, str) and val.strip().lower() in ('true', '1', '是', 'yes'):
+        return True
+    return False
 
 
 def _matched_name_only(stock_link: str) -> str:
@@ -602,14 +622,20 @@ def run_inventory_sync_job(options: Optional[Dict[str, Any]] = None) -> Dict[str
             _seen_product_names.add(name)
             product_names.append(name)
 
+    # 加载手动映射（商品信息→商品名称），命中则跳过 AI
+    manual_mappings = load_mappings()
+    mapping_hit = 0
+    mapping_skip = 0
+
     logger.info(
-        '库存同步任务开始 erp_table=%s inv_table=%s log_table=%s pay_after=%s require_express=%s product_name_candidates=%d',
+        '库存同步任务开始 erp_table=%s inv_table=%s log_table=%s pay_after=%s require_express=%s product_name_candidates=%d manual_mappings=%d',
         erp_table,
         inv_table,
         log_table,
         pay_after,
         require_express,
         len(product_names),
+        len(manual_mappings),
     )
 
     # key=规范化订单号，value=该订单在日志表的所有行（套装订单可能有2行）
@@ -689,65 +715,91 @@ def run_inventory_sync_job(options: Optional[Dict[str, Any]] = None) -> Dict[str
             if out_ms is not None and qty is not None:
                 day_ms = _start_of_day_shanghai_ms(out_ms)
                 info_raw = feishu_field_to_text(fields.get('商品信息')).strip()
-                is_bundle = _detect_is_bundle(info_raw)
-                if is_bundle:
-                    # 套装拆两条：第0条=充电头，第1条=数据线
-                    # 充电头颜色=套装颜色；数据线颜色不强制对齐套装颜色（用专属 prompt）
-                    charger_desc, cable_desc = _split_bundle_descriptions(info_raw)
-                    charger_cands = [n for n in product_names if _detect_accessory_kind(n) == 'charger']
-                    cable_cands = [n for n in product_names if _detect_accessory_kind(n) == 'cable']
-                    charger_link = _find_stock_link_for_kind(
-                        fields, charger_cands, '充电头',
-                        ai_api_key=ai_api_key, ai_base_url=ai_base_url,
-                        ai_model=ai_model, ai_cache=ai_cache,
-                        system_prompt=_SYSTEM_PROMPT_BUNDLE_CHARGER,
-                    )
-                    cable_link = _find_stock_link_for_kind(
-                        fields, cable_cands, '数据线',
-                        ai_api_key=ai_api_key, ai_base_url=ai_base_url,
-                        ai_model=ai_model, ai_cache=ai_cache,
-                        system_prompt=_SYSTEM_PROMPT_BUNDLE_CABLE,
-                    )
-                    proposed_log_fields_list: List[Dict[str, Any]] = [
-                        {
+
+                # ── 优先查手动映射 ──
+                mapped_names = manual_mappings.get(info_raw)
+                if mapped_names is not None:
+                    if mapped_names == [SKIP_PLACEHOLDER] or mapped_names == []:
+                        mapping_skip += 1
+                        logger.debug('[映射跳过] 订单=%s 商品信息=%.60s', pk_raw, info_raw)
+                        continue  # 映射为「空」→ 跳过该订单
+                    mapping_hit += 1
+                    logger.info('[映射命中] 订单=%s 商品信息=%.60s → %s', pk_raw, info_raw, mapped_names)
+                    is_mapped_bundle = len(mapped_names) > 1
+                    proposed_log_fields_list: List[Dict[str, Any]] = []
+                    for mname in mapped_names:
+                        proposed_log_fields_list.append({
                             _LOG_COL_ORDER: pk_raw,
                             _LOG_COL_DATE: day_ms,
-                            _LOG_COL_STOCK_LINK: charger_link,
+                            _LOG_COL_STOCK_LINK: mname,
                             _LOG_COL_OUT_TIME: out_ms,
                             _LOG_COL_OUT_QTY: qty,
                             _LOG_COL_PRODUCT_INFO: info_raw,
-                            _LOG_COL_PRODUCT_NAME: _matched_name_only(charger_link) or charger_desc,
-                            _LOG_COL_IS_BUNDLE: '是',
-                        },
-                        {
-                            _LOG_COL_ORDER: pk_raw,
-                            _LOG_COL_DATE: day_ms,
-                            _LOG_COL_STOCK_LINK: cable_link,
-                            _LOG_COL_OUT_TIME: out_ms,
-                            _LOG_COL_OUT_QTY: qty,
-                            _LOG_COL_PRODUCT_INFO: info_raw,
-                            _LOG_COL_PRODUCT_NAME: _matched_name_only(cable_link) or cable_desc,
-                            _LOG_COL_IS_BUNDLE: '是',
-                        },
-                    ]
+                            _LOG_COL_PRODUCT_NAME: mname,
+                            _LOG_COL_IS_BUNDLE: '是' if is_mapped_bundle else '否',
+                        })
                 else:
-                    stock_link = _find_best_stock_link(
-                        fields, product_names,
-                        ai_api_key=ai_api_key, ai_base_url=ai_base_url,
-                        ai_model=ai_model, ai_cache=ai_cache,
-                    )
-                    proposed_log_fields_list = [
-                        {
-                            _LOG_COL_ORDER: pk_raw,
-                            _LOG_COL_DATE: day_ms,
-                            _LOG_COL_STOCK_LINK: stock_link,
-                            _LOG_COL_OUT_TIME: out_ms,
-                            _LOG_COL_OUT_QTY: qty,
-                            _LOG_COL_PRODUCT_INFO: info_raw,
-                            _LOG_COL_PRODUCT_NAME: info_raw,  # 非套装=商品信息原文
-                            _LOG_COL_IS_BUNDLE: '否',
-                        }
-                    ]
+                    # ── 无映射，走原有 AI 匹配 ──
+                    logger.info('[AI匹配] 订单=%s 商品信息=%.60s（无映射，走AI）', pk_raw, info_raw)
+                    is_bundle = _detect_is_bundle(info_raw)
+                    if is_bundle:
+                        charger_desc, cable_desc = _split_bundle_descriptions(info_raw)
+                        charger_cands = [n for n in product_names if _detect_accessory_kind(n) == 'charger']
+                        cable_cands = [n for n in product_names if _detect_accessory_kind(n) == 'cable']
+                        charger_link = _find_stock_link_for_kind(
+                            fields, charger_cands, '充电头',
+                            ai_api_key=ai_api_key, ai_base_url=ai_base_url,
+                            ai_model=ai_model, ai_cache=ai_cache,
+                            system_prompt=_SYSTEM_PROMPT_BUNDLE_CHARGER,
+                        )
+                        cable_link = _find_stock_link_for_kind(
+                            fields, cable_cands, '数据线',
+                            ai_api_key=ai_api_key, ai_base_url=ai_base_url,
+                            ai_model=ai_model, ai_cache=ai_cache,
+                            system_prompt=_SYSTEM_PROMPT_BUNDLE_CABLE,
+                        )
+                        logger.info('[AI匹配结果] 订单=%s 套装 充电头→%s 数据线→%s', pk_raw, charger_link[:60], cable_link[:60])
+                        proposed_log_fields_list = [
+                            {
+                                _LOG_COL_ORDER: pk_raw,
+                                _LOG_COL_DATE: day_ms,
+                                _LOG_COL_STOCK_LINK: charger_link,
+                                _LOG_COL_OUT_TIME: out_ms,
+                                _LOG_COL_OUT_QTY: qty,
+                                _LOG_COL_PRODUCT_INFO: info_raw,
+                                _LOG_COL_PRODUCT_NAME: _matched_name_only(charger_link) or charger_desc,
+                                _LOG_COL_IS_BUNDLE: '是',
+                            },
+                            {
+                                _LOG_COL_ORDER: pk_raw,
+                                _LOG_COL_DATE: day_ms,
+                                _LOG_COL_STOCK_LINK: cable_link,
+                                _LOG_COL_OUT_TIME: out_ms,
+                                _LOG_COL_OUT_QTY: qty,
+                                _LOG_COL_PRODUCT_INFO: info_raw,
+                                _LOG_COL_PRODUCT_NAME: _matched_name_only(cable_link) or cable_desc,
+                                _LOG_COL_IS_BUNDLE: '是',
+                            },
+                        ]
+                    else:
+                        stock_link = _find_best_stock_link(
+                            fields, product_names,
+                            ai_api_key=ai_api_key, ai_base_url=ai_base_url,
+                            ai_model=ai_model, ai_cache=ai_cache,
+                        )
+                        logger.info('[AI匹配结果] 订单=%s 单品→%s', pk_raw, stock_link[:80] if stock_link else '(空)')
+                        proposed_log_fields_list = [
+                            {
+                                _LOG_COL_ORDER: pk_raw,
+                                _LOG_COL_DATE: day_ms,
+                                _LOG_COL_STOCK_LINK: stock_link,
+                                _LOG_COL_OUT_TIME: out_ms,
+                                _LOG_COL_OUT_QTY: qty,
+                                _LOG_COL_PRODUCT_INFO: info_raw,
+                                _LOG_COL_PRODUCT_NAME: info_raw,
+                                _LOG_COL_IS_BUNDLE: '否',
+                            }
+                        ]
 
                 existing_entries = log_by_order.get(pk_key, [])
                 for idx, log_flds in enumerate(proposed_log_fields_list):
@@ -849,10 +901,162 @@ def run_inventory_sync_job(options: Optional[Dict[str, Any]] = None) -> Dict[str
             logger.exception('批量更新退货列失败: %s', e)
             log_failed += len(chunk)
 
+    # ══════════════════════════════════════════════════════════
+    # 库存扣减测算（开关 _INVENTORY_DEDUCT_APPLY 控制是否写回飞书）
+    # ══════════════════════════════════════════════════════════
+    deduct_by_link: Dict[str, float] = {}
+    deduct_log_rows: Dict[str, List[str]] = {}  # link → [record_id, ...]
+    deduct_skip_consumed = 0
+    deduct_skip_empty = 0
+    deduct_skip_unmatched = 0
+
+    for entries in log_by_order.values():
+        for entry in entries:
+            flds = entry.get('fields') or {}
+            rid = entry.get('record_id') or ''
+            if _is_consumed(flds.get(_LOG_COL_CONSUMED)):
+                deduct_skip_consumed += 1
+                continue
+            link = feishu_field_to_text(flds.get(_LOG_COL_STOCK_LINK)).strip()
+            if not link:
+                deduct_skip_empty += 1
+                continue
+            if link.startswith('未匹配'):
+                deduct_skip_unmatched += 1
+                continue
+            out_qty = _cell_float(flds.get(_LOG_COL_OUT_QTY)) or 0.0
+            ret_qty = _cell_float(flds.get(_LOG_COL_RET_QTY)) or 0.0
+            net = out_qty - ret_qty
+            deduct_by_link[link] = deduct_by_link.get(link, 0.0) + net
+            deduct_log_rows.setdefault(link, [])
+            if rid:
+                deduct_log_rows[link].append(rid)
+
+    # 构建库存表名称→(record_id, 当前库存) 索引
+    inv_by_name: Dict[str, Dict[str, Any]] = {}
+    for rec in inv_records:
+        f = rec.get('fields') or {}
+        rid = rec.get('record_id') or ''
+        name = feishu_field_to_text(f.get(inv_name_field)).strip()
+        if name and rid:
+            inv_by_name[name] = {
+                'record_id': rid,
+                'current_stock': _cell_float(f.get(_INV_COL_STOCK)) or 0.0,
+            }
+
+    inv_deduct_results: List[Dict[str, Any]] = []
+    for link, total_deduct in deduct_by_link.items():
+        if total_deduct <= 0:
+            continue
+        inv_info = inv_by_name.get(link)
+        if inv_info is None:
+            continue
+        stock_after = inv_info['current_stock'] - total_deduct
+        inv_deduct_results.append({
+            'record_id': inv_info['record_id'],
+            'name': link,
+            'current_stock': inv_info['current_stock'],
+            'total_deduct': total_deduct,
+            'stock_after': stock_after,
+        })
+
+    orphan_links = {k: v for k, v in deduct_by_link.items() if v > 0 and k not in inv_by_name}
+
+    # ── 打印测算日志 ──
+    logger.info('══ 库存扣减测算 ══')
+    logger.info(
+        '日志行统计: 已核销跳过=%d, 空库存关联=%d, 未匹配跳过=%d, 有效分组=%d',
+        deduct_skip_consumed, deduct_skip_empty, deduct_skip_unmatched, len(deduct_by_link),
+    )
+    for link, qty in sorted(deduct_by_link.items()):
+        row_count = len(deduct_log_rows.get(link, []))
+        logger.info('  [汇总] %s → 净出库 %.4g（来自 %d 条日志行）', link, qty, row_count)
+
+    if inv_deduct_results:
+        logger.info('── 库存信息表扣减明细 ──')
+        for r in inv_deduct_results:
+            logger.info(
+                '  [扣减] %s: 当前库存=%g, 应扣=%g, 扣后=%g',
+                r['name'], r['current_stock'], r['total_deduct'], r['stock_after'],
+            )
+    else:
+        logger.info('── 无需扣减（无有效扣减分组或库存表无匹配商品）──')
+
+    if orphan_links:
+        logger.warning('── 孤儿链接（日志有分组，库存信息表无同名商品）──')
+        for k, v in orphan_links.items():
+            logger.warning('  [孤儿] %s → 净出库 %.4g', k, v)
+
+    # ── 写回 / 仅预览 ──
+    inv_stock_updated = 0
+    inv_stock_failed = 0
+    log_mark_consumed = 0
+
+    if _INVENTORY_DEDUCT_APPLY and inv_deduct_results:
+        logger.info('── 开始写回库存信息表 ──')
+        updated_names: Set[str] = set()
+        for r in inv_deduct_results:
+            try:
+                stock_val: Any = r['stock_after']
+                if stock_val == int(stock_val):
+                    stock_val = int(stock_val)
+                result = inv_client.update_record(r['record_id'], {_INV_COL_STOCK: stock_val})
+                if result is not None:
+                    inv_stock_updated += 1
+                    updated_names.add(r['name'])
+                    logger.info('  [写回成功] %s: %g → %g', r['name'], r['current_stock'], r['stock_after'])
+                else:
+                    inv_stock_failed += 1
+                    logger.error('  [写回失败] %s: API 返回 None', r['name'])
+            except Exception as e:
+                inv_stock_failed += 1
+                logger.exception('  [写回异常] %s: %s', r['name'], e)
+
+        # 勾选已扣减日志行的「库存已核销」复选框
+        mark_batch: List[Dict[str, Any]] = []
+        for entries in log_by_order.values():
+            for entry in entries:
+                flds = entry.get('fields') or {}
+                rid = entry.get('record_id')
+                if not rid:
+                    continue
+                if _is_consumed(flds.get(_LOG_COL_CONSUMED)):
+                    continue
+                link = feishu_field_to_text(flds.get(_LOG_COL_STOCK_LINK)).strip()
+                if not link or link.startswith('未匹配') or link not in updated_names:
+                    continue
+                mark_batch.append({'record_id': rid, 'fields': {_LOG_COL_CONSUMED: True}})
+
+        for i in range(0, len(mark_batch), 20):
+            chunk = mark_batch[i : i + 20]
+            try:
+                ok = log_client.batch_update_records(chunk)
+                if ok:
+                    log_mark_consumed += len(chunk)
+                else:
+                    for u in chunk:
+                        r = log_client.update_record(u['record_id'], u['fields'])
+                        if r is not None:
+                            log_mark_consumed += 1
+            except Exception as e:
+                logger.exception('标记已核销失败: %s', e)
+
+        logger.info(
+            '库存扣减写回完成: 更新库存=%d, 失败=%d, 标记已核销=%d',
+            inv_stock_updated, inv_stock_failed, log_mark_consumed,
+        )
+    elif not _INVENTORY_DEDUCT_APPLY:
+        logger.info('══ 库存扣减开关关闭（_INVENTORY_DEDUCT_APPLY=False），仅打印测算结果，未写入飞书 ══')
+
+    deduct_mode = '已写回' if _INVENTORY_DEDUCT_APPLY else '仅测算'
     msg = (
         f'扫描 ERP {len(erp_records)} 行，符合条件 {eligible_count}；'
+        f'映射命中 {mapping_hit}，映射跳过 {mapping_skip}；'
         f'日志新建 {log_created}，出库更新 {log_updated_out}，出库无变化跳过 {log_skipped_out}；'
-        f'退货更新 {ret_updated}，退货无变化跳过 {ret_skipped}；日志失败 {log_failed}'
+        f'退货更新 {ret_updated}，退货无变化跳过 {ret_skipped}；日志失败 {log_failed}；'
+        f'库存扣减（{deduct_mode}）：匹配商品 {len(inv_deduct_results)}，'
+        f'更新库存 {inv_stock_updated}，标记核销 {log_mark_consumed}，'
+        f'孤儿链接 {len(orphan_links)}'
     )
     logger.info(msg)
     return {
@@ -860,10 +1064,20 @@ def run_inventory_sync_job(options: Optional[Dict[str, Any]] = None) -> Dict[str
         'message': msg,
         'eligible_count': eligible_count,
         'erp_row_count': len(erp_records),
+        'mapping_hit': mapping_hit,
+        'mapping_skip': mapping_skip,
         'log_created': log_created,
         'log_outbound_updated': log_updated_out,
         'log_outbound_skipped_no_delta': log_skipped_out,
         'log_return_updated': ret_updated,
         'log_return_skipped_no_delta': ret_skipped,
         'log_failed': log_failed,
+        'deduct_apply': _INVENTORY_DEDUCT_APPLY,
+        'deduct_matched_products': len(inv_deduct_results),
+        'deduct_stock_updated': inv_stock_updated,
+        'deduct_stock_failed': inv_stock_failed,
+        'deduct_log_mark_consumed': log_mark_consumed,
+        'deduct_orphan_links': len(orphan_links),
+        'deduct_skip_consumed': deduct_skip_consumed,
+        'deduct_skip_unmatched': deduct_skip_unmatched,
     }

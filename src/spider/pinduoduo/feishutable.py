@@ -3,7 +3,8 @@
 """
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-from tools.feishu.feishu_table_client import FeishuTableClient
+import json
+from tools.feishu.feishu_table_client import FeishuTableClient, _feishu_fields_debug_str
 from utils.logger import get_logger
 
 logger = get_logger('PinduoduoFeishuTable')
@@ -35,6 +36,9 @@ ERP_FEISHU_NUMBER_FIELD_KEYS = (
 )
 # 飞书「日期」列需 Unix 毫秒时间戳（与旧版订单同步一致）
 ERP_FEISHU_DATETIME_FIELD_KEYS = ('付款时间', '审核时间', '发货时间')
+
+# 脚本有列但飞书表未建同名字段时勿写入，避免 batch_create FieldNameNotFound
+ERP_FEISHU_OMIT_FIELD_KEYS = frozenset({'发货剩余'})
 
 # 已存在「平台订单号」时，仅 PATCH 下列字段（其余列保留表中原值，避免每次全表同步覆盖人工改动）
 ERP_FEISHU_PARTIAL_UPDATE_FIELD_KEYS = (
@@ -602,6 +606,8 @@ def _erp_row_to_fields(row: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for k_raw, v in row.items():
         k = str(k_raw)
+        if k in ERP_FEISHU_OMIT_FIELD_KEYS:
+            continue
         if v is None:
             continue
 
@@ -641,6 +647,30 @@ def _erp_row_to_fields(row: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _erp_pk_from_fields(fields: Dict[str, Any]) -> str:
+    """从写入飞书的 fields 中取平台订单号（创建批次失败时用于日志）。"""
+    return feishu_field_to_text(fields.get(ERP_ORDER_PRIMARY_KEY)).strip()
+
+
+def _log_erp_feishu_write_failure(
+    reason: str,
+    platform_order_sn: str,
+    err: Optional[str],
+    *,
+    record_id: Optional[str] = None,
+    fields: Optional[Dict[str, Any]] = None,
+) -> None:
+    """飞书单条写入失败时打出平台订单号与 API 原因，便于排查（如单选字段选项不匹配）。"""
+    logger.error(
+        'ERP 同步飞书写入失败 reason=%s 平台订单号=%s record_id=%s err=%s fields=%s',
+        reason,
+        platform_order_sn,
+        record_id or '-',
+        err or '(未知)',
+        _feishu_fields_debug_str(fields) if fields else '{}',
+    )
+
+
 def _erp_fields_for_partial_update(row: Dict[str, Any]) -> Dict[str, Any]:
     """
     从当前行解析出「仅增量更新」允许的字段子集（类型转换规则与 _erp_row_to_fields 一致）。
@@ -678,6 +708,7 @@ def sync_erp_order_rows_to_feishu(
             'update_count': 0,
             'update_skipped_no_delta': 0,
             'total_count': 0,
+            'failed_order_sns': [],
         }
 
     try:
@@ -688,6 +719,7 @@ def sync_erp_order_rows_to_feishu(
         create_count = 0
         update_skipped_no_delta = 0
         total_count = len(rows)
+        failed_order_sns: List[str] = []
 
         existing_records = feishu_table_client.get_all_records()
         key_to_record: Dict[str, Dict[str, Any]] = {}
@@ -709,6 +741,7 @@ def sync_erp_order_rows_to_feishu(
             if not pk:
                 logger.warning('ERP 行缺少「平台订单号」，跳过: %s', row)
                 fail_count += 1
+                failed_order_sns.append('(缺少平台订单号)')
                 continue
 
             if pk in key_to_record:
@@ -721,81 +754,166 @@ def sync_erp_order_rows_to_feishu(
                     )
                     continue
                 rec = key_to_record[pk]
-                orders_to_update.append({'record_id': rec['record_id'], 'fields': partial})
+                orders_to_update.append(
+                    {
+                        'record_id': rec['record_id'],
+                        'fields': partial,
+                        'platform_order_sn': pk,
+                    }
+                )
             else:
                 fields = _erp_row_to_fields(row)
-                orders_to_create.append({'fields': fields})
+                orders_to_create.append({'fields': fields, 'platform_order_sn': pk})
 
         batch_size = 20
         if orders_to_create:
             for i in range(0, len(orders_to_create), batch_size):
                 batch = orders_to_create[i:i + batch_size]
+                # API 只接受 {fields}，去掉辅助字段
+                batch_payload = [{'fields': x['fields']} for x in batch]
                 try:
-                    result = feishu_table_client.batch_create_records(batch)
+                    result = feishu_table_client.batch_create_records(batch_payload)
                     if result:
                         batch_success = len(result)
                         create_count += batch_success
                         success_count += batch_success
-                        fail_count += len(batch) - batch_success
+                        n_fail = len(batch) - batch_success
+                        fail_count += n_fail
+                        if n_fail:
+                            for j in range(batch_success, len(batch)):
+                                item = batch[j]
+                                sn = item.get('platform_order_sn') or _erp_pk_from_fields(
+                                    item['fields']
+                                )
+                                sn = sn or '(未知)'
+                                failed_order_sns.append(sn)
+                                _, err = feishu_table_client.create_record_with_error(item['fields'])
+                                _log_erp_feishu_write_failure(
+                                    'create_batch_partial', sn, err, fields=item['fields']
+                                )
                     else:
-                        for record in batch:
-                            r = feishu_table_client.create_record(record['fields'])
+                        for item in batch:
+                            r, err = feishu_table_client.create_record_with_error(item['fields'])
                             if r:
                                 create_count += 1
                                 success_count += 1
                             else:
                                 fail_count += 1
+                                sn = item.get('platform_order_sn') or _erp_pk_from_fields(item['fields'])
+                                sn = sn or '(未知)'
+                                failed_order_sns.append(sn)
+                                _log_erp_feishu_write_failure(
+                                    'create_fallback', sn, err, fields=item['fields']
+                                )
                 except Exception as e:
                     logger.error('ERP 创建批次失败: %s', e, exc_info=True)
-                    for record in batch:
+                    for item in batch:
                         try:
-                            r = feishu_table_client.create_record(record['fields'])
+                            r, err = feishu_table_client.create_record_with_error(item['fields'])
                             if r:
                                 create_count += 1
                                 success_count += 1
                             else:
                                 fail_count += 1
+                                sn = item.get('platform_order_sn') or _erp_pk_from_fields(item['fields'])
+                                sn = sn or '(未知)'
+                                failed_order_sns.append(sn)
+                                _log_erp_feishu_write_failure(
+                                    'create_after_batch_exception', sn, err, fields=item['fields']
+                                )
                         except Exception as e2:
                             logger.error('ERP 单条创建失败: %s', e2)
                             fail_count += 1
+                            sn = item.get('platform_order_sn') or _erp_pk_from_fields(item['fields'])
+                            sn = sn or '(未知)'
+                            failed_order_sns.append(sn)
+                            _log_erp_feishu_write_failure(
+                                'create_exception', sn, str(e2), fields=item['fields']
+                            )
 
         if orders_to_update:
             for i in range(0, len(orders_to_update), batch_size):
                 batch = orders_to_update[i:i + batch_size]
+                batch_payload = [
+                    {'record_id': x['record_id'], 'fields': x['fields']} for x in batch
+                ]
                 try:
-                    result = feishu_table_client.batch_update_records(batch)
+                    result = feishu_table_client.batch_update_records(batch_payload)
                     if result:
                         batch_success = len(result)
                         update_count += batch_success
                         success_count += batch_success
-                        fail_count += len(batch) - batch_success
+                        n_fail = len(batch) - batch_success
+                        fail_count += n_fail
+                        if n_fail:
+                            for j in range(batch_success, len(batch)):
+                                item = batch[j]
+                                sn = item.get('platform_order_sn') or '(未知)'
+                                failed_order_sns.append(sn)
+                                _, err = feishu_table_client.update_record_with_error(
+                                    item['record_id'], item['fields']
+                                )
+                                _log_erp_feishu_write_failure(
+                                    'update_batch_partial',
+                                    sn,
+                                    err,
+                                    record_id=item['record_id'],
+                                    fields=item['fields'],
+                                )
                     else:
-                        for record in batch:
-                            r = feishu_table_client.update_record(
-                                record_id=record['record_id'],
-                                fields=record['fields'],
+                        for item in batch:
+                            r, err = feishu_table_client.update_record_with_error(
+                                record_id=item['record_id'],
+                                fields=item['fields'],
                             )
                             if r:
                                 update_count += 1
                                 success_count += 1
                             else:
                                 fail_count += 1
+                                sn = item.get('platform_order_sn') or '(未知)'
+                                failed_order_sns.append(sn)
+                                _log_erp_feishu_write_failure(
+                                    'update_fallback',
+                                    sn,
+                                    err,
+                                    record_id=item['record_id'],
+                                    fields=item['fields'],
+                                )
                 except Exception as e:
                     logger.error('ERP 更新批次失败: %s', e, exc_info=True)
-                    for record in batch:
+                    for item in batch:
                         try:
-                            r = feishu_table_client.update_record(
-                                record_id=record['record_id'],
-                                fields=record['fields'],
+                            r, err = feishu_table_client.update_record_with_error(
+                                record_id=item['record_id'],
+                                fields=item['fields'],
                             )
                             if r:
                                 update_count += 1
                                 success_count += 1
                             else:
                                 fail_count += 1
+                                sn = item.get('platform_order_sn') or '(未知)'
+                                failed_order_sns.append(sn)
+                                _log_erp_feishu_write_failure(
+                                    'update_after_batch_exception',
+                                    sn,
+                                    err,
+                                    record_id=item['record_id'],
+                                    fields=item['fields'],
+                                )
                         except Exception as e2:
                             logger.error('ERP 单条更新失败: %s', e2)
                             fail_count += 1
+                            sn = item.get('platform_order_sn') or '(未知)'
+                            failed_order_sns.append(sn)
+                            _log_erp_feishu_write_failure(
+                                'update_exception',
+                                sn,
+                                str(e2),
+                                record_id=item['record_id'],
+                                fields=item['fields'],
+                            )
 
         msg_parts = [
             f'同步完成: 成功 {success_count} (新建 {create_count}, 更新 {update_count})',
@@ -803,6 +921,9 @@ def sync_erp_order_rows_to_feishu(
         ]
         if update_skipped_no_delta:
             msg_parts.append(f'已存在但无增量字段跳过 {update_skipped_no_delta}')
+        if failed_order_sns:
+            msg_parts.append('失败订单号: ' + '、'.join(failed_order_sns))
+            logger.warning('ERP 同步失败订单号 (%d): %s', len(failed_order_sns), '、'.join(failed_order_sns))
         return {
             'success': True,
             'message': ', '.join(msg_parts),
@@ -812,9 +933,17 @@ def sync_erp_order_rows_to_feishu(
             'update_count': update_count,
             'update_skipped_no_delta': update_skipped_no_delta,
             'total_count': total_count,
+            'failed_order_sns': failed_order_sns,
         }
     except Exception as e:
         logger.error('ERP 订单行同步飞书失败: %s', e, exc_info=True)
+        bulk_failed: List[str] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            pk = feishu_field_to_text(row.get(ERP_ORDER_PRIMARY_KEY)).strip()
+            if pk:
+                bulk_failed.append(pk)
         return {
             'success': False,
             'message': f'同步失败: {str(e)}',
@@ -824,4 +953,161 @@ def sync_erp_order_rows_to_feishu(
             'update_count': 0,
             'update_skipped_no_delta': 0,
             'total_count': len(rows),
+            'failed_order_sns': bulk_failed,
         }
+
+
+# --- ERP 审核日志（本地 SQLite → 飞书追加写入）---
+AUDIT_FEISHU_DATETIME_FIELD_KEYS = ('审核完成时间',)
+
+
+def _audit_goods_summary(goods: Any) -> str:
+    if not isinstance(goods, list):
+        return ''
+    lines: List[str] = []
+    for g in goods:
+        if not isinstance(g, dict):
+            continue
+        t = (g.get('title') or '').strip()
+        sp = (g.get('spec') or '').strip()
+        q = g.get('qty')
+        lines.append(f'{t} {sp} x{q}'.strip())
+    return '\n'.join(lines)[:12000]
+
+
+def _audit_goods_split_fields(goods: Any) -> Dict[str, Any]:
+    """与飞书拆列「标题 / 规格 / 数量 / 商品图片」对齐（见 docs/next/pinduoduo-erp-audit-feishu-table.md）。"""
+    out: Dict[str, Any] = {}
+    if not isinstance(goods, list) or not goods:
+        out['标题'] = ''
+        out['规格'] = ''
+        out['数量'] = 0
+        out['商品图片'] = ''
+        return out
+    first = goods[0] if isinstance(goods[0], dict) else {}
+    out['标题'] = str(first.get('title') or '').strip()[:5000]
+    out['规格'] = str(first.get('spec') or '').strip()[:5000]
+    qty_sum = 0
+    imgs: List[str] = []
+    for g in goods:
+        if not isinstance(g, dict):
+            continue
+        try:
+            qty_sum += int(g.get('qty') or 0)
+        except (TypeError, ValueError):
+            pass
+        u = str(g.get('imgSrc') or '').strip()
+        if u:
+            imgs.append(u)
+    # 数量：多维表格列为「数字」时需传整数；语义为订单内 SKU 件数合计（与文档「总件数」约定一致）
+    out['数量'] = qty_sum
+    # 多张图英文逗号拼接（与运维文档示例一致）；过长截断避免超限
+    out['商品图片'] = ','.join(imgs)[:49000]
+    return out
+
+
+def _audited_at_to_ms(audited_at: str) -> int:
+    try:
+        s = (audited_at or '').strip()
+        if 'T' in s:
+            dt = datetime.fromisoformat(s.replace('Z', ''))
+        else:
+            dt = datetime.strptime(s[:19], '%Y-%m-%d %H:%M:%S')
+        return int(dt.timestamp() * 1000)
+    except Exception:
+        return int(datetime.now().timestamp() * 1000)
+
+
+def _audit_local_row_to_fields(row: Dict[str, Any]) -> Dict[str, Any]:
+    goods = row.get('goods')
+    if goods is None and row.get('goods_json'):
+        try:
+            goods = json.loads(row['goods_json'])
+        except Exception:
+            goods = []
+    gj = row.get('goods_json') or ''
+    if not isinstance(gj, str):
+        gj = json.dumps(goods, ensure_ascii=False) if goods else ''
+
+    audited_at = row.get('audited_at') or ''
+    ms = _audited_at_to_ms(str(audited_at))
+    glist = goods if isinstance(goods, list) else []
+    summary = _audit_goods_summary(glist)
+    split_fields = _audit_goods_split_fields(glist)
+
+    fields: Dict[str, Any] = {
+        '平台订单号': str(row.get('order_no') or '').strip(),
+        '审核完成时间': ms,
+        '审核日期': str(row.get('audit_date') or '')[:32],
+        '商品摘要': summary,
+        **split_fields,
+        '商品明细JSON': gj[:49000] if gj else '',
+        '来源': 'ERP审核页',
+    }
+    return fields
+
+
+def sync_audit_events_to_feishu(
+    rows: List[Dict[str, Any]],
+    app_token: Optional[str] = None,
+    table_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    将本地 audit_events 行追加写入飞书（仅 batch_create，适合日志型表）。
+
+    Args:
+        rows: audit_store 查询结果列表（含 order_no / audited_at / audit_date / goods_json / goods）。
+    """
+    from config import Config
+
+    app_token = app_token or Config.PINDUODUO_FEISHU_APP_TOKEN
+    table_id = table_id or Config.PINDUODUO_ERP_AUDIT_FEISHU_TABLE_ID
+    if not table_id:
+        return {
+            'success': False,
+            'message': '未配置 PINDUODUO_ERP_AUDIT_FEISHU_TABLE_ID',
+            'success_count': 0,
+            'fail_count': len(rows),
+            'total_count': len(rows),
+        }
+
+    if not rows:
+        return {
+            'success': True,
+            'message': '无待同步记录',
+            'success_count': 0,
+            'fail_count': 0,
+            'total_count': 0,
+        }
+
+    client = FeishuTableClient(app_token, table_id)
+    success_count = 0
+    fail_count = 0
+    record_pairs: List[tuple] = []
+
+    for r in rows:
+        fields = _audit_local_row_to_fields(r)
+        if not fields.get('平台订单号'):
+            fail_count += 1
+            continue
+        local_id = r.get('id')
+        try:
+            created = client.create_record(fields)
+            if created and created.get('record_id'):
+                success_count += 1
+                if local_id is not None:
+                    record_pairs.append((local_id, created.get('record_id')))
+            else:
+                fail_count += 1
+        except Exception as ex:
+            logger.warning('审核记录写入飞书失败 order=%s err=%s', fields.get('平台订单号'), ex)
+            fail_count += 1
+
+    return {
+        'success': success_count > 0 or fail_count == 0,
+        'message': f'同步完成: 成功 {success_count}, 失败 {fail_count}',
+        'success_count': success_count,
+        'fail_count': fail_count,
+        'total_count': len(rows),
+        'record_pairs': record_pairs,
+    }

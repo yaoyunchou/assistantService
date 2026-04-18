@@ -6,10 +6,14 @@
   - tlog （TaskExec） → task_*.log  任务执行日志（开始、结果、异常）
 """
 import collections
+import json
 import threading
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
+from croniter import croniter
+
+from scheduler.task_config import LAST_SUCCESS_FILE
 from utils.logger import get_logger, get_task_logger
 
 logger = get_logger("Scheduler")
@@ -25,6 +29,10 @@ _task_status_lock = threading.Lock()
 _MAX_LOG_LINES_PER_TASK = 200
 _task_log_lines: Dict[str, collections.deque] = {}
 _task_log_lines_lock = threading.Lock()
+
+# 任务上次「成功」完成时间持久化（用于启动时漏跑补执行）
+_last_success_io_lock = threading.Lock()
+CATCH_UP_MAX_AGE_SEC = 86400
 
 
 def _task_log(task_id: str, level: str, msg: str, *args) -> None:
@@ -75,6 +83,98 @@ def get_task_status(task_id: str) -> Dict[str, Any]:
 def get_all_task_status() -> Dict[str, Dict[str, Any]]:
     with _task_status_lock:
         return {k: dict(v) for k, v in _task_status.items()}
+
+
+def _parse_iso_datetime(s: str) -> Optional[datetime]:
+    if not (s or "").strip():
+        return None
+    try:
+        return datetime.fromisoformat(s.strip())
+    except ValueError:
+        return None
+
+
+def _load_last_success_map() -> Dict[str, str]:
+    with _last_success_io_lock:
+        if not LAST_SUCCESS_FILE.exists():
+            return {}
+        try:
+            with open(LAST_SUCCESS_FILE, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception as e:
+            logger.warning("读取 task_last_success 失败: %s", e)
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for k, v in raw.items():
+        if isinstance(k, str) and isinstance(v, str):
+            out[k] = v
+    return out
+
+
+def _persist_last_success(task_id: str) -> None:
+    if not task_id:
+        return
+    ts = datetime.now().replace(microsecond=0).isoformat()
+    with _last_success_io_lock:
+        data: Dict[str, Any] = {}
+        try:
+            if LAST_SUCCESS_FILE.exists():
+                with open(LAST_SUCCESS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+        except Exception as e:
+            logger.warning("读取 task_last_success 失败（将覆盖写入）: %s", e)
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data[task_id] = ts
+        LAST_SUCCESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(LAST_SUCCESS_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            logger.warning("写入 task_last_success 失败: %s", e)
+
+
+def _infer_handler_success(task_type: str, result: Any) -> bool:
+    """根据 handler 返回值推断是否业务成功（用于 last_success 与页面状态）。"""
+    if not isinstance(result, (list, tuple)) or len(result) < 2:
+        return False
+    code, msg = result[0], str(result[1])
+    if task_type == "pdd_erp_order_sync":
+        return "成功: 是" in msg
+    if task_type == "order_1688_fill_detail":
+        if isinstance(code, int) and code > 0:
+            return True
+        if code == 0:
+            err_markers = ("失败", "拒绝", "Connection", "Max retries", "HTTP", "错误", "异常", "超时")
+            return not any(m in msg for m in err_markers)
+        return False
+    if task_type in ("http_request", "python_script"):
+        return code == 1
+    if task_type == "pdd_inventory_sync":
+        # handler：成功为 eligible_count（可為 0），失敗為 -1
+        return isinstance(code, int) and code >= 0
+    if isinstance(code, bool):
+        return code
+    if isinstance(code, int):
+        return code != 0
+    return True
+
+
+def _cron_prev_fire_before_now(cron: str, now: Optional[datetime] = None) -> Optional[datetime]:
+    """当前时刻之前，最近一次 cron 计划触发时间（本地 naive 时间）。"""
+    cron = (cron or "").strip()
+    if len(cron.split()) < 5:
+        return None
+    now = now or datetime.now()
+    ref = now.replace(microsecond=1) if now.microsecond == 0 else now
+    try:
+        return croniter(cron, ref).get_prev(datetime)
+    except Exception as e:
+        logger.warning("解析 cron 上一触发点失败 cron=%s: %s", cron, e)
+        return None
 
 
 def _run_order_1688_fill_detail(data: Dict[str, Any], _tid: str = "") -> Tuple[int, str]:
@@ -140,6 +240,9 @@ def _format_pdd_erp_sync_summary(resp: Dict[str, Any]) -> str:
         )
         if fs.get("update_skipped_no_delta"):
             lines.append(f"已存在无增量跳过: {fs['update_skipped_no_delta']}")
+        failed_sns = fs.get("failed_order_sns")
+        if isinstance(failed_sns, list) and failed_sns:
+            lines.append("失败订单号: " + "、".join(str(x) for x in failed_sns))
     return "\n".join(lines)
 
 
@@ -230,6 +333,27 @@ def _run_pdd_erp_order_sync(data: Dict[str, Any], _tid: str = "") -> Tuple[int, 
         _notify_pdd_erp_sync_result(False, summary, None, feishu_user_id=uid)
         _task_log(_tid, "ERROR", "调用 ERP 同步 API 失败: %s", e)
         return 0, summary
+
+
+def _run_pdd_inventory_sync(data: Dict[str, Any], _tid: str = "") -> Tuple[int, str]:
+    """飞书 ERP 表 → 库存信息表 + 扣减日志表（进程内调用，不调 HTTP）。"""
+    from spider.pinduoduo.inventory_sync_job import run_inventory_sync_job
+
+    data = data or {}
+    _task_log(_tid, "INFO", "拼多多库存飞书同步（ERP→库存/日志）")
+    try:
+        result = run_inventory_sync_job(data if isinstance(data, dict) else {})
+        ok = bool(result.get("success"))
+        msg = str(result.get("message") or "")
+        n = int(result.get("eligible_count") or 0)
+        if not ok:
+            _task_log(_tid, "WARNING", "库存同步未成功: %s", msg)
+            return -1, msg
+        _task_log(_tid, "INFO", "库存同步完成: %s", msg)
+        return n, msg
+    except Exception as e:
+        _task_log(_tid, "ERROR", "库存同步异常: %s", e)
+        return -1, str(e)
 
 
 def _run_http_request(data: Dict[str, Any], _tid: str = "") -> Tuple[int, str]:
@@ -362,6 +486,10 @@ def get_task_handlers() -> Dict[str, Dict[str, Any]]:
             "name": "拼多多 ERP 订单同步",
             "run": _run_pdd_erp_order_sync,
         },
+        "pdd_inventory_sync": {
+            "name": "拼多多库存（飞书 ERP→库存/日志）",
+            "run": _run_pdd_inventory_sync,
+        },
     }
 
 
@@ -405,11 +533,21 @@ def get_task_type_schemas() -> Dict[str, Dict[str, Any]]:
                 {"key": "feishu_user_id", "label": "飞书通知用户 ID (可选)", "type": "text", "placeholder": "留空使用默认配置"},
             ],
         },
+        "pdd_inventory_sync": {
+            "name": handlers["pdd_inventory_sync"]["name"],
+            "description": "读取飞书 ERP 全部店铺表，维护库存信息表与扣减日志表；table_id 可 .env 配置",
+            "fields": [
+                {"key": "pay_after_date", "label": "付款晚于该日 (YYYY-MM-DD，可选)", "type": "text", "placeholder": "留空使用 Config"},
+                {"key": "require_express", "label": "日志是否要求快递单号 (可选 true/false)", "type": "text", "placeholder": "留空使用 Config"},
+                {"key": "inventory_info_table_id", "label": "库存信息表 table_id (可选)", "type": "text", "placeholder": "留空使用 .env"},
+                {"key": "inventory_log_table_id", "label": "扣减日志表 table_id (可选)", "type": "text", "placeholder": "留空使用 .env"},
+            ],
+        },
     }
     return schemas
 
 
-def _run_task_by_id(task_id: str) -> None:
+def _run_task_by_id(task_id: str, trigger_label: str = "定时触发") -> None:
     """供 APScheduler 定时调用：按 id 执行任务（只执行，不返回）。"""
     try:
         from scheduler.task_config import get_task
@@ -417,7 +555,7 @@ def _run_task_by_id(task_id: str) -> None:
         if not task:
             _task_log(task_id, "WARNING", "定时执行时未找到任务: id=%s", task_id)
             return
-        _task_log(task_id, "INFO", "========== 定时触发 ==========")
+        _task_log(task_id, "INFO", "========== %s ==========", trigger_label)
         _task_log(task_id, "INFO", "任务: %s  类型: %s  id: %s", task.get("name"), task.get("type"), task_id)
         handlers = get_task_handlers()
         handler_info = handlers.get(task.get("type"))
@@ -429,11 +567,18 @@ def _run_task_by_id(task_id: str) -> None:
         data = task.get("data") or {}
         result = handler_info["run"](data, _tid=task_id)
         if isinstance(result, (list, tuple)) and len(result) >= 2:
-            _task_log(task_id, "INFO", "定时任务执行完成: %s", result[1])
-            _set_task_finished(task_id, True, str(result[1]))
+            msg = str(result[1])
+            ok = _infer_handler_success(task.get("type"), result)
+            _task_log(
+                task_id, "INFO" if ok else "WARNING", "定时任务执行完成: %s", msg
+            )
+            _set_task_finished(task_id, ok, msg)
+            if ok:
+                _persist_last_success(task_id)
         else:
             _task_log(task_id, "INFO", "定时任务执行完成")
             _set_task_finished(task_id, True, "已执行")
+            _persist_last_success(task_id)
     except Exception as e:
         _task_log(task_id, "ERROR", "定时任务执行异常: %s", e)
         _set_task_finished(task_id, False, str(e))
@@ -462,12 +607,18 @@ def run_task_by_id(task_id: str) -> Tuple[bool, Any, str]:
         result = handler_info["run"](data, _tid=task_id)
         if isinstance(result, (list, tuple)) and len(result) >= 2:
             msg = str(result[1])
-            _task_log(task_id, "INFO", "任务执行完成: %s", msg)
-            _set_task_finished(task_id, True, msg)
-            return True, result[0], msg
+            ok = _infer_handler_success(task.get("type"), result)
+            _task_log(task_id, "INFO" if ok else "WARNING", "任务执行完成: %s", msg)
+            _set_task_finished(task_id, ok, msg)
+            if ok:
+                _persist_last_success(task_id)
+            if ok:
+                return True, result[0], msg
+            return False, result[0], msg
         msg = str(result) if result is not None else "已执行"
         _task_log(task_id, "INFO", "任务执行完成")
         _set_task_finished(task_id, True, msg)
+        _persist_last_success(task_id)
         return True, result, msg
     except Exception as e:
         _task_log(task_id, "ERROR", "任务执行异常: %s", e)
@@ -482,6 +633,56 @@ def get_scheduler():
         from apscheduler.schedulers.background import BackgroundScheduler
         _scheduler = BackgroundScheduler()
     return _scheduler
+
+
+def _run_startup_catch_up_in_background() -> None:
+    """进程启动后：对开启 catch_up_on_start 的任务，若上一档 cron 在 24h 内且成功后未覆盖该点，则补跑一次。"""
+
+    def _worker() -> None:
+        try:
+            from scheduler.task_config import list_tasks
+
+            now = datetime.now()
+            last_map = _load_last_success_map()
+            for task in list_tasks():
+                task_id = task.get("id")
+                if not task.get("catch_up_on_start") or not task.get("enabled", True):
+                    continue
+                if not task_id:
+                    continue
+                cron = (task.get("cron") or "").strip() or "0 * * * *"
+                prev = _cron_prev_fire_before_now(cron, now)
+                if prev is None:
+                    continue
+                age = (now - prev).total_seconds()
+                if age > CATCH_UP_MAX_AGE_SEC:
+                    logger.info(
+                        "启动补跑跳过（超过 %ss）: id=%s prev=%s",
+                        CATCH_UP_MAX_AGE_SEC,
+                        task_id,
+                        prev,
+                    )
+                    continue
+                last_s = _parse_iso_datetime(last_map.get(task_id, "") or "")
+                if last_s is not None and last_s >= prev:
+                    continue
+                with _task_status_lock:
+                    running = _task_status.get(task_id, {}).get("running", False)
+                if running:
+                    logger.info("启动补跑跳过（任务正在运行）: id=%s", task_id)
+                    continue
+                logger.info(
+                    "启动补跑: id=%s name=%s 计划点=%s 上次成功=%s",
+                    task_id,
+                    task.get("name"),
+                    prev,
+                    last_map.get(task_id) or "无",
+                )
+                _run_task_by_id(task_id, trigger_label="启动补跑")
+        except Exception as e:
+            logger.warning("启动补跑检查异常: %s", e, exc_info=True)
+
+    threading.Thread(target=_worker, name="scheduler-catch-up", daemon=True).start()
 
 
 def _register_jobs_from_config() -> None:
@@ -506,6 +707,8 @@ def _register_jobs_from_config() -> None:
                 id=task_id,
                 name=task.get("name") or task_id,
                 replace_existing=True,
+                misfire_grace_time=600,
+                coalesce=True,
             )
             logger.info("已注册定时任务: id=%s name=%s cron=%s", task_id, task.get("name"), cron)
         except Exception as e:
@@ -527,6 +730,7 @@ def start_scheduler() -> bool:
             return False
         sched.start()
         logger.info("定时任务调度器已启动")
+        _run_startup_catch_up_in_background()
         return True
     except Exception as e:
         logger.error("启动定时任务调度器失败: %s", e, exc_info=True)
@@ -597,9 +801,12 @@ def add_task_and_register(name: str, task_type: str, data: Optional[Dict[str, An
                 id=task["id"],
                 name=task.get("name") or task["id"],
                 replace_existing=True,
+                misfire_grace_time=600,
+                coalesce=True,
             )
             if not sched.running:
                 sched.start()
+                _run_startup_catch_up_in_background()
         except Exception as e:
             logger.warning("注册新任务到调度器失败: %s", e)
     return task
@@ -653,9 +860,12 @@ def resume_task(task_id: str) -> bool:
             id=task_id,
             name=task.get("name") or task_id,
             replace_existing=True,
+            misfire_grace_time=600,
+            coalesce=True,
         )
         if not sched.running:
             sched.start()
+            _run_startup_catch_up_in_background()
         logger.info("已恢复任务: id=%s", task_id)
     except Exception as e:
         logger.warning("恢复任务到调度器失败: %s", e)
