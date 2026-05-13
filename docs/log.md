@@ -1,5 +1,164 @@
 # 变更日志
 
+## 2026-04-20 - 修复 app_config.toml 永远读不到的循环导入 Bug
+
+**根本原因**：`src/config/` 是 Python 包，`src/config.py` 是模块，包优先级高于模块，PyInstaller 打包后 `_internal/` 下同时存在两者。`config/__init__.py` 用 `exec_module` 动态加载 `config.py`，但 `config.py` 底部的 `_load_config_from_file()` 会导入 `utils.config_manager`，而 `config_manager.py` 的**模块级** `from config import Config` 在 `config` 包还未完成初始化时执行，引发 `ImportError`，被 `except: pass` 静默吞掉，toml 配置永远无法加载，ws_client_host 等字段始终保持代码默认值（localhost:8080）。
+
+- **`src/utils/config_manager.py`**：移除顶层 `from config import Config`；新增 `_cfg()` 懒加载辅助函数（`from config import Config` 移到函数内部）；`get_config()` 和 `_apply_single_config()` 改用 `C = _cfg()` 取类引用，彻底打破循环导入。
+- **`src/config.py` → `_load_config_from_file()`**：`except Exception: pass` 改为 `print` 完整 traceback，不再静默吞错；外层 `except: pass` 同理，保证日志可见。
+- **`src/config.py` → `.env` 加载**：`load_dotenv` 改为依次尝试 `utf-8`、`gbk`、`utf-8-sig` 三种编码（兼容中文注释 GBK 编码的 .env），解决 `UnicodeDecodeError` 导致飞书/AI 密钥加载失败的问题。
+
+---
+
+## 2026-04-20 - WebSocket 配置页：展示「实际握手地址」，消除显示与实际不一致
+
+- **`src/utils/websocket_client.py` → `get_config()`**：新增 `resolved_base_url`、`resolved_path`、`resolved_full_url` 三个服务端预计算字段（调用现有 `build_socket_io_server_url` / `normalize_socketio_path` / `append_assistant_key_query`），由 `/api/websocket/config` 一并返回。
+- **`src/web/templates/websocket.html`**：
+  - 去掉表单输入框上的硬编码 `value=`（`localhost`、`8080`、`/socket.io/`），改为从服务端加载前显示「加载中…」占位、加载完成后解除遮罩。
+  - 新增「实际握手地址」蓝色只读展示区，显示服务端预计算的根地址 / Path / Key / 完整握手 URL；与程序启动日志一致，便于直接验证。
+  - 表单输入时实时预览变更后的 URL（黄色背景提示与已加载配置不同），点击「保存」或「连接」后恢复蓝色权威展示。
+
+---
+
+## 2026-04-18 - 打包：`app_config.production.toml` → dist `app_config.toml`
+
+- **新增** `app_config.production.toml`（生产 Nest WebSocket 等）；**`main.spec`** 在复制 `.env`/驱动前调用 **`copy_app_config_production_to_dist`**，写入 `dist/如意助手/app_config.toml`。
+- **`README`**：更新打包说明。
+
+---
+
+## 2026-04-18 - WebSocket：`https://` 域名未写端口时用 443（不再误拼 ``:8080``）
+
+- **`build_socket_io_server_url`**：`WS_CLIENT_HOST` 为带协议的 URL 且无端口时按 https→443、http→80；默认端口在连接串中省略。
+- **`config.py` / `app_config.toml`**：注释说明生产可写 `https://nestapi.xfysj.top`。
+
+---
+
+## 2026-04-18 - Socket `assistantKey`：生产 erp-001 / 开发 erp-dev-001
+
+- **`src/config.py`**：`APP_ENV=development` 且未设置环境变量 `WS_CLIENT_ASSISTANT_KEY` 时，在加载 `app_config.toml` 后覆盖为 **`erp-dev-001`**；生产仍为 toml / 默认 **`erp-001`**。显式设置 `WS_CLIENT_ASSISTANT_KEY` 时始终优先。
+- **`app_config.toml`**：注释说明生产写 `erp-001`，开发入口自动换开发 key。
+
+---
+
+## 2026-04-18 - 待发货页第二块：改为 ERP 实时列表（`/erp-delivering/pending-list`）
+
+- **新**：`POST /api/pinduoduo/erp-delivering/pending-list`、`pdd-erp-order-delivering-list-query.js`、`run_delivering_list_query`；第二块卡片不再调用 `erp-audit/today`。
+- **`docs/pinduoduo-erp-remote-api.md`**：接口总览与 §3 增补 pending-list。
+
+---
+
+## 2026-04-18 - 待发货页：今日列表默认「待打印」+ SQLite `printed_at`
+
+- **`audit_events.printed_at`**：迁移新增列；「打印并发货」脚本成功且待发货列表按逻辑清空时，按页面订单号回写，用于与「仅待打印」列表联动。
+- **API**：`GET /api/pinduoduo/erp-audit/today?unprinted=1` 仅 `printed_at` 为空的记录；响应含 `filter_unprinted`。
+- **页面** `pinduoduo_erp_delivering_print.html`：默认仅待打印；勾选可显示今日全部（含「本地打印」列）；`print_ship_success` 后自动刷新。
+- **脚本** `pdd-erp-order-delivering-print-ship.js`：返回 `orderNos`；《远程 API》§3.3 已补充 query 说明。
+
+---
+
+## 2026-04-18 - WebSocket 默认连接：`localhost:8080`、`socket.io`、`erp-001`；开发模式自动连接
+
+- **`src/config.py`**：`WS_CLIENT_HOST`/`PORT`/`PATH`/`ASSISTANT_KEY` 默认值调整为与常见 Nest 本地一致；新增 `WS_CLIENT_PATH_DEFAULT`；环境变量未设置时 `assistantKey` 默认为 `erp-001`，`WS_CLIENT_ASSISTANT_KEY=` 空串表示不携带。
+- **`src/utils/websocket_client.py`**：`normalize_socketio_path`，配置为 `socket.io` 时规范为 `/socket.io/`。
+- **`src/dev.py`**：热重载子进程（`WERKZEUG_RUN_MAIN`）内调用 `start_if_enabled`，与 `main.py` 一样启动后自动连 Socket.IO。
+- **页面**：`websocket.html` 默认展示与上述一致；`README` 一句说明更新。
+
+---
+
+## 2026-04-18 - 文档合并：`nest-gateway-assistant-key.md` → `pinduoduo-erp-remote-api.md`
+
+- **合并**：Nest 网关 `assistantKey`、JWT、握手、`register_assistant`、HTTP 路径表、安全提示、Nest 仓库路径等全文并入 **`docs/pinduoduo-erp-remote-api.md`** §2，并删除 **`docs/nest-gateway-assistant-key.md`**。
+- **引用**：`readme.md`、`docs/socketio-assistant-http.md`、`src/config.py`、`src/utils/websocket_client.py` 已改为指向合并后文档。
+
+---
+
+## 2026-04-18 - 拼多多 ERP：服务端调用文档（提交审核 / 今日已审核 / 打印并发货）
+
+- **文档**：新增 `docs/pinduoduo-erp-remote-api.md`（助手路径、Nest `/api/v1` 相对路径、`assistant_http` 示例、`timeout`）；更新 `docs/socketio-assistant-http.md` §8、`docs/nest-gateway-assistant-key.md` §4、`readme.md` 引用。
+- **Swagger**：`POST .../erp-audit/submit` 补充 body 字段说明（`order_nos` / `orderNos` 等）。
+- **说明**：上述路由在 `pinduoduo_routes.py` 已存在，本次以文档与 OpenAPI 对齐为主。
+
+---
+
+## 2026-04-18 - 已发货「打印状态」默认恢复为「已打印快递单」
+
+- **原因**：`_EVAL` 曾把 Python `None` 落成 JS `null`，仍满足 `!== undefined`，把 window 设为 `null` → 脚本里变成空串 → 走「不筛选」；Swagger 空串同理。
+- **修复**：`_EVAL` 仅在 `filterPrintStatus != null` 时写入 window；脚本用 `resolvePrintStatus()`，`__ALL__`/`*` 才表示不筛选，空串/null/未设置一律默认「已打印快递单」。
+- **HTTP**：`filter_print_status` 支持 `__ALL__`/`all`/`*` 表示全部；空串视为未指定。
+
+---
+
+## 2026-04-18 - 已发货查询脚本：默认「今天 / 发货时间 / 已打印」与占位符过滤
+
+- **现象**：Swagger 等把字段类型 `string` 当成 JSON 值提交 → 页内 `timeType` 变成字面量 `"string"`，下拉选不到选项。
+- **脚本**：`pdd-erp-order-delivered-query.js` 对 `string`/`number` 等 schema 占位符忽略，回退到默认 `发货时间`、`今天`、`已打印快递单`；`printStatus` 与 Python 注入的「显式空串不筛选」语义保留。
+- **API**：`erp-delivered/today-printed-query` 对 `time_type`/`date_shortcut`/`filter_print_status` 做同类过滤。
+
+---
+
+## 2026-04-18 - Socket.IO：`connect` 返回语义说明 + 连接错误日志节流
+
+- **返回**：`POST /api/websocket/connect` 增加 `started`、`note`，说明 **success 仅表示已启动后台线程**，握手异步；`assistant_key_configured` 仍为是否带 query。
+- **日志**：`connect_error` 同类日志 **15s 内合并一条**，避免刷屏；若本次连接未配 assistantKey，**首次**失败时打一条 Nest 提示。
+
+---
+
+## 2026-04-18 - Socket.IO 握手自动附加 `assistantKey`（仅配 host/端口 + key）
+
+- **配置**：`Config.WS_CLIENT_ASSISTANT_KEY` / 环境变量 `WS_CLIENT_ASSISTANT_KEY`；持久化键 `ws_client_assistant_key`（`app_config.toml`）。
+- **逻辑**：`websocket_client.append_assistant_key_query` 在连接根 URL 上追加 `assistantKey`；日志中对 query 脱敏。
+- **`connect(assistant_key)`**：缺省沿用 Config；显式 `None`/空串表示本次不带 query。
+- **API / 页面**：`/api/websocket/config` 与 `/connect` 支持 `assistant_key`；`websocket.html` 增加输入框。
+- **文档**：`docs/nest-gateway-assistant-key.md` 增加如意助手自动附加说明。
+
+---
+
+## 2026-04-18 - Socket.IO 客户端连接 URL 规范化（修复 https host 握手失败）
+
+- **原因**：`WS_CLIENT_HOST` 默认等为 `https://...` 时，旧逻辑拼成 `http://https://host:port`，WebSocket 握手异常（`Connection to remote host was lost` / `Connection error`）。
+- **改动**：`src/utils/websocket_client.py` 新增 `build_socket_io_server_url`，支持带协议的 host；连接前打一行解析后的 URL 日志便于排查。
+- **配置**：`src/config.py` 对 `WS_CLIENT_HOST` 注释补充说明。
+
+---
+
+## 2026-04-18 - Nest 网关 `assistantKey` 对接文档入库
+
+- **新增**：`docs/nest-gateway-assistant-key.md`（握手 Query、`register_assistant`、`assistantKey`/`socketId`、Nest `/api/v1/assistant/pinduoduo/...`、安全提示；Nest 仓库路径见文内 §7）。
+- **`docs/socketio-assistant-http.md`**：新增 **第十节**，指向上述文档。
+
+---
+
+## 2026-04-18 - socketio-assistant-http：§8.0 两个核心业务接口专页
+
+- **文档**：在 `docs/socketio-assistant-http.md` 第八节前新增 **§8.0**，专门整理 **`POST .../erp-audit/pending`** 与 **`POST .../erp-delivered/today-printed-query`**：开发/生产端口（8886 / 8887）、对照表、请求/响应字段、`assistant_http_response.data` 取数说明、两段最小 Socket JSON；§8.3 / §8.4 增加「详见 §8.0」引用。
+
+---
+
+## 2026-04-18 - ERP 已发货「今日已打印快递单」查询接口 + Webhook
+
+- **脚本**：`pdd-erp-order-delivered-query.js`（页面筛选 + 表格抓取）已由 `erp_audit.fetch_delivered_today_printed_rows` 接入；打开 `Config.PINDUODUO_ERP_ORDER_DELIVERED_URL`，登录与其它 ERP 页一致走 `handle_pdd_login_intercept`。
+- **HTTP**：`POST /api/pinduoduo/erp-delivered/today-printed-query`，可选 body：`filter_print_status`、`time_type`、`date_shortcut`、`auto_scroll`、`scroll_max_steps`、`scroll_pause_ms`；浏览器池超时 620s。
+- **通知**：非登录拦截场景下，执行结束经拼多多渠道 `send_success` / `send_warning` 推送摘要（条数 + 文案）。
+- **配置**：`PINDUODUO_ERP_ORDER_DELIVERED_URL`（默认 `https://mms.pinduoduo.com/erp/order/delivered`）。
+- **文档**：`docs/socketio-assistant-http.md` 第八节更新为「今日打印单」以本接口为准。
+
+---
+
+## 2026-04-18 - socketio-assistant-http：拼多多 ERP 待审批 / 今日订单对接示例
+
+- **文档**：在 `docs/socketio-assistant-http.md` 新增第八节，整理 **`POST /api/pinduoduo/erp-audit/pending`**（待审批列表）、**`GET /api/pinduoduo/erp-audit/today`**（今日本地记录）、可选 **`POST .../erp-delivering/print-ship`**（打印并发货）；补充 **`assistant_http` 的 `timeout`**（pending 建议 650s 量级），并给出可直接用于 Socket 的 JSON 示例。
+
+---
+
+## 2026-04-18 - Socket.IO assistant_http（远端 axios 风格调本机 HTTP + messageId 回包）
+
+- **能力**：对已连接的如意助手 Socket.IO 客户端下发 `assistant_http`（或在 `forward` 中带 `type: assistant_http`），载荷为 axios 风格字段（`method`、`url`、`params`、`headers`、`json`/`data`、`timeout`、`messageId`）；助手在本机解析 URL（无 host 时拼到 `http://HOST:PORT`，可用环境变量 `ASSISTANT_HTTP_BASE` 覆盖），执行后用 **`assistant_http_response`** 把同一 `messageId` 与结果回给服务端。
+- **文档**：新增 `docs/socketio-assistant-http.md`（事件名、字段、Nest/浏览器示例、安全提示）。
+- **改动文件**：`src/utils/assistant_http_invoke.py`（新建）、`src/utils/websocket_client.py`（注册事件与异步执行）、`src/config.py`（`ASSISTANT_HTTP_BASE`）、`README.md`。
+
+---
+
 ## 2026-04-18 - 侧边栏头部新增 headless 快捷开关（即时生效）
 
 - **背景**：`headless=false` 用完容易忘记关回去，每次都要去配置页改太繁琐。

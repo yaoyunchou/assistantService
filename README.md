@@ -8,7 +8,7 @@
 - 🐍 **Python脚本执行** - 支持执行Python脚本，支持参数传递和结果返回
 - 🛒 **拼多多助手** - 拼多多商家后台自动化工具，支持登录管理和飞书通知
 - 📋 **订单同步（ERP）** - 官方 ERP 全部订单表抓取，按「平台订单号」同步到指定飞书多维表格（独立页面 `/pdd-erp-order-sync`）
-- ✅ **ERP 待审核 / 入库 / 打印** - `/tools/pinduoduo` 加载待审核列表并提交审核（SQLite + 可选飞书审核表）；独立页 `/pdd-erp-delivering-print` 一键「打印并发货」待发货列表
+- ✅ **ERP 待审核 / 入库 / 打印** - `/tools/pinduoduo` 加载待审核列表并提交审核（SQLite + 可选飞书审核表）；独立页 `/pdd-erp-delivering-print` 一键「打印并发货」待发货列表；**已发货页今日已打印快递单**：`POST /api/pinduoduo/erp-delivered/today-printed-query`（脚本 `pdd-erp-order-delivered-query.js`，结束飞书 Webhook 摘要）
 - 📡 **途强助手** - 途强智能设备管理平台（iot.tqiot.com）自动化，支持自动登录与最近 30 天记录获取
 - 📦 **1688 订单提取** - 从 1688 待收货订单列表提取订单与收货信息，支持同步到飞书多维表格（Web 页与命令行脚本）
 - ⚙️ **模块化配置** - 支持通过配置控制功能模块的启用/禁用和启动时机
@@ -17,7 +17,7 @@
 - 🎯 **系统托盘** - 支持系统托盘图标，最小化到后台运行
 - 🚀 **开机自启** - 支持开机自动启动
 - 📱 **API接口** - 提供完整的RESTful API接口
-- 🔌 **Socket.IO 客户端** - 对接 `docs/websocket-api.md`，连接 path `/ws`、监听事件 `forward`，默认测试环境 `http://localhost:3000`，Flask 启动时自动连接，支持管理页连接/断开与配置保存
+- 🔌 **Socket.IO 客户端** - 对接 `docs/websocket-api.md`，Socket.IO path 默认 `/socket.io/`、监听事件 `forward`，默认连 `localhost:8080`（`assistantKey` 默认 `erp-001`，可由配置与环境变量覆盖），Flask/`main` 与开发模式子进程启动后自动连接，支持管理页连接/断开与配置保存；远端可通过 `assistant_http` / `forward`（`type: assistant_http`）下发类 axios 请求并由本机回包 `assistant_http_response`（含 `messageId`），详见 `docs/socketio-assistant-http.md`；多台助手经 CMS Nest 时使用固定 **`assistantKey`**；拼多多 ERP 直连助手或经 Nest 的路径、JWT、握手、`timeout`、`assistant_http` JSON 等一并见 **`docs/pinduoduo-erp-remote-api.md`**
 - ⏰ **定时任务** - APScheduler，支持「拼多多 ERP 订单同步」「拼多多库存（飞书 ERP→库存/日志）」等类型；默认种子含每日 12:00 / 18:00 ERP 同步，执行后飞书私聊结果摘要
 - 💾 **低资源占用** - 优化资源使用，空闲时内存占用<200MB
 
@@ -271,6 +271,7 @@ pyinstaller main.spec
 - 确保Playwright浏览器驱动已安装
 - 打包后的exe需要与浏览器驱动在同一目录
 - **`.env`**：程序从 **exe 同目录** 读取 `.env`（含 `AI_BASE_URL`、`AI_API_KEY`、飞书等）。执行 `pyinstaller main.spec` 时若项目根已有 `.env`，会**自动复制**到 `dist/如意助手/`；若未复制，请手动把 `.env` 放到与 `如意助手.exe` 同一文件夹。
+- **`app_config.toml`**：运行时在 **`如意助手.exe` 同目录** 读写（见 `config_manager`）。打包完成后 **`main.spec` 会将项目根的 `app_config.production.toml` 复制为 `dist/如意助手/app_config.toml`**（生产 Nest：`https://nestapi.xfysj.top`、`erp-001` 等）。修改线上默认值请编辑 **`app_config.production.toml`** 后重新打包；仅在 `dist` 里改会被下次全量清理覆盖。也可用 exe 同目录 **`.env`** 覆盖：`WS_CLIENT_HOST`、`WS_CLIENT_ASSISTANT_KEY` 等。
 - **库存映射**：`config/inventory_product_mapping.json` 会打入 `dist/如意助手/_internal/config/`（PyInstaller 6 onedir 模式）；代码通过 `get_bundled_data_root()` 读取默认值，用户修改的映射写入可写路径并与默认合并。
 - **定时任务**：仓库根目录 `scheduler/tasks.toml` 会打入 `dist/如意助手/_internal/scheduler/`。重新打包前请在该文件中保存你的任务；若只改过 `dist` 里文件，`main.spec` 会清空 `dist` 后重建，未写回仓库的修改会丢失。
 - **JS 注入脚本**：`src/spider/pinduoduo/scripts/` 目录会打入 `_internal/spider/pinduoduo/scripts/`；新增脚本文件时务必检查 `main.spec` 的 `datas` 是否已包含。

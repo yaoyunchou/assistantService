@@ -5,8 +5,16 @@
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
-from config import Config
 from utils.toml_helper import load_toml, dump_toml, migrate_json_to_toml
+
+# Config 不在模块顶部导入，以避免循环导入：
+#   config/__init__.py → exec_module(config.py) → _load_config_from_file()
+#   → import config_manager → from config import Config（此时 config 包尚未导出 Config）
+# 改为在各方法内部懒加载，调用时 config 包已完全初始化。
+def _cfg():
+    """懒加载 Config 类，避免模块级循环导入。"""
+    from config import Config  # noqa: PLC0415
+    return Config
 
 _APP_CONFIG_HEADER = """\
 ===== 如意助手 应用配置 =====
@@ -48,27 +56,29 @@ class ConfigManager:
         Returns:
             配置字典
         """
+        C = _cfg()
         return {
-            'host': Config.HOST,
-            'port': Config.PORT,
-            'headless': Config.HEADLESS,
-            'window_width': Config.WINDOW_WIDTH,
-            'window_height': Config.WINDOW_HEIGHT,
-            'window_min_width': Config.WINDOW_MIN_WIDTH,
-            'window_min_height': Config.WINDOW_MIN_HEIGHT,
-            'window_resizable': Config.WINDOW_RESIZABLE,
-            'tray_enabled': Config.TRAY_ENABLED,
-            'use_native_window': Config.USE_NATIVE_WINDOW,
-            'log_level': Config.LOG_LEVEL,
-            'enable_devtools': Config.ENABLE_DEVTOOLS,
-            'browser_lazy_init': Config.BROWSER_LAZY_INIT,
-            'browser_idle_timeout': Config.BROWSER_IDLE_TIMEOUT,
-            'enable_resource_monitor': Config.ENABLE_RESOURCE_MONITOR,
-            'max_memory_mb': Config.MAX_MEMORY_MB,
-            'ws_client_enabled': Config.WS_CLIENT_ENABLED,
-            'ws_client_host': Config.WS_CLIENT_HOST,
-            'ws_client_port': Config.WS_CLIENT_PORT,
-            'ws_client_path': Config.WS_CLIENT_PATH
+            'host': C.HOST,
+            'port': C.PORT,
+            'headless': C.HEADLESS,
+            'window_width': C.WINDOW_WIDTH,
+            'window_height': C.WINDOW_HEIGHT,
+            'window_min_width': C.WINDOW_MIN_WIDTH,
+            'window_min_height': C.WINDOW_MIN_HEIGHT,
+            'window_resizable': C.WINDOW_RESIZABLE,
+            'tray_enabled': C.TRAY_ENABLED,
+            'use_native_window': C.USE_NATIVE_WINDOW,
+            'log_level': C.LOG_LEVEL,
+            'enable_devtools': C.ENABLE_DEVTOOLS,
+            'browser_lazy_init': C.BROWSER_LAZY_INIT,
+            'browser_idle_timeout': C.BROWSER_IDLE_TIMEOUT,
+            'enable_resource_monitor': C.ENABLE_RESOURCE_MONITOR,
+            'max_memory_mb': C.MAX_MEMORY_MB,
+            'ws_client_enabled': C.WS_CLIENT_ENABLED,
+            'ws_client_host': C.WS_CLIENT_HOST,
+            'ws_client_port': C.WS_CLIENT_PORT,
+            'ws_client_path': C.WS_CLIENT_PATH,
+            'ws_client_assistant_key': getattr(C, 'WS_CLIENT_ASSISTANT_KEY', None),
         }
     
     def load_config(self) -> Dict[str, Any]:
@@ -152,45 +162,51 @@ class ConfigManager:
             key: 配置键
             value: 配置值
         """
+        C = _cfg()
         # 可以热重载的配置
         if key == 'headless':
-            Config.HEADLESS = bool(value)
+            C.HEADLESS = bool(value)
         elif key == 'window_width':
-            Config.WINDOW_WIDTH = int(value)
+            C.WINDOW_WIDTH = int(value)
         elif key == 'window_height':
-            Config.WINDOW_HEIGHT = int(value)
+            C.WINDOW_HEIGHT = int(value)
         elif key == 'window_min_width':
-            Config.WINDOW_MIN_WIDTH = int(value)
+            C.WINDOW_MIN_WIDTH = int(value)
         elif key == 'window_min_height':
-            Config.WINDOW_MIN_HEIGHT = int(value)
+            C.WINDOW_MIN_HEIGHT = int(value)
         elif key == 'window_resizable':
-            Config.WINDOW_RESIZABLE = bool(value)
+            C.WINDOW_RESIZABLE = bool(value)
         elif key == 'tray_enabled':
-            Config.TRAY_ENABLED = bool(value)
+            C.TRAY_ENABLED = bool(value)
         elif key == 'use_native_window':
-            Config.USE_NATIVE_WINDOW = bool(value)
+            C.USE_NATIVE_WINDOW = bool(value)
         elif key == 'log_level':
-            Config.LOG_LEVEL = str(value)
+            C.LOG_LEVEL = str(value)
         elif key == 'enable_devtools':
-            Config.ENABLE_DEVTOOLS = bool(value)
+            C.ENABLE_DEVTOOLS = bool(value)
         elif key == 'browser_lazy_init':
-            Config.BROWSER_LAZY_INIT = bool(value)
+            C.BROWSER_LAZY_INIT = bool(value)
         elif key == 'browser_idle_timeout':
-            Config.BROWSER_IDLE_TIMEOUT = int(value)
+            C.BROWSER_IDLE_TIMEOUT = int(value)
         elif key == 'enable_resource_monitor':
-            Config.ENABLE_RESOURCE_MONITOR = bool(value)
+            C.ENABLE_RESOURCE_MONITOR = bool(value)
         elif key == 'max_memory_mb':
-            Config.MAX_MEMORY_MB = int(value)
+            C.MAX_MEMORY_MB = int(value)
         elif key == 'ws_client_enabled':
-            Config.WS_CLIENT_ENABLED = bool(value)
+            C.WS_CLIENT_ENABLED = bool(value)
         elif key == 'ws_client_host':
-            Config.WS_CLIENT_HOST = str(value)
+            C.WS_CLIENT_HOST = str(value)
         elif key == 'ws_client_port':
             port = int(value)
             if 1 <= port <= 65535:
-                Config.WS_CLIENT_PORT = port
+                C.WS_CLIENT_PORT = port
         elif key == 'ws_client_path':
-            Config.WS_CLIENT_PATH = str(value).strip() or '/ws'
+            C.WS_CLIENT_PATH = str(value).strip() or C.WS_CLIENT_PATH_DEFAULT
+        elif key == 'ws_client_assistant_key':
+            if value is None or (isinstance(value, str) and not str(value).strip()):
+                C.WS_CLIENT_ASSISTANT_KEY = None
+            else:
+                C.WS_CLIENT_ASSISTANT_KEY = str(value).strip()
         # 注意：host 和 port 需要重启，不在这里处理
     
     def reload_from_file(self) -> bool:

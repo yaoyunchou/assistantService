@@ -21,6 +21,31 @@
 
   const ROW_SEL = 'tr[data-testid="beast-core-table-body-tr"]';
   const HEADER_CHECK_SEL = 'th.TB_checkCell_5-184-0 label[data-testid="beast-core-checkbox"]';
+  /** 与「待审核」抓取脚本一致：平台订单号列 */
+  const ORDER_NO_TD_IDX = 11;
+
+  function getOrderNo(td) {
+    if (!td) return '';
+    const link = td.querySelector('[data-testid="beast-core-button-link"] span');
+    if (link) return link.textContent.trim();
+    const clone = td.cloneNode(true);
+    clone.querySelectorAll('style').forEach((s) => s.remove());
+    return (clone.innerText || '').trim().split('\n')[0].trim();
+  }
+
+  function collectOrderNos(rowNodeList) {
+    const out = [];
+    const seen = new Set();
+    rowNodeList.forEach((tr) => {
+      const tds = tr.querySelectorAll('td');
+      const on = getOrderNo(tds[ORDER_NO_TD_IDX]);
+      if (on && !seen.has(on)) {
+        seen.add(on);
+        out.push(on);
+      }
+    });
+    return out;
+  }
 
   /* ─── Step 0: 等待表格容器加载 ─── */
   const t0 = Date.now();
@@ -53,14 +78,16 @@
 
   if (rows.length === 0) {
     log.push('列表为空，无待发货订单');
-    return { ok: true, empty: true, success: false, log };
+    return { ok: true, empty: true, success: false, orderNos: [], log };
   }
   log.push(`列表有 ${rows.length} 条待发货订单`);
+  const orderNos = collectOrderNos(rows);
+  log.push(`采集平台订单号 ${orderNos.length} 个`);
 
   /* ─── Step 2: 全选 ─── */
   const headerLabel = document.querySelector(HEADER_CHECK_SEL);
   if (!headerLabel) {
-    return { ok: false, error: '未找到表头全选 checkbox', log };
+    return { ok: false, error: '未找到表头全选 checkbox', orderNos, log };
   }
   const headerInput = headerLabel.querySelector('input');
   if (headerInput && !headerInput.checked) {
@@ -71,14 +98,14 @@
     .every((label) => { const inp = label.querySelector('input'); return inp ? inp.checked : false; });
   log.push(`全选完成，allChecked=${allChecked}`);
   if (!allChecked) {
-    return { ok: false, error: '全选后仍有行未被勾选', log };
+    return { ok: false, error: '全选后仍有行未被勾选', orderNos, log };
   }
 
   /* ─── Step 3: 点击「打印快递单」 ─── */
   const printBtn = [...document.querySelectorAll('button[data-testid="beast-core-button"]')]
     .find((btn) => btn.textContent.trim() === '打印快递单' && !btn.disabled);
   if (!printBtn) {
-    return { ok: false, error: '未找到「打印快递单」按钮', log };
+    return { ok: false, error: '未找到「打印快递单」按钮', orderNos, log };
   }
   printBtn.click();
   log.push('已点击「打印快递单」');
@@ -97,7 +124,7 @@
 
   const confirmBtn = await waitBtn('确认选择', 8000);
   if (!confirmBtn) {
-    return { ok: false, error: '等待「确认选择」按钮超时', log };
+    return { ok: false, error: '等待「确认选择」按钮超时', orderNos, log };
   }
   confirmBtn.click();
   log.push('已点击「确认选择」');
@@ -105,7 +132,7 @@
   /* ─── Step 5: 等待打印预览弹窗 → 点击「打印并发货」 ─── */
   const printAndShipBtn = await waitBtn('打印并发货', 8000);
   if (!printAndShipBtn) {
-    return { ok: false, error: '等待「打印并发货」按钮超时', log };
+    return { ok: false, error: '等待「打印并发货」按钮超时', orderNos, log };
   }
   printAndShipBtn.click();
   log.push('已点击「打印并发货」');
@@ -123,6 +150,7 @@
     empty: false,
     success,
     remainRows,
+    orderNos,
     log,
   };
 })();

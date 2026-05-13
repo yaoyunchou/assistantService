@@ -30,6 +30,15 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_add_printed_at(conn: sqlite3.Connection) -> None:
+    """旧库补充「打印并发货」标记列，用于待发货页筛选未打印的今日审核记录。"""
+    try:
+        conn.execute('ALTER TABLE audit_events ADD COLUMN printed_at TEXT')
+    except sqlite3.OperationalError as e:
+        if 'duplicate column' not in str(e).lower():
+            raise
+
+
 def init_db() -> None:
     conn = _connect()
     try:
@@ -46,6 +55,7 @@ def init_db() -> None:
             )
             """
         )
+        _migrate_add_printed_at(conn)
         conn.execute(
             'CREATE INDEX IF NOT EXISTS idx_audit_events_date ON audit_events(audit_date)'
         )
@@ -117,26 +127,57 @@ def insert_batch_from_submit_rows(
     return out
 
 
-def list_by_audit_date(audit_date: str) -> List[Dict[str, Any]]:
-    """audit_date: YYYY-MM-DD"""
+def list_by_audit_date(audit_date: str, *, only_unprinted: bool = False) -> List[Dict[str, Any]]:
+    """audit_date: YYYY-MM-DD；only_unprinted=True 仅 printed_at 为空的记录（本地尚未标记「打印并发货」）。"""
     init_db()
     conn = _connect()
     try:
-        cur = conn.execute(
+        sql = """
+            SELECT id, order_no, audited_at, audit_date, goods_json,
+                   feishu_synced_at, feishu_record_id, printed_at
+            FROM audit_events WHERE audit_date = ?
             """
-            SELECT id, order_no, audited_at, audit_date, goods_json, feishu_synced_at, feishu_record_id
-            FROM audit_events WHERE audit_date = ? ORDER BY id DESC
-            """,
-            (audit_date,),
-        )
+        params: List[Any] = [audit_date]
+        if only_unprinted:
+            sql += ' AND (printed_at IS NULL OR printed_at = \'\') '
+        sql += ' ORDER BY id DESC'
+        cur = conn.execute(sql, tuple(params))
         return [_row_to_dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
 
 
-def list_today_local() -> List[Dict[str, Any]]:
+def list_today_local(*, only_unprinted: bool = False) -> List[Dict[str, Any]]:
     d = datetime.now().strftime('%Y-%m-%d')
-    return list_by_audit_date(d)
+    return list_by_audit_date(d, only_unprinted=only_unprinted)
+
+
+def mark_print_ship_batch(order_nos: List[str], *, printed_at: Optional[datetime] = None) -> int:
+    """
+    将本地审核表中对应平台订单号标记为已通过「打印并发货」流程处理（写入 printed_at）。
+    返回受影响的行数。
+    """
+    clean = sorted({str(x).strip() for x in order_nos if str(x).strip()})
+    if not clean:
+        return 0
+    init_db()
+    iso = (printed_at or datetime.now()).isoformat(timespec='seconds')
+    conn = _connect()
+    try:
+        placeholders = ','.join(['?'] * len(clean))
+        cur = conn.execute(
+            f"""
+            UPDATE audit_events
+            SET printed_at = ?
+            WHERE order_no IN ({placeholders})
+              AND (printed_at IS NULL OR printed_at = '')
+            """,
+            [iso, *clean],
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
 
 
 def list_unsynced_for_feishu(limit: int = 200) -> List[Dict[str, Any]]:
@@ -145,7 +186,8 @@ def list_unsynced_for_feishu(limit: int = 200) -> List[Dict[str, Any]]:
     try:
         cur = conn.execute(
             """
-            SELECT id, order_no, audited_at, audit_date, goods_json, feishu_synced_at, feishu_record_id
+            SELECT id, order_no, audited_at, audit_date, goods_json,
+                   feishu_synced_at, feishu_record_id, printed_at
             FROM audit_events WHERE feishu_synced_at IS NULL ORDER BY id ASC LIMIT ?
             """,
             (limit,),

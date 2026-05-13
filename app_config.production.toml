@@ -1,0 +1,27 @@
+# ===== 如意助手 · 打包发布用配置模板 =====
+# pyinstaller main.spec 完成后会复制为本文件同目录下的 app_config.toml（与 exe 同级）。
+# 修改本模板后需重新打包；若在 dist 里直接改 app_config.toml，下次全量打包 dist 会被清空，请把改动合并回本模板。
+
+host = "127.0.0.1"
+port = 8887
+headless = false
+window_width = 1200
+window_height = 800
+window_min_width = 800
+window_min_height = 600
+window_resizable = true
+tray_enabled = true
+use_native_window = true
+log_level = "INFO"
+enable_devtools = false
+browser_lazy_init = true
+browser_idle_timeout = 300
+enable_resource_monitor = true
+max_memory_mb = 200
+
+# WebSocket → Nest（生产）：完整 https URL 无端口时走 443；assistantKey 与网关约定一致
+ws_client_enabled = true
+ws_client_host = "https://nestapi.xfysj.top"
+ws_client_port = 443
+ws_client_path = "socket.io"
+ws_client_assistant_key = "erp-001"

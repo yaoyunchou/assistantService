@@ -218,6 +218,30 @@ coll = COLLECT(
 )
 
 
+def copy_app_config_production_to_dist():
+    """将 app_config.production.toml 复制为 dist/<APP_NAME>/app_config.toml（与 exe 同目录），发布即用生产 Nest 等配置。"""
+    dist_dir = project_root / 'dist' / APP_NAME
+    src = project_root / 'app_config.production.toml'
+    dst = dist_dir / 'app_config.toml'
+    print("\n" + "=" * 60)
+    if not src.is_file():
+        print("提示: 项目根无 app_config.production.toml，未写入生产 app_config.toml。")
+        print(f"  可自行在 exe 同目录放置 app_config.toml: {dist_dir}")
+        print("=" * 60 + "\n")
+        return
+    if not dist_dir.is_dir():
+        print(f"警告: 打包输出目录不存在，跳过复制 app_config: {dist_dir}")
+        print("=" * 60 + "\n")
+        return
+    try:
+        shutil.copy2(src, dst)
+        print(f"已复制生产配置为 app_config.toml（exe 同目录）: {dst}")
+        print("=" * 60 + "\n")
+    except Exception as e:
+        print(f"复制 app_config.production.toml 失败: {e}")
+        print("=" * 60 + "\n")
+
+
 def copy_dotenv_to_dist():
     """若项目根存在 .env，复制到 dist/<APP_NAME>/，与 exe 同目录，避免打包后读不到 AI/飞书等配置。"""
     dist_dir = project_root / 'dist' / APP_NAME
@@ -315,6 +339,7 @@ def copy_playwright_drivers():
         return False
 
 # 执行后处理
+copy_app_config_production_to_dist()
 copy_dotenv_to_dist()
 if not copy_playwright_drivers():
         print(f"警告: 浏览器驱动未复制，请手动复制到 dist/{APP_NAME}/playwright_drivers/ 目录")

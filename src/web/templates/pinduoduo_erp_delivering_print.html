@@ -87,10 +87,11 @@
 </div>
 
 <div class="status-card">
-    <div class="status-title">今日已审核商品（本地记录）</div>
-    <p class="desc">来自审核成功后写入 SQLite 的数据，便于核对；实际打印仍以上方按钮为准。</p>
-    <div id="today-audit-wrap" class="audit-goods-mini">
-        <p style="color:#adb5bd;">加载中...</p>
+    <div class="status-title">待发货订单（ERP 实时列表）</div>
+    <p class="desc">每次从 <strong>待发货页</strong> 现拉当前表格，<strong>不读本地 SQLite</strong>。与虚拟滚动页一致，未滚入视区的行可能暂不可见；需浏览器池已登录，约 5～15 秒。</p>
+    <button type="button" id="btn-refresh-delivering-list" class="btn" style="margin-bottom:12px;">刷新列表（ERP 实时）</button>
+    <div id="delivering-list-wrap" class="audit-goods-mini">
+        <p style="color:#adb5bd;">点击「刷新列表」或打开本页后自动拉取一次</p>
     </div>
 </div>
 {% endblock %}
@@ -139,6 +140,9 @@ document.getElementById('print-ship-btn').addEventListener('click', async functi
         }
         out.textContent = t || JSON.stringify(d);
         out.style.color = d.success ? '#155724' : '#721c24';
+        if (d.success && d.print_ship_success) {
+            loadDeliveringRealtime();
+        }
     } catch (e) {
         out.style.display = 'block';
         out.style.color = '#721c24';
@@ -148,32 +152,57 @@ document.getElementById('print-ship-btn').addEventListener('click', async functi
     }
 });
 
-async function loadToday() {
-    const wrap = document.getElementById('today-audit-wrap');
+function renderGoodsLines(goods) {
+    const list = goods || [];
+    return list.map(g => {
+        const t = (g.title || '').trim();
+        const s = (g.spec || '').trim();
+        const q = g.qty != null ? g.qty : '';
+        return (t + ' ' + s + ' x' + q).trim();
+    }).join('<br>');
+}
+
+async function loadDeliveringRealtime() {
+    const wrap = document.getElementById('delivering-list-wrap');
+    const btn = document.getElementById('btn-refresh-delivering-list');
+    if (btn) btn.disabled = true;
+    wrap.innerHTML = '<p style="color:#adb5bd;"><span class="loading"></span> 正在打开待发货页并抓取列表（约 5～15 秒）…</p>';
     try {
-        const r = await fetch('/api/pinduoduo/erp-audit/today');
+        const r = await fetch('/api/pinduoduo/erp-delivering/pending-list', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+        });
         const d = await r.json();
-        if (!d.success || !d.rows || !d.rows.length) {
-            wrap.innerHTML = '<p style="color:#adb5bd;">暂无今日审核记录</p>';
+        if (d.intercepted && d.qrcode) {
+            showQR(d.qrcode);
+            startPoll();
+        }
+        if (!d.success) {
+            wrap.innerHTML = '<p style="color:#e74c3c;">' + (d.message || d.error || '拉取失败') + '</p>';
             return;
         }
-        let html = '<table><thead><tr><th>订单号</th><th>商品</th></tr></thead><tbody>';
+        if (d.empty || !d.rows || !d.rows.length) {
+            wrap.innerHTML = '<p style="color:#adb5bd;">' + (d.message || '待发货列表当前为空') + '</p>';
+            return;
+        }
+        let html = '<p style="font-size:12px;color:#6c757d;margin-bottom:8px;">' + (d.message || '') + ' · 来源：ERP 待发货页（非本地库）</p>';
+        html += '<table><thead><tr><th>订单号</th><th>商品</th></tr></thead><tbody>';
         for (const row of d.rows) {
-            const goods = row.goods || [];
-            const lines = goods.map(g => {
-                const t = (g.title || '').trim();
-                const s = (g.spec || '').trim();
-                const q = g.qty != null ? g.qty : '';
-                return (t + ' ' + s + ' x' + q).trim();
-            }).join('<br>');
-            html += '<tr><td style="word-break:break-all;">' + (row.order_no || '') + '</td><td>' + (lines || '-') + '</td></tr>';
+            const on = (row.orderNo != null ? row.orderNo : row.order_no) || '';
+            const lines = renderGoodsLines(row.goods) || '-';
+            html += '<tr><td style="word-break:break-all;">' + on + '</td><td>' + lines + '</td></tr>';
         }
         html += '</tbody></table>';
         wrap.innerHTML = html;
     } catch (e) {
-        wrap.innerHTML = '<p style="color:#e74c3c;">加载失败</p>';
+        wrap.innerHTML = '<p style="color:#e74c3c;">请求失败: ' + String(e) + '</p>';
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
-loadToday();
+
+document.getElementById('btn-refresh-delivering-list').addEventListener('click', function () { loadDeliveringRealtime(); });
+loadDeliveringRealtime();
 </script>
 {% endblock %}

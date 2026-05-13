@@ -60,6 +60,7 @@ def websocket_config_get():
                 'host': {'type': 'string'},
                 'port': {'type': 'integer'},
                 'path': {'type': 'string'},
+                'assistant_key': {'type': 'string', 'description': 'Nest 握手 assistantKey，空字符串清除'},
             },
         },
     }],
@@ -81,7 +82,13 @@ def websocket_config_post():
             if 1 <= port <= 65535:
                 Config.WS_CLIENT_PORT = port
         if 'path' in data:
-            Config.WS_CLIENT_PATH = str(data['path']).strip() or '/ws'
+            Config.WS_CLIENT_PATH = str(data['path']).strip() or Config.WS_CLIENT_PATH_DEFAULT
+        if 'assistant_key' in data:
+            ak = data['assistant_key']
+            if ak is None or (isinstance(ak, str) and not str(ak).strip()):
+                Config.WS_CLIENT_ASSISTANT_KEY = None
+            else:
+                Config.WS_CLIENT_ASSISTANT_KEY = str(ak).strip()
 
         full_config = cfg_manager.get_config()
         cfg_manager.save_config(full_config)
@@ -105,24 +112,38 @@ def websocket_config_post():
                 'host': {'type': 'string'},
                 'port': {'type': 'integer'},
                 'path': {'type': 'string'},
+                'assistant_key': {'type': 'string'},
             },
         },
     }],
     'responses': {200: {'description': 'success'}},
 })
 def websocket_connect():
-    """发起 WebSocket 连接（可选传入 host/port/path 覆盖当前配置）"""
+    """发起 WebSocket 连接（可选传入 host/port/path/assistant_key 覆盖当前配置）"""
     try:
         data = request.get_json() or {}
         host = data.get('host')
         port = data.get('port')
         path = data.get('path')
         client = get_websocket_client()
-        result = client.connect(
-            host=host,
-            port=int(port) if port is not None else None,
-            path=path if path is not None else None,
-        )
+        if 'assistant_key' in data:
+            v = data['assistant_key']
+            if v is None or (isinstance(v, str) and not str(v).strip()):
+                ex_ak = None
+            else:
+                ex_ak = str(v).strip()
+            result = client.connect(
+                host=host,
+                port=int(port) if port is not None else None,
+                path=path if path is not None else None,
+                assistant_key=ex_ak,
+            )
+        else:
+            result = client.connect(
+                host=host,
+                port=int(port) if port is not None else None,
+                path=path if path is not None else None,
+            )
         return jsonify(result), 200
     except Exception as e:
         routes_logger.error(f"WebSocket 连接异常: {e}", exc_info=True)

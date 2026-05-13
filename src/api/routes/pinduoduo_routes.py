@@ -528,7 +528,28 @@ def pinduoduo_erp_audit_pending():
 @swag_from({
     'tags': ['拼多多'],
     'summary': '勾选并提交审核指定订单号',
-    'responses': {200: {'description': '执行结果'}, 500: {'description': '异常'}},
+    'parameters': [{
+        'in': 'body',
+        'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'order_nos': {
+                    'type': 'array',
+                    'items': {'type': 'string'},
+                    'description': '平台订单号列表（与 pending 返回的 orderNo 一致）；与 orderNos 二选一',
+                },
+                'orderNos': {
+                    'type': 'array',
+                    'items': {'type': 'string'},
+                    'description': '同 order_nos',
+                },
+                'scroll_max_steps': {'type': 'integer'},
+                'scroll_pause_ms': {'type': 'integer'},
+            },
+        },
+    }],
+    'responses': {200: {'description': '执行结果'}, 400: {'description': '参数错误'}, 500: {'description': '异常'}},
 })
 def pinduoduo_erp_audit_submit():
     """审核选中订单；成功后写入 SQLite 并尝试同步飞书。"""
@@ -620,6 +641,30 @@ def pinduoduo_erp_audit_submit():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@bp.route('/erp-delivering/pending-list', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '待发货页：仅抓取当前列表（实时，不入库）',
+    'responses': {200: {'description': 'rows 为页面当前可见订单'}},
+})
+def pinduoduo_erp_delivering_pending_list():
+    try:
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'success': False, 'error': '浏览器池未初始化'}), 500
+
+        from spider.pinduoduo import erp_audit
+
+        result = pool.execute(
+            lambda page: erp_audit.run_delivering_list_query(page),
+            timeout=200,
+        )
+        return jsonify(result if isinstance(result, dict) else {'success': False, 'message': str(result)}), 200
+    except Exception as e:
+        routes_logger.error('待发货列表查询异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @bp.route('/erp-delivering/print-ship', methods=['POST'])
 @swag_from({
     'tags': ['拼多多'],
@@ -644,18 +689,138 @@ def pinduoduo_erp_delivering_print_ship():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@bp.route('/erp-delivered/today-printed-query', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '已发货页：今日已打印快递单列表（表格抓取）',
+    'parameters': [{
+        'in': 'body',
+        'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'filter_print_status': {
+                    'type': 'string',
+                    'description': '默认「已打印快递单」；传 __ALL__/all/* 表示不筛选；空串与缺省相同',
+                },
+                'time_type': {'type': 'string'},
+                'date_shortcut': {'type': 'string'},
+                'auto_scroll': {'type': 'boolean'},
+                'scroll_max_steps': {'type': 'integer'},
+                'scroll_pause_ms': {'type': 'integer'},
+            },
+        },
+    }],
+    'responses': {200: {'description': '执行结果'}, 500: {'description': '异常'}},
+})
+def pinduoduo_erp_delivered_today_printed_query():
+    """
+    打开 ERP 已发货页，按脚本筛选「发货时间 / 今天 / 已打印快递单」并滚动抓取订单行。
+    完成后向拼多多渠道飞书 Webhook 推送摘要。
+    """
+    try:
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'success': False, 'error': '浏览器池未初始化'}), 500
+
+        body = request.get_json(silent=True) or {}
+        # 与脚本 SCHEMA_PLACEHOLDER 一致，避免 Swagger 把类型名 "string" 当字段值提交
+        _schema_bad = frozenset(
+            {'string', 'number', 'integer', 'boolean', 'object', 'array', 'null'}
+        )
+
+        def _clean_text_opt(v):
+            """无或空或 schema 占位符 → None（由页内脚本用默认：今天 / 发货时间等）。"""
+            if v is None or not isinstance(v, str):
+                return None
+            s = v.strip()
+            if not s or s.lower() in _schema_bad:
+                return None
+            return s
+
+        if 'filter_print_status' in body:
+            v = body['filter_print_status']
+            if v is not None and not isinstance(v, str):
+                fps = None
+            elif isinstance(v, str):
+                s = v.strip()
+                if s.lower() in _schema_bad:
+                    fps = None
+                elif not s:
+                    fps = None
+                elif s.lower() in ('__all__', 'all', '*'):
+                    fps = '__ALL__'
+                else:
+                    fps = s
+            else:
+                fps = None
+        else:
+            fps = None
+
+        tt = _clean_text_opt(body.get('time_type'))
+        ds = _clean_text_opt(body.get('date_shortcut'))
+
+        auto_scroll = body.get('auto_scroll')
+        if auto_scroll is not None:
+            auto_scroll = bool(auto_scroll)
+
+        sms = body.get('scroll_max_steps')
+        spm = body.get('scroll_pause_ms')
+        try:
+            sms = int(sms) if sms is not None else None
+        except (TypeError, ValueError):
+            sms = None
+        try:
+            spm = int(spm) if spm is not None else None
+        except (TypeError, ValueError):
+            spm = None
+
+        from spider.pinduoduo import erp_audit
+
+        result = pool.execute(
+            lambda page: erp_audit.fetch_delivered_today_printed_rows(
+                page,
+                filter_print_status=fps,
+                time_type=tt,
+                date_shortcut=ds,
+                auto_scroll=auto_scroll,
+                scroll_max_steps=sms,
+                scroll_pause_ms=spm,
+            ),
+            timeout=620,
+        )
+        return jsonify(result if isinstance(result, dict) else {'success': False, 'message': str(result)}), 200
+    except Exception as e:
+        routes_logger.error('已发货今日打印单查询异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @bp.route('/erp-audit/today', methods=['GET'])
 @swag_from({
     'tags': ['拼多多'],
     'summary': '今日已审核订单（本地 SQLite）',
+    'parameters': [{
+        'name': 'unprinted',
+        'in': 'query',
+        'type': 'boolean',
+        'required': False,
+        'description': '为 true/1 时仅返回尚未被「打印并发货」标记的记录（printed_at 为空）',
+    }],
     'responses': {200: {'description': '列表'}},
 })
 def pinduoduo_erp_audit_today():
     try:
         from spider.pinduoduo import audit_store
 
-        rows = audit_store.list_today_local()
-        return jsonify({'success': True, 'rows': rows, 'count': len(rows)}), 200
+        raw = (request.args.get('unprinted') or '').strip().lower()
+        only_unprinted = raw in ('1', 'true', 'yes', 'on')
+        rows = audit_store.list_today_local(only_unprinted=only_unprinted)
+        return jsonify({
+            'success': True,
+            'rows': rows,
+            'count': len(rows),
+            'filter_unprinted': only_unprinted,
+        }), 200
     except Exception as e:
         routes_logger.error('读取今日审核记录异常: %s', e, exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500

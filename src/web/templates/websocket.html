@@ -220,6 +220,65 @@
     max-height: 120px;
     overflow-y: auto;
 }
+
+.resolved-url-box {
+    background: #eaf4fb;
+    border: 1px solid #aed6f1;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 20px;
+}
+
+.resolved-url-box .resolved-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #2471a3;
+    margin-bottom: 8px;
+    letter-spacing: 0.3px;
+}
+
+.resolved-url-box .resolved-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+    font-size: 13px;
+}
+
+.resolved-url-box .resolved-key {
+    color: #7f8c8d;
+    min-width: 60px;
+    flex-shrink: 0;
+}
+
+.resolved-url-box .resolved-val {
+    font-family: monospace;
+    font-size: 13px;
+    color: #1a5276;
+    word-break: break-all;
+}
+
+.resolved-url-box .resolved-full {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: #d6eaf8;
+    border-radius: 5px;
+    font-family: monospace;
+    font-size: 13px;
+    color: #154360;
+    word-break: break-all;
+}
+
+.resolved-url-box .resolved-hint {
+    margin-top: 8px;
+    font-size: 11px;
+    color: #7f8c8d;
+}
+
+.config-loading-mask {
+    opacity: 0.45;
+    pointer-events: none;
+}
 </style>
 {% endblock %}
 
@@ -227,7 +286,7 @@
 <div class="ws-container">
     <div class="page-header">
         <h1>Socket.IO 客户端</h1>
-        <p>对接 <code>docs/websocket-api.md</code>：连接 path /ws，监听事件 <code>forward</code>。默认测试环境 <code>http://localhost:3000</code>，Flask 启动时自动连接。</p>
+        <p>对接 <code>docs/websocket-api.md</code>：Socket.IO path 默认 <code>/socket.io/</code>，监听事件 <code>forward</code>。默认示例 <code>http://localhost:8080</code>（与 <code>Config</code> 一致），Flask 启动时自动连接。</p>
     </div>
 
     <div class="ws-card">
@@ -254,30 +313,58 @@
     <div class="ws-card">
         <h2>连接配置</h2>
         <p class="help-text" style="margin-bottom: 16px;">修改后点击「保存配置」生效；启用时下次启动将自动连接。</p>
-        <div class="ws-section">
-            <div class="checkbox-group">
-                <input type="checkbox" id="config-enabled" checked>
-                <label for="config-enabled">默认启用（Flask 启动时自动连接）</label>
+
+        <!-- 实际握手地址（服务端计算，只读） -->
+        <div class="resolved-url-box" id="resolved-url-box">
+            <div class="resolved-label">▶ 实际握手地址（进程已加载的配置）</div>
+            <div class="resolved-row">
+                <span class="resolved-key">根地址</span>
+                <span class="resolved-val" id="resolved-base-url">—</span>
             </div>
+            <div class="resolved-row">
+                <span class="resolved-key">Path</span>
+                <span class="resolved-val" id="resolved-path">—</span>
+            </div>
+            <div class="resolved-row">
+                <span class="resolved-key">Key</span>
+                <span class="resolved-val" id="resolved-key-val">—</span>
+            </div>
+            <div class="resolved-full" id="resolved-full-url">—</div>
+            <div class="resolved-hint">⚠️ 上方为程序实际使用的握手地址，与启动日志一致。<br>
+                修改下方表单并「保存配置」后需重启进程才能生效（或点「连接」立即使用表单值）。</div>
         </div>
-        <div class="ws-section">
-            <div class="form-group">
-                <label for="config-host">服务端地址</label>
-                <input type="text" id="config-host" placeholder="127.0.0.1" value="127.0.0.1">
+
+        <div id="config-form-area" class="config-loading-mask">
+            <div class="ws-section">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="config-enabled">
+                    <label for="config-enabled">默认启用（Flask 启动时自动连接）</label>
+                </div>
             </div>
-            <div class="form-group">
-                <label for="config-port">服务端端口</label>
-                <input type="number" id="config-port" placeholder="3000" min="1" max="65535" value="3000">
-                <span class="help-text">测试环境默认 3000</span>
+            <div class="ws-section">
+                <div class="form-group">
+                    <label for="config-host">服务端地址</label>
+                    <input type="text" id="config-host" placeholder="加载中…">
+                </div>
+                <div class="form-group">
+                    <label for="config-port">服务端端口</label>
+                    <input type="number" id="config-port" placeholder="加载中…" min="1" max="65535">
+                    <span class="help-text">含协议的地址（如 https://...）将忽略此端口，以协议默认端口为准</span>
+                </div>
+                <div class="form-group">
+                    <label for="config-path">Socket.IO path</label>
+                    <input type="text" id="config-path" placeholder="加载中…">
+                    <span class="help-text">可写 socket.io，程序会规范为 /socket.io/</span>
+                </div>
+                <div class="form-group">
+                    <label for="config-assistant-key">assistantKey（Nest 网关）</label>
+                    <input type="text" id="config-assistant-key" placeholder="加载中…" autocomplete="off">
+                    <span class="help-text">填写后握手 URL 自动带 <code>?assistantKey=...</code></span>
+                </div>
             </div>
-            <div class="form-group">
-                <label for="config-path">Socket.IO path</label>
-                <input type="text" id="config-path" placeholder="/ws" value="/ws">
-                <span class="help-text">与服务端一致，默认 /ws</span>
+            <div class="btn-group">
+                <button type="button" id="btn-save-config" class="btn btn-primary">保存配置</button>
             </div>
-        </div>
-        <div class="btn-group">
-            <button type="button" id="btn-save-config" class="btn btn-primary">保存配置</button>
         </div>
     </div>
 </div>
@@ -295,9 +382,85 @@
     const configHost = document.getElementById('config-host');
     const configPort = document.getElementById('config-port');
     const configPath = document.getElementById('config-path');
+    const configAssistantKey = document.getElementById('config-assistant-key');
     const statusSid = document.getElementById('status-sid');
     const statusPayloadWrap = document.getElementById('status-payload-wrap');
     const statusPayload = document.getElementById('status-payload');
+    const configFormArea = document.getElementById('config-form-area');
+
+    /* ---- 实际握手地址展示 ---- */
+    const elResolvedBase = document.getElementById('resolved-base-url');
+    const elResolvedPath = document.getElementById('resolved-path');
+    const elResolvedKey  = document.getElementById('resolved-key-val');
+    const elResolvedFull = document.getElementById('resolved-full-url');
+
+    /**
+     * 在前端复刻 build_socket_io_server_url 逻辑，
+     * 仅用于「表单实时预览」；权威结果以服务端 resolved_* 字段为准。
+     */
+    function previewResolveUrl(host, port, path, ak) {
+        var raw = (host || '').trim();
+        var baseUrl, resolvedPath;
+
+        // --- 计算 baseUrl ---
+        if (!raw) {
+            baseUrl = 'http://127.0.0.1:' + (parseInt(port) || 8080);
+        } else if (raw.indexOf('://') !== -1) {
+            try {
+                var u = new URL(raw);
+                var scheme = u.protocol.replace(':', '');
+                var hostname = u.hostname;
+                var effPort = u.port ? parseInt(u.port) : (scheme === 'https' ? 443 : 80);
+                if ((scheme === 'https' && effPort === 443) || (scheme === 'http' && effPort === 80)) {
+                    baseUrl = scheme + '://' + hostname;
+                } else {
+                    baseUrl = scheme + '://' + hostname + ':' + effPort;
+                }
+            } catch(e) {
+                baseUrl = 'http://' + raw + ':' + (parseInt(port) || 8080);
+            }
+        } else {
+            baseUrl = 'http://' + raw + ':' + (parseInt(port) || 8080);
+        }
+
+        // --- 规范 path ---
+        resolvedPath = (path || '/socket.io/').trim();
+        if (!resolvedPath.startsWith('/')) resolvedPath = '/' + resolvedPath;
+        if (!resolvedPath.endsWith('/')) resolvedPath = resolvedPath + '/';
+
+        // --- 附加 assistantKey ---
+        var akTrim = (ak || '').trim();
+        var fullUrl = baseUrl + (akTrim ? '?assistantKey=' + encodeURIComponent(akTrim) : '');
+
+        return { baseUrl: baseUrl, path: resolvedPath, ak: akTrim, fullUrl: fullUrl };
+    }
+
+    /** 用「表单当前值」实时更新预览区（蓝色提示） */
+    function updatePreviewFromForm() {
+        var r = previewResolveUrl(
+            configHost.value, configPort.value, configPath.value, configAssistantKey.value
+        );
+        elResolvedBase.textContent = r.baseUrl + '  （表单预览）';
+        elResolvedPath.textContent = r.path + '  （表单预览）';
+        elResolvedKey.textContent  = r.ak  || '（未填）';
+        elResolvedFull.textContent = r.fullUrl + '  ← 表单预览';
+        elResolvedFull.style.background = '#fef9e7';
+        document.getElementById('resolved-url-box').style.borderColor = '#f39c12';
+    }
+
+    /** 用服务端返回的 resolved_* 填充权威展示区 */
+    function updateResolvedFromServer(c) {
+        var base = c.resolved_base_url || '—';
+        var path = c.resolved_path     || '—';
+        var full = c.resolved_full_url || '—';
+        var ak   = (c.assistant_key != null && c.assistant_key !== '') ? String(c.assistant_key) : '（未配置）';
+        elResolvedBase.textContent = base;
+        elResolvedPath.textContent = path;
+        elResolvedKey.textContent  = ak;
+        elResolvedFull.textContent = full;
+        elResolvedFull.style.background = '#d6eaf8';
+        document.getElementById('resolved-url-box').style.borderColor = '#aed6f1';
+    }
 
     function setStatus(status) {
         statusDot.className = 'status-dot ' + (status.connected ? 'connected' : (status.connecting ? 'connecting' : 'disconnected'));
@@ -337,15 +500,26 @@
                 if (data.success && data.config) {
                     const c = data.config;
                     configEnabled.checked = !!c.enabled;
-                    configHost.value = c.host || '127.0.0.1';
-                    configPort.value = c.port != null ? c.port : 3000;
-                    configPath.value = c.path != null ? c.path : '/ws';
+                    configHost.value = c.host != null ? String(c.host) : '';
+                    configPort.value = c.port != null ? c.port : '';
+                    configPath.value = c.path != null ? c.path : '';
+                    configAssistantKey.value = (c.assistant_key != null) ? String(c.assistant_key) : '';
+                    // 用服务端权威结果更新展示区
+                    updateResolvedFromServer(c);
+                    // 解除加载遮罩
+                    configFormArea.classList.remove('config-loading-mask');
                 }
             })
             .catch(function(e) {
                 console.error('加载配置失败', e);
+                configFormArea.classList.remove('config-loading-mask');
             });
     }
+
+    // 表单输入时实时更新预览（黄色警示：与进程加载值可能不同）
+    [configHost, configPort, configPath, configAssistantKey].forEach(function(el) {
+        el.addEventListener('input', updatePreviewFromForm);
+    });
 
     btnConnect.addEventListener('click', function() {
         btnConnect.disabled = true;
@@ -355,7 +529,8 @@
             body: JSON.stringify({
                 host: configHost.value.trim() || undefined,
                 port: configPort.value ? parseInt(configPort.value, 10) : undefined,
-                path: configPath.value.trim() || undefined
+                path: configPath.value.trim() || undefined,
+                assistant_key: configAssistantKey.value.trim()
             })
         })
         .then(function(r) { return r.json(); })
@@ -385,8 +560,9 @@
             body: JSON.stringify({
                 enabled: configEnabled.checked,
                 host: configHost.value.trim(),
-                port: parseInt(configPort.value, 10) || 3000,
-                path: (configPath.value || '/ws').trim()
+                port: parseInt(configPort.value, 10) || 8080,
+                path: (configPath.value || '/socket.io/').trim(),
+                assistant_key: configAssistantKey.value.trim()
             })
         })
         .then(function(r) { return r.json(); })

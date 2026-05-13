@@ -29,14 +29,28 @@ try:
                 out.append(p)
         return out
 
+    def _try_load_dotenv(env_file: Path) -> bool:
+        """尝试用 UTF-8 / GBK 兜底加载 .env，返回是否成功。"""
+        for enc in ('utf-8', 'gbk', 'utf-8-sig'):
+            try:
+                load_dotenv(env_file, encoding=enc, override=False)
+                print(f"[Config] 已加载环境变量文件: {env_file}（编码: {enc}）")
+                return True
+            except UnicodeDecodeError:
+                continue
+            except Exception as ex:
+                print(f"[Config] 加载 .env 失败（编码: {enc}）: {ex}")
+                return False
+        print(f"[Config] .env 编码无法识别，已跳过: {env_file}")
+        return False
+
     _loaded = False
     _cands = _dotenv_candidates()
     for env_file in _cands:
         if env_file.is_file():
-            load_dotenv(env_file, encoding='utf-8')
-            print(f"[Config] 已加载环境变量文件: {env_file}")
-            _loaded = True
-            break
+            if _try_load_dotenv(env_file):
+                _loaded = True
+                break
     if not _loaded:
         _hint = Path(sys.executable).resolve().parent / '.env' if getattr(sys, 'frozen', False) else _cands[0]
         print(f"[Config] 未找到.env文件（已尝试: {', '.join(str(p) for p in _cands)}）。AI/飞书等依赖 .env 时请放在: {_hint}")
@@ -66,7 +80,7 @@ class Config:
     
     # Web界面配置
     APP_NAME = '如意助手'
-    APP_VERSION = '2.0.1'
+    APP_VERSION = '2.0.3'
     AUTO_OPEN_BROWSER = True  # 启动时自动打开浏览器（已废弃，使用 USE_NATIVE_WINDOW）
     USE_NATIVE_WINDOW = True  # 使用原生窗口（True）还是浏览器（False）
     
@@ -145,6 +159,11 @@ class Config:
         'PINDUODUO_ERP_ORDER_DELIVERING_URL',
         'https://mms.pinduoduo.com/erp/order/delivering',
     ).strip()
+    # ERP 已发货订单页（脚本 pdd-erp-order-delivered-query.js，今日已打印快递单等筛选）
+    PINDUODUO_ERP_ORDER_DELIVERED_URL = os.getenv(
+        'PINDUODUO_ERP_ORDER_DELIVERED_URL',
+        'https://mms.pinduoduo.com/erp/order/delivered',
+    ).strip()
     # 审核记录同步目标（飞书多维表格 table_id；与 docs/next/pinduoduo-erp-audit-feishu-table.md 一致）
     # 未在 .env 中显式配置时使用默认值，避免「审核完没自动同步飞书」的静默失败
     PINDUODUO_ERP_AUDIT_FEISHU_TABLE_ID = (
@@ -217,11 +236,28 @@ class Config:
     # 1688 订单补详情：cron 表达式，默认每小时整点执行一次
     SCHEDULER_ORDER_1688_FILL_CRON = os.getenv("SCHEDULER_ORDER_1688_FILL_CRON", "0 * * * *")  # 分 时 日 月 周
 
-    # WebSocket（Socket.IO）客户端配置（对接 docs/websocket-api.md，默认开启，Flask 启动时自动连接）
+    # WebSocket（Socket.IO）客户端配置（对接 docs/websocket-api.md，默认开启；main/dev 启动后自动连接）
     WS_CLIENT_ENABLED = True  # 是否启用
-    WS_CLIENT_HOST = os.getenv('WS_CLIENT_HOST', 'https://nestapi.xfysj.top')  # 服务端地址，测试环境 localhost
-    WS_CLIENT_PORT = int(os.getenv('WS_CLIENT_PORT', '8080'))  # 服务端端口，测试环境 3000
-    WS_CLIENT_PATH = os.getenv('WS_CLIENT_PATH', '/xcx/ws')  # Socket.IO path，与服务端一致
+    # Socket.IO engine 路径惯例为 /socket.io/（仅存 socket.io 也会在连接时规范化）
+    WS_CLIENT_PATH_DEFAULT = '/socket.io/'
+    # 可为纯域名/IP，或含协议如 https://nestapi.xfysj.top（见 build_socket_io_server_url：无端口时用 443/80，不读下面 PORT）
+    WS_CLIENT_HOST = os.getenv('WS_CLIENT_HOST', 'localhost')
+    # 仅当 HOST 为「无协议的 host」时使用；完整 https URL 未带端口时不参与拼接
+    WS_CLIENT_PORT = int(os.getenv('WS_CLIENT_PORT', '8080'))
+    WS_CLIENT_PATH = (os.getenv('WS_CLIENT_PATH') or WS_CLIENT_PATH_DEFAULT).strip() or WS_CLIENT_PATH_DEFAULT
+    # Nest 等网关：握手 Query 自动带 assistantKey（见 docs/pinduoduo-erp-remote-api.md §2）
+    # 未设置环境变量时默认 erp-001（生产）；开发环境在加载 toml 后改为 erp-dev-001（见 _apply_ws_assistant_key_for_app_env）
+    # 设置 WS_CLIENT_ASSISTANT_KEY= 且留空表示不携带 assistantKey
+    WS_CLIENT_ASSISTANT_KEY_PRODUCTION_DEFAULT = 'erp-001'
+    WS_CLIENT_ASSISTANT_KEY_DEVELOPMENT_DEFAULT = 'erp-dev-001'
+    _ws_ak_env = os.getenv('WS_CLIENT_ASSISTANT_KEY')
+    if _ws_ak_env is None:
+        WS_CLIENT_ASSISTANT_KEY = WS_CLIENT_ASSISTANT_KEY_PRODUCTION_DEFAULT
+    else:
+        WS_CLIENT_ASSISTANT_KEY = (_ws_ak_env or '').strip() or None
+
+    # Socket.IO「assistant_http」本地回环：无 host 的 url 拼到此地址（默认 http://HOST:PORT）
+    ASSISTANT_HTTP_BASE = (os.getenv('ASSISTANT_HTTP_BASE') or '').strip() or None
 
     # AI API 配置（兼容 OpenAI 接口格式，用于库存关联商品名称匹配等 AI 任务）
     # 使用 DMXAPI 时：AI_BASE_URL=https://www.dmxapi.cn/v1
@@ -277,16 +313,40 @@ def _load_config_from_file():
                 if 1 <= port <= 65535:
                     Config.WS_CLIENT_PORT = port
             if 'ws_client_path' in saved_config:
-                Config.WS_CLIENT_PATH = str(saved_config['ws_client_path']).strip() or '/ws'
-    except Exception:
-        # 如果加载失败，使用默认配置
-        pass
+                Config.WS_CLIENT_PATH = (
+                    str(saved_config['ws_client_path']).strip() or Config.WS_CLIENT_PATH_DEFAULT
+                )
+            if 'ws_client_assistant_key' in saved_config:
+                v = saved_config['ws_client_assistant_key']
+                if v is None or (isinstance(v, str) and not str(v).strip()):
+                    Config.WS_CLIENT_ASSISTANT_KEY = None
+                else:
+                    Config.WS_CLIENT_ASSISTANT_KEY = str(v).strip()
+    except Exception as _cfg_load_err:
+        import traceback as _tb
+        print(f"[Config] 加载配置文件失败，使用默认配置: {_cfg_load_err}\n{_tb.format_exc()}")
+    _apply_ws_assistant_key_for_app_env()
+
+
+def _apply_ws_assistant_key_for_app_env() -> None:
+    """
+    app_config.toml 通常写生产用 assistantKey（erp-001）。
+    开发入口（APP_ENV=development）且未显式设置 WS_CLIENT_ASSISTANT_KEY 环境变量时，
+    改用 WS_CLIENT_ASSISTANT_KEY_DEVELOPMENT_DEFAULT（erp-dev-001），避免与生产 Nest 映射冲突。
+    """
+    if os.getenv('WS_CLIENT_ASSISTANT_KEY') is not None:
+        return
+    env = (os.getenv('APP_ENV') or getattr(Config, 'APP_ENV', '') or 'production').strip().lower()
+    if env == 'development':
+        Config.WS_CLIENT_ASSISTANT_KEY = Config.WS_CLIENT_ASSISTANT_KEY_DEVELOPMENT_DEFAULT
+
 
 # 延迟加载，避免循环导入
 try:
     _load_config_from_file()
-except:
-    pass
+except Exception as _outer_cfg_err:
+    import traceback as _tb2
+    print(f"[Config] 外层配置加载异常: {_outer_cfg_err}\n{_tb2.format_exc()}")
 
 
 _MODULE_CONFIG_HEADER = """\

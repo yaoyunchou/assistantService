@@ -4,6 +4,7 @@
 页面：
     - 审核：https://mms.pinduoduo.com/erp/order/audit
     - 待发货：https://mms.pinduoduo.com/erp/order/delivering
+    - 已发货：https://mms.pinduoduo.com/erp/order/delivered（今日已打印快递单等）
 """
 from __future__ import annotations
 
@@ -22,6 +23,8 @@ logger = get_logger('PinduoduoErpAudit')
 
 _AUDIT_JS_PATH = Path(__file__).resolve().parent / 'scripts' / 'pdd-erp-order-audit-goods.js'
 _DELIVER_JS_PATH = Path(__file__).resolve().parent / 'scripts' / 'pdd-erp-order-delivering-print-ship.js'
+_DELIVERING_LIST_JS_PATH = Path(__file__).resolve().parent / 'scripts' / 'pdd-erp-order-delivering-list-query.js'
+_DELIVERED_QUERY_JS_PATH = Path(__file__).resolve().parent / 'scripts' / 'pdd-erp-order-delivered-query.js'
 
 _EVAL_PENDING = """
 async (args) => {
@@ -62,6 +65,38 @@ async (args) => {
 
 _EVAL_DELIVER = """
 async (args) => {
+  const source = args.source;
+  const run = new Function('return ' + source);
+  return await run();
+}
+"""
+
+_EVAL_DELIVERED_QUERY = """
+async (args) => {
+  delete window.__PDD_ERP_DELIVERED_FILTER_PRINT_STATUS;
+  delete window.__PDD_ERP_DELIVERED_TIME_TYPE;
+  delete window.__PDD_ERP_DELIVERED_DATE_SHORTCUT;
+  delete window.__PDD_ERP_DELIVERED_AUTO_SCROLL;
+  delete window.__PDD_ERP_DELIVERED_SCROLL_MAX_STEPS;
+  delete window.__PDD_ERP_DELIVERED_SCROLL_PAUSE_MS;
+  if (args.filterPrintStatus !== undefined && args.filterPrintStatus !== null) {
+    window.__PDD_ERP_DELIVERED_FILTER_PRINT_STATUS = args.filterPrintStatus;
+  }
+  if (args.timeType != null && args.timeType !== '') {
+    window.__PDD_ERP_DELIVERED_TIME_TYPE = args.timeType;
+  }
+  if (args.dateShortcut != null && args.dateShortcut !== '') {
+    window.__PDD_ERP_DELIVERED_DATE_SHORTCUT = args.dateShortcut;
+  }
+  if (args.autoScroll !== undefined) {
+    window.__PDD_ERP_DELIVERED_AUTO_SCROLL = args.autoScroll;
+  }
+  if (args.scrollMaxSteps != null && args.scrollMaxSteps !== '') {
+    window.__PDD_ERP_DELIVERED_SCROLL_MAX_STEPS = Number(args.scrollMaxSteps);
+  }
+  if (args.scrollPauseMs != null && args.scrollPauseMs !== '') {
+    window.__PDD_ERP_DELIVERED_SCROLL_PAUSE_MS = Number(args.scrollPauseMs);
+  }
   const source = args.source;
   const run = new Function('return ' + source);
   return await run();
@@ -271,6 +306,76 @@ def submit_audit_orders(
     }
 
 
+def run_delivering_list_query(
+    page: Page,
+    *,
+    evaluate_timeout_ms: float = 120_000.0,
+) -> Dict[str, Any]:
+    """待发货页仅抓取当前表格（不写库、不打单），用于前端展示实时列表。"""
+    ship_url = Config.PINDUODUO_ERP_ORDER_DELIVERING_URL
+    page.goto(ship_url, wait_until='domcontentloaded', timeout=120000)
+    try:
+        page.bring_to_front()
+    except Exception as e:
+        logger.debug('bring_to_front: %s', e)
+
+    cur = (page.url or '').lower()
+    if 'login' in cur:
+        return handle_pdd_login_intercept(
+            page,
+            title='ERP 待发货列表',
+            link_url=ship_url,
+            link_text='打开 ERP 待发货',
+            success_message_with_qr=(
+                '打开待发货页时被要求登录，请用拼多多 APP 扫码；二维码已返回前端展示，并已尝试飞书提醒。'
+            ),
+        )
+
+    source = _load_script_source(_DELIVERING_LIST_JS_PATH)
+    args: Dict[str, Any] = {'source': source}
+
+    ctx = page.context
+    restore_ms = 30000.0
+    try:
+        ctx.set_default_timeout(int(evaluate_timeout_ms))
+        raw = page.evaluate(_EVAL_DELIVER, args)
+    finally:
+        try:
+            ctx.set_default_timeout(int(restore_ms))
+        except Exception:
+            pass
+
+    if not isinstance(raw, dict):
+        return {
+            'success': False,
+            'intercepted': False,
+            'message': f'脚本返回异常类型: {type(raw).__name__}',
+            'rows': [],
+            'page_url': page.url,
+        }
+
+    ok = bool(raw.get('ok'))
+    empty = bool(raw.get('empty'))
+    rows = raw.get('rows') if isinstance(raw.get('rows'), list) else []
+    if not ok:
+        msg = str(raw.get('error') or '抓取失败')
+    elif empty:
+        msg = '待发货列表当前为空'
+    else:
+        msg = f'已抓取 {len(rows)} 条（当前页可见区域）'
+
+    return {
+        'success': ok,
+        'intercepted': False,
+        'empty': empty,
+        'message': msg,
+        'rows': rows,
+        'script_result': raw,
+        'page_url': page.url,
+        'source': 'erp_delivering_page',
+    }
+
+
 def run_delivering_print_ship(
     page: Page,
     *,
@@ -321,6 +426,18 @@ def run_delivering_print_ship(
     ok = bool(raw.get('ok'))
     empty = bool(raw.get('empty'))
     inner = bool(raw.get('success'))
+    order_nos_raw = raw.get('orderNos') or raw.get('order_nos') or []
+    marked_audit_rows = 0
+    if ok and not empty and inner and isinstance(order_nos_raw, list) and order_nos_raw:
+        try:
+            from spider.pinduoduo import audit_store
+
+            marked_audit_rows = audit_store.mark_print_ship_batch(
+                [str(x).strip() for x in order_nos_raw if str(x).strip()]
+            )
+        except Exception as ex:
+            logger.warning('打印成功后写入本地审核 printed_at 失败: %s', ex)
+
     if not ok:
         msg = str(raw.get('error') or '脚本执行失败')
     elif empty:
@@ -329,7 +446,7 @@ def run_delivering_print_ship(
         msg = '已执行打印并发货流程'
     else:
         msg = raw.get('error') or '打印流程结束（请查看 script_result.log）'
-    return {
+    out = {
         'success': ok,
         'intercepted': False,
         'empty': empty,
@@ -337,4 +454,227 @@ def run_delivering_print_ship(
         'message': msg,
         'script_result': raw,
         'page_url': page.url,
+        'order_nos_from_page': order_nos_raw if isinstance(order_nos_raw, list) else [],
+        'audit_marked_printed': marked_audit_rows,
     }
+    return out
+
+
+def _open_delivered_page(page: Page) -> Optional[Dict[str, Any]]:
+    """打开已发货订单页；若跳转登录则走统一拦截。"""
+    delivered_url = Config.PINDUODUO_ERP_ORDER_DELIVERED_URL
+    page.goto(delivered_url, wait_until='domcontentloaded', timeout=120000)
+    try:
+        page.bring_to_front()
+    except Exception as e:
+        logger.debug('bring_to_front: %s', e)
+    try:
+        page.wait_for_load_state('domcontentloaded', timeout=15000)
+    except Exception:
+        pass
+
+    cur = (page.url or '').lower()
+    if 'login' in cur:
+        return handle_pdd_login_intercept(
+            page,
+            title='ERP 已发货订单',
+            link_url=delivered_url,
+            link_text='打开 ERP 已发货',
+            success_message_with_qr=(
+                '打开已发货页时被要求登录，请用拼多多 APP 扫码；二维码已返回前端展示，并已尝试飞书提醒。'
+            ),
+        )
+    return None
+
+
+def _notify_delivered_printed_query(
+    *,
+    intercepted: bool,
+    success: bool,
+    message: str,
+    row_count: int,
+    page_url: str,
+) -> None:
+    """执行结束后经拼多多渠道 Webhook 推送摘要（登录拦截由 handle_pdd_login_intercept 另行通知）。"""
+    if intercepted:
+        return
+    try:
+        from tools.feishu.webhook.qudao_notify import (
+            CHANNEL_PINDUODUO,
+            send_success,
+            send_warning,
+        )
+
+        delivered_url = Config.PINDUODUO_ERP_ORDER_DELIVERED_URL
+        lines = [
+            f'**概览**：{message}',
+            f'**订单条数**：{row_count}',
+        ]
+        description = '\n'.join(lines)
+        if success:
+            send_success(
+                CHANNEL_PINDUODUO,
+                title='ERP 已发货 · 今日打印单查询',
+                description=description,
+                link_url=page_url or delivered_url,
+                link_text='打开 ERP 已发货',
+            )
+        else:
+            send_warning(
+                CHANNEL_PINDUODUO,
+                title='ERP 已发货 · 今日打印单查询',
+                description=description,
+                link_url=page_url or delivered_url,
+                link_text='打开 ERP 已发货',
+            )
+    except Exception as e:
+        logger.warning('已发货查询 Webhook 通知失败: %s', e)
+
+
+def fetch_delivered_today_printed_rows(
+    page: Page,
+    *,
+    filter_print_status: Optional[str] = None,
+    time_type: Optional[str] = None,
+    date_shortcut: Optional[str] = None,
+    auto_scroll: Optional[bool] = None,
+    scroll_max_steps: Optional[int] = None,
+    scroll_pause_ms: Optional[int] = None,
+    evaluate_timeout_ms: float = 600_000.0,
+) -> Dict[str, Any]:
+    """
+    已发货页：筛选「今日 + 已打印快递单」（可选覆盖）并抓取表格行。
+
+    脚本：``pdd-erp-order-delivered-query.js``
+    """
+    blocked = _open_delivered_page(page)
+    if blocked:
+        return blocked
+
+    delivered_url = Config.PINDUODUO_ERP_ORDER_DELIVERED_URL
+
+    # 表格未尽快出现时可能仍在登录页（URL 未含 login）
+    try:
+        page.wait_for_selector('#timeType', timeout=90000, state='attached')
+    except Exception as e:
+        logger.warning('等待已发货筛选表单超时: %s', e)
+        if 'login' in (page.url or '').lower():
+            caught = handle_pdd_login_intercept(
+                page,
+                title='ERP 已发货订单',
+                link_url=delivered_url,
+                link_text='打开 ERP 已发货',
+                success_message_with_qr=(
+                    '打开已发货页时被要求登录，请用拼多多 APP 扫码；二维码已返回前端展示，并已尝试飞书提醒。'
+                ),
+            )
+            if caught:
+                return caught
+        err = (
+            '未检测到已发货筛选表单（请确认已登录且有 ERP 权限），'
+            f'{e}'
+        )
+        result = {
+            'success': False,
+            'intercepted': False,
+            'message': err,
+            'rows': [],
+            'page_url': page.url,
+        }
+        _notify_delivered_printed_query(
+            intercepted=False,
+            success=False,
+            message=err,
+            row_count=0,
+            page_url=page.url or '',
+        )
+        return result
+
+    source = _load_script_source(_DELIVERED_QUERY_JS_PATH)
+    args: Dict[str, Any] = {'source': source}
+    if filter_print_status is not None:
+        args['filterPrintStatus'] = filter_print_status
+    if time_type is not None:
+        args['timeType'] = time_type
+    if date_shortcut is not None:
+        args['dateShortcut'] = date_shortcut
+    if auto_scroll is not None:
+        args['autoScroll'] = auto_scroll
+    if scroll_max_steps is not None:
+        args['scrollMaxSteps'] = int(scroll_max_steps)
+    if scroll_pause_ms is not None:
+        args['scrollPauseMs'] = int(scroll_pause_ms)
+
+    ctx = page.context
+    restore_ms = 30000.0
+    raw: Any = None
+    try:
+        ctx.set_default_timeout(int(evaluate_timeout_ms))
+        raw = page.evaluate(_EVAL_DELIVERED_QUERY, args)
+    except Exception as e:
+        logger.exception('已发货查询脚本 evaluate 异常')
+        msg = str(e)
+        result = {
+            'success': False,
+            'intercepted': False,
+            'message': msg,
+            'rows': [],
+            'page_url': page.url,
+        }
+        _notify_delivered_printed_query(
+            intercepted=False,
+            success=False,
+            message=msg,
+            row_count=0,
+            page_url=page.url or '',
+        )
+        return result
+    finally:
+        try:
+            ctx.set_default_timeout(int(restore_ms))
+        except Exception:
+            pass
+
+    if not isinstance(raw, dict):
+        msg = f'脚本返回异常类型: {type(raw).__name__}'
+        result = {
+            'success': False,
+            'intercepted': False,
+            'message': msg,
+            'rows': [],
+            'page_url': page.url,
+        }
+        _notify_delivered_printed_query(
+            intercepted=False,
+            success=False,
+            message=msg,
+            row_count=0,
+            page_url=page.url or '',
+        )
+        return result
+
+    ok = bool(raw.get('ok'))
+    rows: List[Dict[str, Any]] = raw.get('rows') or []
+    row_count = len(rows)
+    if ok:
+        msg = f'共 {row_count} 条（今日已打印快递单筛选）'
+    else:
+        msg = str(raw.get('error') or '脚本执行失败')
+
+    result = {
+        'success': ok,
+        'intercepted': False,
+        'message': msg,
+        'rows': rows,
+        'extract': {'count': raw.get('count'), 'log': raw.get('log')},
+        'page_url': page.url,
+    }
+
+    _notify_delivered_printed_query(
+        intercepted=False,
+        success=ok,
+        message=msg,
+        row_count=row_count,
+        page_url=page.url or '',
+    )
+    return result

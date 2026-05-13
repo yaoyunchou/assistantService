@@ -98,7 +98,19 @@ def main():
                     logger.info("定时任务调度器已启动")
             except Exception as e:
                 logger.warning(f"启动定时任务调度器失败: {e}")
-        
+            # 与 main 生产模式一致：开发服子进程内自动连接 Socket.IO 客户端
+            try:
+                from utils.websocket_client import get_websocket_client
+                ws_result = get_websocket_client().start_if_enabled()
+                if ws_result.get('skipped'):
+                    logger.info('WebSocket 客户端未启用: %s', ws_result.get('reason', ''))
+                elif ws_result.get('success'):
+                    logger.info('WebSocket 客户端已启动: %s', ws_result.get('url', ''))
+                else:
+                    logger.warning('WebSocket 客户端启动失败: %s', ws_result.get('error', ''))
+            except Exception as e:
+                logger.warning('WebSocket 客户端启动异常: %s', e)
+
         logger.info("="*60)
         logger.info(f"服务地址: http://{Config.HOST}:{Config.PORT}")
         logger.info("按 Ctrl+C 停止服务")

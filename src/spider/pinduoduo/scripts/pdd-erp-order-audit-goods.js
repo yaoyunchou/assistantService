@@ -123,55 +123,78 @@
   /** 从商品规格 td 提取商品列表 */
   function extractGoods(td) {
     if (!td) return [];
-    const items = [...td.querySelectorAll('.sc-dUYKzm')];
+    let items = [...td.querySelectorAll('.sc-dUYKzm')];
     if (!items.length) {
-      // 兼容：没有该 class 时直接读整格文本
+      items = [...td.querySelectorAll('div[class]')].filter(
+        (el) => /\bsc-\w+/.test(el.className) && el.querySelector('img')
+      );
+      if (items.length > 1) {
+        const s = new Set(items);
+        items = items.filter((d) => {
+          for (let p = d.parentElement; p && p !== td; p = p.parentElement)
+            if (s.has(p)) return false;
+          return true;
+        });
+      }
+    }
+    if (!items.length) {
       const img = td.querySelector('img');
       const text = (td.innerText || '').trim();
-      return [
-        {
-          imgSrc: img ? stripImgQuery(img.src || img.getAttribute('data-src') || '') : '',
-          title: text,
-          spec: '',
-          qty: 0,
-        },
-      ];
+      const m = text.match(/\s*[xX×](\d+)\s*$/);
+      return [{
+        imgSrc: img ? stripImgQuery(img.src || img.getAttribute('data-src') || '') : '',
+        title: m ? text.slice(0, m.index).trim() : text,
+        spec: '',
+        qty: m ? parseInt(m[1], 10) : 0,
+      }];
     }
     return items.map((item) => {
-      /* 图片 */
       const img = item.querySelector('img');
       const imgRaw =
         (img && (img.src || img.getAttribute('data-src') || img.getAttribute('data-bimg-src'))) || '';
       const imgSrc = stripImgQuery(imgRaw);
-
-      /* 标题 / 规格 / 数量 */
       let title = '', spec = '', qty = 0;
       const wrapper = item.querySelector('.content-wrapper');
       if (wrapper) {
-        // 数量：.light-span 内 "x1" → 1
         const lightSpan = wrapper.querySelector('.light-span');
         if (lightSpan) {
-          const qtyText = lightSpan.textContent.trim();
-          qty = parseInt(qtyText.replace(/^[xX×]/u, ''), 10) || 0;
+          qty = parseInt(lightSpan.textContent.trim().replace(/^[xX×]/u, ''), 10) || 0;
         }
-
-        // 取所有直接子 span（非空、非 light-span）
         const childSpans = [...wrapper.children].filter(
           (el) =>
             el.tagName === 'SPAN' &&
             !el.classList.contains('light-span') &&
             el.textContent.trim().length > 0
         );
-
         if (childSpans.length >= 2) {
           title = childSpans[0].textContent.trim();
           spec = childSpans[childSpans.length - 1].textContent.trim();
         } else if (childSpans.length === 1) {
           title = childSpans[0].textContent.trim();
-          spec = '';
         }
       }
-
+      if (!title) {
+        const allSpans = [...item.querySelectorAll('span')];
+        const qtySpan = allSpans.find((s) => /^[xX×]\d+$/.test(s.textContent.trim()));
+        if (qtySpan && !qty) {
+          qty = parseInt(qtySpan.textContent.trim().replace(/^[xX×]/u, ''), 10) || 0;
+        }
+        const leafSpans = allSpans.filter(
+          (s) => s !== qtySpan && !s.querySelector('span') && s.textContent.trim()
+        );
+        if (leafSpans.length >= 2) {
+          title = leafSpans[0].textContent.trim();
+          spec = leafSpans[leafSpans.length - 1].textContent.trim();
+        } else if (leafSpans.length === 1) {
+          title = leafSpans[0].textContent.trim();
+        }
+        if (!title) {
+          const ft = (item.innerText || '').trim();
+          const m2 = ft.match(/\s*[xX×](\d+)\s*$/);
+          if (m2 && !qty) qty = parseInt(m2[1], 10) || 0;
+          title = m2 ? ft.slice(0, m2.index).trim() : ft;
+        }
+      }
       return { imgSrc, title, spec, qty };
     });
   }
