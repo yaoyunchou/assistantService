@@ -3,7 +3,7 @@
 
 host = "127.0.0.1"
 port = 8886
-headless = true
+headless = false
 window_width = 1200
 window_height = 800
 window_min_width = 800

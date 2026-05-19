@@ -92,14 +92,48 @@
                     <span class="nav-text">{{ tool.display_name }}</span>
                 </a>
                 {% endfor %}
-                <a href="{{ url_for('pinduoduo_erp_order_sync') }}" class="nav-item {% if request.endpoint == 'pinduoduo_erp_order_sync' %}active{% endif %}">
-                    <span class="nav-icon">📋</span>
-                    <span class="nav-text">订单同步</span>
-                </a>
-                <a href="{{ url_for('pinduoduo_erp_delivering_print') }}" class="nav-item {% if request.endpoint == 'pinduoduo_erp_delivering_print' %}active{% endif %}">
-                    <span class="nav-icon">🖨️</span>
-                    <span class="nav-text">待发货打印</span>
-                </a>
+                {% set _ec_endpoints = ['ecommerce_order', 'ecommerce_after_sale', 'ecommerce_delivering_print'] %}
+                {% set _ec_active = request.endpoint in _ec_endpoints %}
+                <div class="nav-group {% if _ec_active %}open{% endif %}" id="nav-group-ecommerce">
+                    <div class="nav-group-header" onclick="toggleNavGroup('nav-group-ecommerce')">
+                        <span class="nav-icon">🛒</span>
+                        <span class="nav-text">电商</span>
+                        <span class="nav-arrow">›</span>
+                    </div>
+                    <div class="nav-group-children">
+                        <a href="{{ url_for('ecommerce_order') }}"
+                           class="nav-item nav-child {% if request.endpoint == 'ecommerce_order' %}active{% endif %}">
+                            <span class="nav-icon">📋</span>
+                            <span class="nav-text">订单助手</span>
+                        </a>
+                        <a href="{{ url_for('ecommerce_delivering_print') }}"
+                           class="nav-item nav-child {% if request.endpoint == 'ecommerce_delivering_print' %}active{% endif %}">
+                            <span class="nav-icon">🖨️</span>
+                            <span class="nav-text">待发货打印</span>
+                        </a>
+                        <a href="{{ url_for('ecommerce_after_sale') }}"
+                           class="nav-item nav-child {% if request.endpoint == 'ecommerce_after_sale' %}active{% endif %}">
+                            <span class="nav-icon">↩️</span>
+                            <span class="nav-text">退货订单</span>
+                        </a>
+                    </div>
+                </div>
+                {% set _goods_endpoints = ['goods_presell'] %}
+                {% set _goods_active = request.endpoint in _goods_endpoints %}
+                <div class="nav-group {% if _goods_active %}open{% endif %}" id="nav-group-goods">
+                    <div class="nav-group-header" onclick="toggleNavGroup('nav-group-goods')">
+                        <span class="nav-icon">📦</span>
+                        <span class="nav-text">商品</span>
+                        <span class="nav-arrow">›</span>
+                    </div>
+                    <div class="nav-group-children">
+                        <a href="{{ url_for('goods_presell') }}"
+                           class="nav-item nav-child {% if request.endpoint == 'goods_presell' %}active{% endif %}">
+                            <span class="nav-icon">🏷️</span>
+                            <span class="nav-text">预售订单</span>
+                        </a>
+                    </div>
+                </div>
                 <a href="{{ url_for('browser_status') }}" class="nav-item {% if request.endpoint == 'browser_status' %}active{% endif %}">
                     <span class="nav-icon">🌐</span>
                     <span class="nav-text">浏览器状态</span>
@@ -122,6 +156,39 @@
                 </a>
             </nav>
         </aside>
+        <style>
+            /* ── 侧边栏分组 ── */
+            .nav-group { overflow: hidden; }
+            .nav-group-header {
+                display: flex; align-items: center; gap: 10px;
+                padding: 12px 16px; cursor: pointer; border-radius: 8px;
+                color: rgba(255,255,255,.75); font-size: 14px; font-weight: 500;
+                transition: background .15s;
+                user-select: none;
+            }
+            .nav-group-header:hover { background: rgba(255,255,255,.1); color: #fff; }
+            .nav-group-header .nav-arrow {
+                margin-left: auto; font-size: 16px; line-height: 1;
+                transition: transform .2s;
+                display: inline-block;
+            }
+            .nav-group.open > .nav-group-header .nav-arrow { transform: rotate(90deg); }
+            .nav-group-children {
+                max-height: 0; overflow: hidden;
+                transition: max-height .25s ease;
+            }
+            .nav-group.open > .nav-group-children { max-height: 300px; }
+            .nav-item.nav-child {
+                padding-left: 36px !important;
+                font-size: 13px !important;
+            }
+        </style>
+        <script>
+            function toggleNavGroup(id) {
+                const g = document.getElementById(id);
+                if (g) g.classList.toggle('open');
+            }
+        </script>
         
         <!-- 主内容区 -->
         <main class="main-content">

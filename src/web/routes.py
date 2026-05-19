@@ -1,7 +1,7 @@
 """
 Web界面路由
 """
-from flask import render_template, jsonify, request, send_from_directory
+from flask import render_template, jsonify, request, send_from_directory, redirect, url_for
 from tools.manager import ToolManager
 from config import Config
 from utils.logger import get_logger
@@ -114,25 +114,44 @@ def register_web_routes(app, tool_manager: ToolManager):
         tools_info = tool_manager.get_tools_info()
         return render_template('feishu_test.html', tools=tools_info, config=Config)
 
+    # ── 电商模块（父路径 /ecommerce/）────────────────────────────
+    @app.route('/ecommerce/order')
+    def ecommerce_order():
+        """电商 · 订单助手（ERP 全部订单 → 飞书）"""
+        tools_info = tool_manager.get_tools_info()
+        return render_template('pinduoduo_erp_order_sync.html', tools=tools_info, config=Config)
+
+    @app.route('/ecommerce/after-sale')
+    def ecommerce_after_sale():
+        """电商 · 退货订单（ERP 售后 → 飞书）"""
+        tools_info = tool_manager.get_tools_info()
+        return render_template('pinduoduo_erp_after_sale.html', tools=tools_info, config=Config)
+
+    @app.route('/ecommerce/delivering-print')
+    def ecommerce_delivering_print():
+        """电商 · 待发货打印（ERP 待发货 → 打印）"""
+        tools_info = tool_manager.get_tools_info()
+        return render_template('pinduoduo_erp_delivering_print.html', tools=tools_info, config=Config)
+
+    # ── 商品模块（父路径 /goods/）────────────────────────────────
+    @app.route('/goods/presell')
+    def goods_presell():
+        """商品 · 预售订单（ERP 预售 → 飞书）"""
+        tools_info = tool_manager.get_tools_info()
+        return render_template('pinduoduo_erp_presell.html', tools=tools_info, config=Config)
+
+    # 旧路径 301 重定向（向后兼容）
     @app.route('/pdd-erp-order-sync')
     def pinduoduo_erp_order_sync():
-        """拼多多官方 ERP 全部订单 → 飞书多维表格"""
-        tools_info = tool_manager.get_tools_info()
-        return render_template(
-            'pinduoduo_erp_order_sync.html',
-            tools=tools_info,
-            config=Config,
-        )
+        return redirect(url_for('ecommerce_order'), code=301)
+
+    @app.route('/pdd-erp-after-sale')
+    def pinduoduo_erp_after_sale():
+        return redirect(url_for('ecommerce_after_sale'), code=301)
 
     @app.route('/pdd-erp-delivering-print')
     def pinduoduo_erp_delivering_print():
-        """ERP 待发货：打印快递单并发货"""
-        tools_info = tool_manager.get_tools_info()
-        return render_template(
-            'pinduoduo_erp_delivering_print.html',
-            tools=tools_info,
-            config=Config,
-        )
+        return redirect(url_for('ecommerce_delivering_print'), code=301)
 
     @app.route('/websocket')
     def websocket_page():

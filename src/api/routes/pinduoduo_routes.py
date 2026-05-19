@@ -826,6 +826,163 @@ def pinduoduo_erp_audit_today():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@bp.route('/erp-after-sale/collect', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '退货物流采集并自动同步飞书（已处理的订单不覆盖）',
+    'parameters': [{
+        'in': 'body',
+        'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'app_token':   {'type': 'string', 'description': '飞书 app_token，默认来自 Config'},
+                'table_id':    {'type': 'string', 'description': '退货订单飞书表 ID，默认 tblP5HCIUXMsntTI'},
+                'filter_text': {'type': 'string', 'description': '页面筛选器文字，默认「退回/退货签收待处理」'},
+                'hover_wait':  {'type': 'integer', 'description': 'hover 后等待 popover 毫秒数，默认 350'},
+                'scroll_step': {'type': 'integer', 'description': '每次滚动像素，默认 400'},
+                'scroll_wait': {'type': 'integer', 'description': '每次滚动后等待毫秒数，默认 600'},
+            },
+        },
+    }],
+    'responses': {
+        200: {'description': '采集+同步结果，含 results / item_count / feishu_sync'},
+        500: {'description': '浏览器池异常'},
+    },
+})
+def pinduoduo_erp_after_sale_collect():
+    """采集退货物流并自动同步到飞书；「是否处理」已勾选的记录跳过更新。"""
+    try:
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'success': False, 'error': '浏览器池未初始化'}), 500
+
+        from config import Config
+        from spider.pinduoduo.after_sale_sync import collect_after_sale_logistics
+
+        body        = request.get_json(silent=True) or {}
+        app_token   = body.get('app_token')   or Config.PINDUODUO_FEISHU_APP_TOKEN
+        table_id    = body.get('table_id')    or Config.PINDUODUO_ERP_AFTER_SALE_FEISHU_TABLE_ID
+        filter_text = body.get('filter_text') or None
+        hover_wait  = body.get('hover_wait')
+        scroll_step = body.get('scroll_step')
+        scroll_wait = body.get('scroll_wait')
+
+        def _run(page):
+            return collect_after_sale_logistics(
+                page,
+                app_token=app_token,
+                table_id=table_id,
+                filter_text=filter_text,
+                hover_wait=int(hover_wait)   if hover_wait  is not None else None,
+                scroll_step=int(scroll_step) if scroll_step is not None else None,
+                scroll_wait=int(scroll_wait) if scroll_wait is not None else None,
+            )
+
+        result = pool.execute(_run, timeout=600)
+        return jsonify(result if isinstance(result, dict) else {'success': False, 'message': str(result)}), 200
+    except Exception as e:
+        routes_logger.error('退货物流采集异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/erp-after-sale/sync-to-feishu', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '退货物流同步到飞书（接收前端传来的 results 数组）',
+    'parameters': [{
+        'in': 'body',
+        'name': 'body',
+        'schema': {
+            'type': 'object',
+            'required': ['results'],
+            'properties': {
+                'results':    {'type': 'array',  'description': '退货物流数组（与 /collect 返回的 results 一致）'},
+                'app_token':  {'type': 'string', 'description': '飞书 app_token，默认来自 Config'},
+                'table_id':   {'type': 'string', 'description': '退货订单飞书表 ID，默认 tblP5HCIUXMsntTI'},
+            },
+        },
+    }],
+    'responses': {200: {'description': '同步结果'}, 400: {'description': '参数错误'}},
+})
+def pinduoduo_erp_after_sale_sync_to_feishu():
+    """接收前端已采集的 results，直接写入飞书（无需浏览器）。"""
+    try:
+        from config import Config
+        from spider.pinduoduo.feishutable import sync_after_sale_logistics_to_feishu
+
+        body = request.get_json(silent=True) or {}
+        results = body.get('results')
+        if not isinstance(results, list):
+            return jsonify({'success': False, 'message': 'results 字段必须为数组'}), 400
+
+        app_token = body.get('app_token') or Config.PINDUODUO_FEISHU_APP_TOKEN
+        table_id  = body.get('table_id')  or Config.PINDUODUO_ERP_AFTER_SALE_FEISHU_TABLE_ID
+
+        result = sync_after_sale_logistics_to_feishu(results, app_token=app_token, table_id=table_id)
+        return jsonify(result if isinstance(result, dict) else {'success': False, 'message': str(result)}), 200
+    except Exception as e:
+        routes_logger.error('退货物流同步飞书异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/erp-after-sale/sync', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '退货物流一键采集+同步到飞书',
+    'parameters': [{
+        'in': 'body',
+        'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'app_token':  {'type': 'string'},
+                'table_id':   {'type': 'string'},
+                'filter_text': {'type': 'string'},
+                'hover_wait':  {'type': 'integer'},
+                'scroll_step': {'type': 'integer'},
+                'scroll_wait': {'type': 'integer'},
+            },
+        },
+    }],
+    'responses': {200: {'description': '执行结果'}, 500: {'description': '浏览器池异常'}},
+})
+def pinduoduo_erp_after_sale_sync():
+    """打开 ERP 售后管理页，采集退货物流，直接同步到飞书（一键模式）。"""
+    try:
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'success': False, 'error': '浏览器池未初始化'}), 500
+
+        from config import Config
+        from spider.pinduoduo.after_sale_sync import sync_after_sale_logistics
+
+        body        = request.get_json(silent=True) or {}
+        app_token   = body.get('app_token')   or Config.PINDUODUO_FEISHU_APP_TOKEN
+        table_id    = body.get('table_id')    or Config.PINDUODUO_ERP_AFTER_SALE_FEISHU_TABLE_ID
+        filter_text = body.get('filter_text') or None
+        hover_wait  = body.get('hover_wait')
+        scroll_step = body.get('scroll_step')
+        scroll_wait = body.get('scroll_wait')
+
+        def _run(page):
+            return sync_after_sale_logistics(
+                page,
+                app_token=app_token,
+                table_id=table_id,
+                filter_text=filter_text,
+                hover_wait=int(hover_wait)   if hover_wait  is not None else None,
+                scroll_step=int(scroll_step) if scroll_step is not None else None,
+                scroll_wait=int(scroll_wait) if scroll_wait is not None else None,
+            )
+
+        result = pool.execute(_run, timeout=600)
+        return jsonify(result if isinstance(result, dict) else {'success': False, 'message': str(result)}), 200
+    except Exception as e:
+        routes_logger.error('退货物流采集同步异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @bp.route('/erp-audit/sync-feishu', methods=['POST'])
 @swag_from({
     'tags': ['拼多多'],
@@ -862,4 +1019,60 @@ def pinduoduo_erp_audit_sync_feishu():
         return jsonify({'success': True, **fs}), 200
     except Exception as e:
         routes_logger.error('审核记录同步飞书异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# 预售订单（pdd-erp-order-presell-list.js）
+# ────────────────────────────────────────────────────────────────────────────
+
+@bp.route('/erp-presell/collect', methods=['POST'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '预售订单采集（仅返回 orders；服务端可通过 WebSocket assistant_http 调本接口）',
+    'parameters': [{
+        'in': 'body',
+        'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'auto_scroll':     {'type': 'boolean', 'description': '是否自动滚动采集多屏，默认 false'},
+                'scroll_step':     {'type': 'integer', 'description': '每次滚动像素，默认 420'},
+                'scroll_pause_ms': {'type': 'integer', 'description': '每次滚动后等待毫秒，默认 550'},
+            },
+        },
+    }],
+    'responses': {
+        200: {'description': '采集结果，含 orders / order_count / extract_log'},
+        500: {'description': '浏览器池异常'},
+    },
+})
+def pinduoduo_erp_presell_collect():
+    """采集 ERP 预售订单列表；不入库，由服务端自行处理。"""
+    try:
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'success': False, 'error': '浏览器池未初始化'}), 500
+
+        from spider.pinduoduo.presell_sync import collect_presell_orders
+
+        body          = request.get_json(silent=True) or {}
+        auto_scroll   = bool(body.get('auto_scroll', False))
+        scroll_step   = body.get('scroll_step')
+        scroll_pause  = body.get('scroll_pause_ms')
+
+        def _run(page):
+            return collect_presell_orders(
+                page,
+                auto_scroll=auto_scroll,
+                scroll_step=int(scroll_step)    if scroll_step  is not None else None,
+                scroll_pause_ms=int(scroll_pause) if scroll_pause is not None else None,
+            )
+
+        result = pool.execute(_run, timeout=600)
+        return jsonify(
+            result if isinstance(result, dict) else {'success': False, 'message': str(result)}
+        ), 200
+    except Exception as e:
+        routes_logger.error('预售订单采集异常: %s', e, exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500

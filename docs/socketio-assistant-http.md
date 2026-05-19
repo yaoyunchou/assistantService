@@ -175,7 +175,7 @@ socket.on('assistant_http_response', (payload) => {
 
 ---
 
-## 八、业务示例：拼多多 ERP（待审批 · 提交审核 · 今日记录 · 已发货查询 · 打印发货）
+## 八、业务示例：拼多多 ERP（待审批 · 提交审核 · 今日记录 · 已发货查询 · 打印发货 · 退货订单）
 
 以下接口均在蓝图前缀 **`/api/pinduoduo`** 下（完整路径见表）。通过 **`assistant_http`** 调用时，`url` 写相对路径即可拼到本机助手（第五节）。
 
@@ -183,7 +183,7 @@ socket.on('assistant_http_response', (payload) => {
 
 ### 8.0 核心业务接口（专项对接）
 
-以下接口中，**①②③⑤** 走 **浏览器池 + Playwright**，耗时长；**④** `GET .../erp-audit/today` **仅读本地 SQLite**，与其它轻量接口一致，可用较短 **`timeout`**。对接时请按本小节配置 **`timeout`** 并解析 **`assistant_http_response.data`**。
+以下接口中，**①②③⑤⑥⑧** 走 **浏览器池 + Playwright**，耗时长；**④** `GET .../erp-audit/today` 与 **⑦** `POST .../erp-after-sale/sync-to-feishu` **仅做本地读写或直接调飞书 API**，与其它轻量接口一致，可用较短 **`timeout`**。对接时请按本小节配置 **`timeout`** 并解析 **`assistant_http_response.data`**。
 
 #### 端口与环境（与 `dev.py` / 生产一致）
 
@@ -203,8 +203,11 @@ socket.on('assistant_http_response', (payload) => {
 | **③ 提交审核** | `POST .../erp-audit/submit` | 在待审核列表中勾选给定 `order_nos` 并提交审核；可写 SQLite / 飞书 | **≥ 650** |
 | **④ 今日已审核（本地）** | `GET .../erp-audit/today` | 读助手本地库今日审核记录（**非** ERP 网页） | **30** 左右即可 |
 | **⑤ 打印并发货** | `POST .../erp-delivering/print-ship` | 待发货页执行「打印并发货」流程 | **200**（后端约 180s） |
+| **⑥ 退货物流采集** | `POST .../erp-after-sale/collect` | 打开 ERP 售后管理页，执行 JS 脚本采集退货物流，**仅返回数据不写飞书** | **≥ 650** |
+| **⑦ 退货同步飞书（外部 results）** | `POST .../erp-after-sale/sync-to-feishu` | 接收调用方传来的 `results` 数组直接写飞书，**无需浏览器** | **30** 左右即可 |
+| **⑧ 退货一键采集+同步** | `POST .../erp-after-sale/sync` | 采集退货物流后立即写飞书，完成后推送飞书 Webhook 通知 | **≥ 650** |
 
-**执行后 Webhook**：② 成功/告警可推拼多多渠道飞书卡片；①③⑤ 按各自脚本逻辑。**登录拦截**时与其它 ERP 页一致（二维码等）。
+**执行后 Webhook**：② 成功/告警可推拼多多渠道飞书卡片；①③⑤ 按各自脚本逻辑；⑧ 采集+同步完成后推送「退货物流同步 · 运行报告」到拼多多渠道飞书。**登录拦截**时与其它 ERP 页一致（二维码等）。
 
 #### ① `POST .../erp-audit/pending` — 请求与响应
 
@@ -353,6 +356,9 @@ Body 可无或 `{}`。**响应要点**：`success`、`message`、`script_result`
 | **今日已打印快递单（ERP 页查询）** | `POST` | `/api/pinduoduo/erp-delivered/today-printed-query` | 已发货页筛选「今日 + 已打印快递单」并表格抓取；执行结束后向拼多多渠道 **飞书 Webhook** 推送摘要 |
 | **今日已审核（本地 SQLite）** | `GET` | `/api/pinduoduo/erp-audit/today` | 读取**今日已写入本地 SQLite**的审核记录（轻量，**不是** ERP 页「今日打印单」） |
 | **待发货 · 打印并发货** | `POST` | `/api/pinduoduo/erp-delivering/print-ship` | 待发货页执行「打印并发货」流程（**动作执行**，约 180s） |
+| **退货物流采集（仅采集）** | `POST` | `/api/pinduoduo/erp-after-sale/collect` | 打开 ERP 售后管理页执行 JS 脚本采集退货物流，仅返回数据（浏览器自动化，**耗时长**） |
+| **退货物流同步飞书（外部 results）** | `POST` | `/api/pinduoduo/erp-after-sale/sync-to-feishu` | 接收调用方传来的 `results` 数组直接写飞书多维表，**无需浏览器**（轻量） |
+| **退货一键采集+同步飞书** | `POST` | `/api/pinduoduo/erp-after-sale/sync` | 采集退货物流后立即写飞书，完成后推送 Webhook 通知（浏览器自动化，**耗时长**） |
 
 说明：**「今日打印单」以 ERP 已发货页为准时**，请用 **`POST .../erp-delivered/today-printed-query`**；若只需读助手本地库里的今日审核记录，用 **`GET .../erp-audit/today`**。
 
@@ -366,6 +372,8 @@ Body 可无或 `{}`。**响应要点**：`success`、`message`、`script_result`
 - **`erp-audit/pending`** / **`erp-audit/submit`** / **`erp-delivered/today-printed-query`**：`"timeout": 650`（或 `700`，略大于后端执行上限）。
 - **`erp-audit/today`**：`"timeout": 30` 即可。
 - **`erp-delivering/print-ship`**：可按 `"timeout": 200`（后端约 180s）。
+- **`erp-after-sale/collect`** / **`erp-after-sale/sync`**：浏览器自动化，`"timeout": 650`（后端最长约 600s）。
+- **`erp-after-sale/sync-to-feishu`**：无需浏览器，直接写飞书，`"timeout": 30` 即可。
 
 ### 8.3 ① 获取订单待审批列表
 
@@ -463,8 +471,120 @@ Body 可无或 `{}`。**响应要点**：`success`、`message`、`script_result`
 
 ### 8.7 实现代码位置（便于核对字段）
 
-- 路由：`src/api/routes/pinduoduo_routes.py`（含 `erp-audit/pending`、`erp-audit/submit`、`erp-audit/today`、`erp-delivered/today-printed-query`、`erp-delivering/print-ship`）
+- 路由：`src/api/routes/pinduoduo_routes.py`（含 `erp-audit/pending`、`erp-audit/submit`、`erp-audit/today`、`erp-delivered/today-printed-query`、`erp-delivering/print-ship`、`erp-after-sale/collect`、`erp-after-sale/sync-to-feishu`、`erp-after-sale/sync`）
 - 抓取逻辑：`src/spider/pinduoduo/erp_audit.py`；脚本：`src/spider/pinduoduo/scripts/pdd-erp-order-delivered-query.js`
+- 退货物流采集：`src/spider/pinduoduo/after_sale_sync.py`；脚本：`src/spider/pinduoduo/scripts/pdd-after-sale-return-logistics.js`
+- 飞书写入：`src/spider/pinduoduo/feishutable.py`（`sync_after_sale_logistics_to_feishu`）
+
+
+### 8.8 退货订单（`erp-after-sale`）
+
+对应 ERP 售后管理页，采集各订单的退货物流信息并写入飞书多维表格。共三个接口，可灵活组合：
+
+#### ⑥ `POST .../erp-after-sale/collect` — 仅采集退货物流
+
+**HTTP 请求 Body（可选，JSON）**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `filter_text` | string | 页面筛选器文字，默认「退回/退货签收待处理」 |
+| `hover_wait` | int | hover 后等待 popover 毫秒数，默认 350 |
+| `scroll_step` | int | 每次滚动像素，默认 400 |
+| `scroll_wait` | int | 每次滚动后等待毫秒数，默认 600 |
+
+**HTTP 响应体（`assistant_http_response.data`；200 时）**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `success` | boolean | 是否采集成功 |
+| `intercepted` | boolean | `true` 时表示登录拦截 |
+| `message` | string | 概要说明，如「采集完成：N 条有物流，M 条无物流」 |
+| `results` | array | 有物流信息的退货订单列表（各字段以实际脚本为准） |
+| `skipped` | array | 无物流信息的订单号列表 |
+| `item_count` | int | `results` 条数 |
+| `skipped_count` | int | `skipped` 条数 |
+| `stats` | object | 脚本附属统计信息 |
+| `page_url` | string | 结束时页面 URL |
+
+**Socket 最小示例：**
+
+```json
+{
+  "messageId": "after-sale-collect-001",
+  "method": "POST",
+  "url": "/api/pinduoduo/erp-after-sale/collect",
+  "timeout": 650,
+  "headers": { "Content-Type": "application/json" },
+  "json": {}
+}
+```
+
+#### ⑦ `POST .../erp-after-sale/sync-to-feishu` — 同步已有 results 到飞书
+
+**无需浏览器**，直接将调用方传来的 `results` 写入飞书多维表格（按订单号去重更新）。通常与 ⑥ 配合使用：先调 ⑥ 拿到 `results`，再调 ⑦ 写飞书。
+
+**HTTP 请求 Body（JSON）**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `results` | array | **是** | 退货物流数组（与 ⑥ 返回的 `results` 一致） |
+| `app_token` | string | 否 | 飞书 app_token，默认来自 Config |
+| `table_id` | string | 否 | 退货订单飞书表 ID，默认 `Config.PINDUODUO_ERP_AFTER_SALE_FEISHU_TABLE_ID` |
+
+**HTTP 响应体要点**：`success`、`message`、`create_count`、`update_count`、`fail_count`。
+
+**Socket 最小示例：**
+
+```json
+{
+  "messageId": "after-sale-sync-feishu-001",
+  "method": "POST",
+  "url": "/api/pinduoduo/erp-after-sale/sync-to-feishu",
+  "timeout": 30,
+  "headers": { "Content-Type": "application/json" },
+  "json": {
+    "results": []
+  }
+}
+```
+
+#### ⑧ `POST .../erp-after-sale/sync` — 一键采集+同步飞书
+
+一步完成「打开 ERP 售后页 → 采集物流 → 写飞书 → 推送 Webhook 通知」全流程。
+
+**HTTP 请求 Body（可选，JSON）**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `app_token` | string | 飞书 app_token，默认来自 Config |
+| `table_id` | string | 退货订单飞书表 ID，默认来自 Config |
+| `filter_text` | string | 页面筛选器文字，同 ⑥ |
+| `hover_wait` | int | hover 等待毫秒，同 ⑥ |
+| `scroll_step` | int | 每次滚动像素，同 ⑥ |
+| `scroll_wait` | int | 每次滚动后等待毫秒，同 ⑥ |
+
+**HTTP 响应体要点**：`success`、`message`、`item_count`、`skipped_count`、`feishu_sync`（含 `create_count`、`update_count`、`fail_count`）。完成后会向拼多多渠道飞书推送「退货物流同步 · 运行报告」卡片。
+
+**Socket 最小示例：**
+
+```json
+{
+  "messageId": "after-sale-sync-001",
+  "method": "POST",
+  "url": "/api/pinduoduo/erp-after-sale/sync",
+  "timeout": 650,
+  "headers": { "Content-Type": "application/json" },
+  "json": {}
+}
+```
+
+**三种模式对比：**
+
+| 场景 | 推荐接口 |
+|------|----------|
+| 只需查看退货物流数据，不写飞书 | **⑥ collect** |
+| 已有 results 数据，仅需写飞书 | **⑦ sync-to-feishu** |
+| 一步采集并写飞书，无需中间处理 | **⑧ sync** |
 
 ---
 

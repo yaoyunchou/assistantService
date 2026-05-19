@@ -1111,3 +1111,270 @@ def sync_audit_events_to_feishu(
         'total_count': len(rows),
         'record_pairs': record_pairs,
     }
+
+
+# ─────────────────────────────────────────────
+# 退货物流（pdd-after-sale-return-logistics.js）
+# ─────────────────────────────────────────────
+AFTER_SALE_PRIMARY_KEY = '订单号'
+# 更新时必须整包覆盖的物流列（飞书 PATCH 未出现的列会保留旧值）
+AFTER_SALE_LOGISTICS_FIELD_KEYS = (
+    '快递公司',
+    '快递单号',
+    '最新物流状态',
+    '物流节点',
+)
+
+
+
+
+def _after_sale_parse_logistics_values(item: Dict[str, Any]) -> Dict[str, str]:
+    """从脚本 results 单条解析物流各列（与写入飞书解耦，便于单测）。"""
+    carrier = str(item.get('carrier') or '').strip()
+    track_no = str(item.get('trackNo') or '').strip()
+    latest = str(item.get('latestStatus') or '').strip()
+    all_st = item.get('allStatuses') or []
+    nodes = '\n'.join(str(s) for s in all_st if s).strip()
+    if not latest and all_st:
+        latest = str(all_st[0]).strip()
+    if not nodes:
+        full_text = str(item.get('fullText') or '').strip()
+        if full_text:
+            nodes = full_text
+    return {
+        'carrier': carrier,
+        'track_no': track_no,
+        'latest': latest,
+        'nodes': nodes[:49000],
+    }
+
+
+def _after_sale_item_to_fields(item: Dict[str, Any], *, for_update: bool = False) -> Dict[str, Any]:
+    """
+    将脚本 results 中单条退货物流记录转换为飞书多维表格字段。
+
+    飞书表 tblP5HCIUXMsntTI 字段（lark-cli 建立）：
+      flda8A2YvW  订单号        (text, 主键)
+      fldV7RWALE  快递公司      (text)
+      fldEmnsYxl  快递单号      (text)
+      fldW6H5WZS  最新物流状态  (text)
+      fldmhWeejh  物流节点      (text，allStatuses 按行拼接)
+      fld3jWhmVq  采集时间      (datetime，Unix 毫秒)
+
+    for_update=True 时物流四列始终写入（空串表示清空），避免 PATCH 只更新采集时间而物流仍停留在首次新建。
+    """
+    order_no = str(item.get('orderNo') or '').strip()
+    parsed = _after_sale_parse_logistics_values(item)
+
+    collected_ms = item.get('collectedAt')
+    if not isinstance(collected_ms, (int, float)) or collected_ms <= 0:
+        import time as _time
+        collected_ms = int(_time.time() * 1000)
+
+    fields: Dict[str, Any] = {'采集时间': int(collected_ms)}
+    if order_no:
+        fields['订单号'] = order_no
+
+    if for_update:
+        fields['快递公司'] = parsed['carrier']
+        fields['快递单号'] = parsed['track_no']
+        fields['最新物流状态'] = parsed['latest']
+        fields['物流节点'] = parsed['nodes']
+        return fields
+
+    if parsed['carrier']:
+        fields['快递公司'] = parsed['carrier']
+    if parsed['track_no']:
+        fields['快递单号'] = parsed['track_no']
+    if parsed['latest']:
+        fields['最新物流状态'] = parsed['latest']
+    if parsed['nodes']:
+        fields['物流节点'] = parsed['nodes']
+    return fields
+
+
+AFTER_SALE_HANDLED_KEY = '是否处理'
+
+
+def _after_sale_is_handled(existing_fields: Dict[str, Any]) -> bool:
+    """判断飞书记录中「是否处理」是否已勾选（checkbox 值为 True）。"""
+    val = existing_fields.get(AFTER_SALE_HANDLED_KEY)
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    return False
+
+
+def sync_after_sale_logistics_to_feishu(
+    items: List[Dict[str, Any]],
+    app_token: Optional[str] = None,
+    table_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    将 pdd-after-sale-return-logistics.js 产出的 results 写入飞书退货订单表。
+
+    匹配键：**订单号**。
+    - 新建：表中尚无该订单号时，写入全部非空字段。
+    - 更新：已存在且「是否处理」未勾选时，覆盖物流字段（采集时间等）。
+    - 跳过：已存在且「是否处理」已勾选 → 保留原记录不覆盖。
+    """
+    from config import Config
+
+    app_token = app_token or Config.PINDUODUO_FEISHU_APP_TOKEN
+    table_id  = table_id  or Config.PINDUODUO_ERP_AFTER_SALE_FEISHU_TABLE_ID
+
+    if not items:
+        return {
+            'success': True,
+            'message': '无退货物流数据可同步',
+            'success_count': 0,
+            'fail_count': 0,
+            'create_count': 0,
+            'update_count': 0,
+            'skip_handled_count': 0,
+            'total_count': 0,
+        }
+
+    try:
+        client = FeishuTableClient(app_token, table_id)
+        success_count     = 0
+        fail_count        = 0
+        create_count      = 0
+        update_count      = 0
+        skip_handled_count = 0
+        total_count       = len(items)
+
+        existing_records = client.get_all_records()
+        key_to_record: Dict[str, Dict[str, Any]] = {}
+        for rec in existing_records:
+            rid    = rec.get('record_id')
+            fields = rec.get('fields', {})
+            pk     = feishu_field_to_text(fields.get(AFTER_SALE_PRIMARY_KEY)).strip()
+            if pk and rid:
+                key_to_record[pk] = {'record_id': rid, 'fields': fields}
+
+        to_create: List[Dict[str, Any]] = []
+        to_update: List[Dict[str, Any]] = []
+
+        for item in items:
+            pk = str(item.get('orderNo') or '').strip()
+            if not pk:
+                logger.warning('退货物流记录缺少订单号，跳过: %s', item)
+                fail_count += 1
+                continue
+            existing = key_to_record.get(pk)
+            if existing:
+                if _after_sale_is_handled(existing['fields']):
+                    skip_handled_count += 1
+                    logger.debug('退货订单已处理，跳过同步: %s', pk)
+                    continue
+                to_update.append({
+                    'record_id': existing['record_id'],
+                    'fields': _after_sale_item_to_fields(item, for_update=True),
+                    'pk': pk,
+                })
+            else:
+                to_create.append({
+                    'fields': _after_sale_item_to_fields(item, for_update=False),
+                    'pk': pk,
+                })
+
+        batch_size = 20
+
+        for i in range(0, len(to_create), batch_size):
+            batch = to_create[i:i + batch_size]
+            payload = [{'fields': x['fields']} for x in batch]
+            try:
+                result = client.batch_create_records(payload)
+                if result:
+                    create_count   += len(result)
+                    success_count  += len(result)
+                    fail_count     += len(batch) - len(result)
+                else:
+                    for item in batch:
+                        r = client.create_record(item['fields'])
+                        if r:
+                            create_count  += 1
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                            logger.error('退货物流单条创建失败 订单号=%s', item['pk'])
+            except Exception as e:
+                logger.error('退货物流批量创建失败: %s', e, exc_info=True)
+                for item in batch:
+                    try:
+                        r = client.create_record(item['fields'])
+                        if r:
+                            create_count  += 1
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                    except Exception as e2:
+                        logger.error('退货物流单条创建异常 订单号=%s err=%s', item['pk'], e2)
+                        fail_count += 1
+
+        for i in range(0, len(to_update), batch_size):
+            batch = to_update[i:i + batch_size]
+            payload = [{'record_id': x['record_id'], 'fields': x['fields']} for x in batch]
+            try:
+                result = client.batch_update_records(payload)
+                if result:
+                    update_count  += len(result)
+                    success_count += len(result)
+                    fail_count    += len(batch) - len(result)
+                else:
+                    for item in batch:
+                        r = client.update_record(record_id=item['record_id'], fields=item['fields'])
+                        if r:
+                            update_count  += 1
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                            logger.error('退货物流单条更新失败 订单号=%s', item['pk'])
+            except Exception as e:
+                logger.error('退货物流批量更新失败: %s', e, exc_info=True)
+                for item in batch:
+                    try:
+                        r = client.update_record(record_id=item['record_id'], fields=item['fields'])
+                        if r:
+                            update_count  += 1
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                    except Exception as e2:
+                        logger.error('退货物流单条更新异常 订单号=%s err=%s', item['pk'], e2)
+                        fail_count += 1
+
+        msg_parts = [
+            f'同步完成: 成功 {success_count} (新建 {create_count}, 更新 {update_count})',
+            f'失败 {fail_count}',
+        ]
+        if skip_handled_count:
+            msg_parts.append(f'已处理跳过 {skip_handled_count}')
+        msg = ', '.join(msg_parts)
+        logger.info('退货物流飞书同步: %s', msg)
+        return {
+            'success': True,
+            'message': msg,
+            'success_count': success_count,
+            'fail_count': fail_count,
+            'create_count': create_count,
+            'update_count': update_count,
+            'skip_handled_count': skip_handled_count,
+            'total_count': total_count,
+        }
+
+    except Exception as e:
+        logger.error('退货物流同步飞书整体失败: %s', e, exc_info=True)
+        return {
+            'success': False,
+            'message': f'同步失败: {e}',
+            'success_count': 0,
+            'fail_count': len(items),
+            'create_count': 0,
+            'update_count': 0,
+            'skip_handled_count': 0,
+            'total_count': len(items),
+        }
+

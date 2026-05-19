@@ -164,6 +164,26 @@ class Config:
         'PINDUODUO_ERP_ORDER_DELIVERED_URL',
         'https://mms.pinduoduo.com/erp/order/delivered',
     ).strip()
+    # ERP 售后退货页（脚本 pdd-after-sale-return-logistics.js）
+    PINDUODUO_ERP_AFTER_SALE_URL = os.getenv(
+        'PINDUODUO_ERP_AFTER_SALE_URL',
+        'https://mms.pinduoduo.com/erp/after-sale/manage',
+    ).strip()
+    # 退货物流同步目标（飞书多维表格，与 URL 中 table= / view= 一致）
+    PINDUODUO_ERP_AFTER_SALE_FEISHU_TABLE_ID = os.getenv(
+        'PINDUODUO_ERP_AFTER_SALE_FEISHU_TABLE_ID',
+        'tblP5HCIUXMsntTI',
+    ).strip()
+    PINDUODUO_ERP_AFTER_SALE_FEISHU_VIEW_ID = os.getenv(
+        'PINDUODUO_ERP_AFTER_SALE_FEISHU_VIEW_ID',
+        'vewRw2erpG',
+    ).strip()
+    # ERP 预售订单页（脚本 pdd-erp-order-presell-list.js）
+    PINDUODUO_ERP_PRESELL_URL = os.getenv(
+        'PINDUODUO_ERP_PRESELL_URL',
+        'https://mms.pinduoduo.com/erp/order/presell',
+    ).strip()
+
     # 审核记录同步目标（飞书多维表格 table_id；与 docs/next/pinduoduo-erp-audit-feishu-table.md 一致）
     # 未在 .env 中显式配置时使用默认值，避免「审核完没自动同步飞书」的静默失败
     PINDUODUO_ERP_AUDIT_FEISHU_TABLE_ID = (
@@ -238,8 +258,8 @@ class Config:
 
     # WebSocket（Socket.IO）客户端配置（对接 docs/websocket-api.md，默认开启；main/dev 启动后自动连接）
     WS_CLIENT_ENABLED = True  # 是否启用
-    # Socket.IO engine 路径惯例为 /socket.io/（仅存 socket.io 也会在连接时规范化）
-    WS_CLIENT_PATH_DEFAULT = '/socket.io/'
+    # Socket.IO engine 路径（服务端 Nest.js 配置了 /xcx/socket.io）
+    WS_CLIENT_PATH_DEFAULT = '/xcx/socket.io/'
     # 可为纯域名/IP，或含协议如 https://nestapi.xfysj.top（见 build_socket_io_server_url：无端口时用 443/80，不读下面 PORT）
     WS_CLIENT_HOST = os.getenv('WS_CLIENT_HOST', 'localhost')
     # 仅当 HOST 为「无协议的 host」时使用；完整 https URL 未带端口时不参与拼接

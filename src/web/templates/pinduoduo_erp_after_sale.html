@@ -1,0 +1,330 @@
+{% extends "base.html" %}
+
+{% block title %}退货订单 - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.status-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08);
+    padding: 28px 30px;
+    margin-bottom: 24px;
+}
+.status-title { font-size: 18px; font-weight: 600; color: #2c3e50; margin-bottom: 12px; }
+.desc { color: #7f8c8d; line-height: 1.65; margin-bottom: 14px; font-size: 14px; }
+.page-header .subtitle a { color: #3498db; }
+
+.btn {
+    padding: 11px 22px; border: none; border-radius: 6px;
+    font-size: 14px; font-weight: 600; cursor: pointer; transition: .2s;
+}
+.btn-primary  { background: #e67e22; color: #fff; }
+.btn-primary:hover { background: #ca6f1e; }
+.btn-secondary { background: #95a5a6; color: #fff; }
+.btn-secondary:hover { background: #7f8c8d; }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+.action-row   { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+
+.result-msg {
+    display: none; margin-top: 12px; padding: 12px 14px;
+    border-radius: 8px; background: #f8f9fa; border: 1px solid #e9ecef;
+    font-size: 13px; white-space: pre-wrap; word-break: break-word;
+}
+
+/* 统计卡片 */
+.stat-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 14px 0 0; }
+.stat-badge {
+    background: #f0f4ff; border-radius: 8px;
+    padding: 8px 16px; text-align: center; min-width: 80px;
+}
+.stat-badge.orange { background: #fff3e0; }
+.stat-badge.green  { background: #e8f5e9; }
+.stat-badge.grey   { background: #f5f5f5; }
+.stat-num   { font-size: 20px; font-weight: 700; color: #2c3e50; }
+.stat-label { font-size: 11px; color: #7f8c8d; margin-top: 2px; }
+
+/* 飞书结果条 */
+.feishu-bar {
+    display: none; margin-top: 14px; padding: 10px 14px;
+    border-radius: 8px; font-size: 13px;
+    border: 1px solid #c3e6cb; background: #d4edda; color: #155724;
+}
+.feishu-bar.error { border-color: #f5c6cb; background: #f8d7da; color: #721c24; }
+
+/* 数据表格 */
+.table-wrap {
+    overflow: auto; border: 1px solid #e9ecef; border-radius: 8px;
+    max-height: 520px; margin-top: 16px;
+}
+.table-wrap table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 680px; }
+.table-wrap th {
+    background: #f8f9fa; padding: 10px 12px; text-align: left;
+    border-bottom: 2px solid #dee2e6; position: sticky; top: 0; z-index: 1; white-space: nowrap;
+}
+.table-wrap td { padding: 9px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; word-break: break-all; }
+.table-wrap tr:hover td { background: #fafafa; }
+.tag-carrier {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; background: #e3f2fd; color: #1565c0;
+}
+.nodes-cell { font-size: 12px; color: #555; line-height: 1.5; max-width: 360px; }
+
+.loading {
+    display: inline-block; width: 17px; height: 17px;
+    border: 3px solid rgba(230,126,34,.3); border-radius: 50%;
+    border-top-color: #e67e22; animation: spin .8s linear infinite; vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.qrcode-container {
+    display: none; text-align: center; padding: 24px; margin-bottom: 20px;
+    background: white; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.08);
+}
+.qrcode-container.show { display: block; }
+.qrcode-image { max-width: 280px; border: 2px solid #e0e0e0; border-radius: 8px; padding: 8px; }
+.qrcode-status { margin-top: 12px; padding: 10px; border-radius: 6px; font-size: 14px; }
+.qrcode-status.waiting { background: #fff3cd; color: #856404; }
+.qrcode-status.success { background: #d4edda; color: #155724; }
+.qrcode-status.error   { background: #f8d7da; color: #721c24; }
+.empty-hint { text-align: center; color: #adb5bd; padding: 32px; font-size: 14px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>退货订单</h2>
+    <p class="subtitle">
+        从 ERP 售后管理页采集退货物流，采集完自动同步到飞书（已标记「是否处理」的记录不覆盖）。
+        飞书表：
+        <a href="https://fve8bmmwllf.feishu.cn/base/ORSHbpajoaANQ4sFg25c917jnTc?table=tblP5HCIUXMsntTI&view=vewRw2erpG"
+           target="_blank" rel="noopener noreferrer">打开飞书表 ↗</a>
+    </p>
+</div>
+
+<!-- 二维码登录 -->
+<div id="qrcode-container" class="qrcode-container">
+    <h3 style="margin-bottom:12px;">请使用拼多多 APP 扫码登录</h3>
+    <img id="qrcode-image" class="qrcode-image" src="" alt="二维码">
+    <p style="margin-top:10px;color:#7f8c8d;font-size:13px;">扫码成功后可再次点击「采集退货订单」</p>
+    <div id="qrcode-status" class="qrcode-status waiting">
+        <span class="loading"></span> 等待扫码登录...
+    </div>
+</div>
+
+<!-- 操作区 -->
+<div class="status-card">
+    <div class="status-title">采集退货订单</div>
+    <p class="desc">
+        将打开 <code>{{ config.PINDUODUO_ERP_AFTER_SALE_URL }}</code>，
+        默认筛选「<strong>退回/退货签收待处理</strong>」，逐行读取退货物流后
+        自动写入飞书表格。耗时约 1–3 分钟。
+        <br>
+        <strong>注意：</strong>飞书表中已勾选「是否处理」的记录不会被覆盖。
+    </p>
+    <div class="action-row">
+        <button type="button" id="btn-collect" class="btn btn-primary">采集退货订单</button>
+        <button type="button" id="btn-login"   class="btn btn-secondary">重新登录</button>
+        <span id="collect-status" style="font-size:13px;color:#7f8c8d;"></span>
+    </div>
+    <div id="collect-msg" class="result-msg"></div>
+</div>
+
+<!-- 结果区 -->
+<div class="status-card" id="result-card" style="display:none;">
+    <div class="status-title">采集结果</div>
+
+    <!-- 统计行 -->
+    <div class="stat-row">
+        <div class="stat-badge">
+            <div class="stat-num" id="stat-total">0</div>
+            <div class="stat-label">有物流</div>
+        </div>
+        <div class="stat-badge grey">
+            <div class="stat-num" id="stat-skip">0</div>
+            <div class="stat-label">无物流</div>
+        </div>
+        <div class="stat-badge green">
+            <div class="stat-num" id="stat-created">—</div>
+            <div class="stat-label">飞书新建</div>
+        </div>
+        <div class="stat-badge orange">
+            <div class="stat-num" id="stat-updated">—</div>
+            <div class="stat-label">飞书更新</div>
+        </div>
+        <div class="stat-badge grey">
+            <div class="stat-num" id="stat-handled">—</div>
+            <div class="stat-label">已处理跳过</div>
+        </div>
+    </div>
+
+    <!-- 飞书同步状态条 -->
+    <div id="feishu-bar" class="feishu-bar"></div>
+
+    <!-- 数据表格 -->
+    <div class="table-wrap" id="result-table-wrap">
+        <div class="empty-hint">暂无数据</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// ── 登录二维码 ────────────────────────────────────
+function showQRCode(src) {
+    document.getElementById('qrcode-image').src = src;
+    document.getElementById('qrcode-container').classList.add('show');
+    const s = document.getElementById('qrcode-status');
+    s.className = 'qrcode-status waiting';
+    s.innerHTML = '<span class="loading"></span> 等待扫码登录...';
+}
+let _poll = null;
+function startLoginPoll() {
+    if (_poll) clearInterval(_poll);
+    _poll = setInterval(async () => {
+        try {
+            const d = await (await fetch('/api/pinduoduo/check_login_complete')).json();
+            if (d.success && d.logged_in) {
+                clearInterval(_poll); _poll = null;
+                const s = document.getElementById('qrcode-status');
+                s.className = 'qrcode-status success';
+                s.textContent = '✓ 登录成功！';
+                setTimeout(() => document.getElementById('qrcode-container').classList.remove('show'), 2500);
+            }
+        } catch(e) { console.error(e); }
+    }, 2000);
+    setTimeout(() => {
+        if (_poll) {
+            clearInterval(_poll); _poll = null;
+            const s = document.getElementById('qrcode-status');
+            s.className = 'qrcode-status error';
+            s.textContent = '× 登录超时，请重试';
+        }
+    }, 60000);
+}
+
+document.getElementById('btn-login').addEventListener('click', async function() {
+    this.disabled = true;
+    try {
+        const d = await (await fetch('/api/pinduoduo/login', {method:'POST'})).json();
+        if (d.success && d.qrcode) { showQRCode(d.qrcode); startLoginPoll(); }
+        else if (d.already_logged_in) alert(d.message || '已登录');
+        else alert(d.message || d.error || '获取二维码失败');
+    } catch(e) { alert('请求失败: ' + e.message); }
+    finally { this.disabled = false; }
+});
+
+// ── 渲染表格 ──────────────────────────────────────
+function renderTable(results, skipped) {
+    document.getElementById('stat-total').textContent = results.length;
+    document.getElementById('stat-skip').textContent  = skipped ? skipped.length : 0;
+
+    const wrap = document.getElementById('result-table-wrap');
+    if (!results.length) {
+        wrap.innerHTML = '<div class="empty-hint">未采集到退货物流数据</div>';
+        return;
+    }
+    const rows = results.map(r => {
+        const nodes = (r.allStatuses || []).slice(0, 3).join('<br>');
+        const more  = (r.allStatuses || []).length > 3
+            ? `<br><span style="color:#aaa">…共${r.allStatuses.length}条</span>` : '';
+        return `<tr>
+          <td style="white-space:nowrap;">${esc(r.orderNo || '')}</td>
+          <td><span class="tag-carrier">${esc(r.carrier || '—')}</span></td>
+          <td>${esc(r.trackNo || '—')}</td>
+          <td>${esc(r.latestStatus || '—')}</td>
+          <td class="nodes-cell">${nodes}${more}</td>
+        </tr>`;
+    }).join('');
+    wrap.innerHTML = `<table>
+      <thead><tr>
+        <th>订单号</th><th>快递公司</th><th>快递单号</th><th>最新状态</th><th>物流节点</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── 采集（含自动同步） ────────────────────────────
+document.getElementById('btn-collect').addEventListener('click', async function() {
+    const btn    = this;
+    const msgEl  = document.getElementById('collect-msg');
+    const statEl = document.getElementById('collect-status');
+    const barEl  = document.getElementById('feishu-bar');
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading"></span> 采集中，请稍候…';
+    msgEl.style.display = 'none';
+    barEl.style.display = 'none';
+    document.getElementById('result-card').style.display = 'none';
+    statEl.textContent = '';
+
+    try {
+        const resp = await fetch('/api/pinduoduo/erp-after-sale/collect', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({}),
+        });
+        const data = await resp.json();
+
+        if (data.intercepted && data.qrcode) {
+            showQRCode(data.qrcode);
+            startLoginPoll();
+        }
+
+        if (!data.success && !data.intercepted) {
+            msgEl.style.display = 'block';
+            msgEl.style.color   = '#721c24';
+            msgEl.textContent   = data.message || data.error || '采集失败';
+            return;
+        }
+
+        // 渲染表格
+        renderTable(data.results || [], data.skipped);
+        document.getElementById('result-card').style.display = 'block';
+
+        statEl.textContent = `采集完成：${data.item_count ?? 0} 条有物流，${data.skipped_count ?? 0} 条无物流`;
+
+        // 飞书同步结果
+        const fs = data.feishu_sync;
+        if (fs) {
+            document.getElementById('stat-created').textContent  = fs.create_count         ?? '—';
+            document.getElementById('stat-updated').textContent  = fs.update_count         ?? '—';
+            document.getElementById('stat-handled').textContent  = fs.skip_handled_count   ?? '0';
+
+            barEl.style.display = 'block';
+            if (fs.success) {
+                barEl.className = 'feishu-bar';
+                barEl.textContent = '✓ 飞书同步成功：' + fs.message;
+            } else {
+                barEl.className = 'feishu-bar error';
+                barEl.textContent = '× 飞书同步失败：' + fs.message;
+            }
+        } else {
+            // 采集到0条时
+            document.getElementById('stat-created').textContent = '—';
+            document.getElementById('stat-updated').textContent = '—';
+            document.getElementById('stat-handled').textContent = '—';
+        }
+
+        // 脚本日志（可选调试）
+        const log = (data.extract_log || []).slice(-4).join(' | ');
+        if (log) {
+            msgEl.style.display = 'block';
+            msgEl.style.color   = '#6c757d';
+            msgEl.textContent   = '日志(节选): ' + log;
+        }
+
+    } catch(e) {
+        msgEl.style.display = 'block';
+        msgEl.style.color   = '#721c24';
+        msgEl.textContent   = '请求失败: ' + e.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '重新采集';
+    }
+});
+</script>
+{% endblock %}

@@ -23,5 +23,5 @@ max_memory_mb = 200
 ws_client_enabled = true
 ws_client_host = "https://nestapi.xfysj.top"
 ws_client_port = 443
-ws_client_path = "socket.io"
+ws_client_path = "xcx/socket.io"
 ws_client_assistant_key = "erp-001"
