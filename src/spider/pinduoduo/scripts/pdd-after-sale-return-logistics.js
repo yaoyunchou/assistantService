@@ -114,13 +114,60 @@
       .trim();
   }
 
-  /** 移开鼠标，尽量收起上一条 Popover，避免读到上一行残留 */
+  /** 移开鼠标并点击浮窗外区域，确保收起 Popover */
   async function dismissPopover() {
+    // 先试 Escape 键（大多数组件库都支持）
     try {
-      document.body.dispatchEvent(new MouseEvent('mousemove', {
-        bubbles: true, cancelable: true, clientX: 4, clientY: 4, view: window,
-      }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+      document.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
     } catch (e) { /* ignore */ }
+
+    // 再在浮窗外点一下
+    let cx = 4, cy = 4;
+    try {
+      const pop = document.querySelector(POPOVER_SEL);
+      if (pop) {
+        const r = pop.getBoundingClientRect();
+        cx = Math.max(4, r.left + r.width / 2);
+        cy = Math.max(4, r.top - 20);
+        if (cy < 4) { cx = r.right + 20; cy = r.top + r.height / 2; }
+      }
+    } catch (e) { /* ignore */ }
+
+    const evBase = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+    try {
+      const target = document.elementFromPoint(cx, cy);
+      if (target) {
+        target.dispatchEvent(new MouseEvent('mousedown', evBase));
+        target.dispatchEvent(new MouseEvent('mouseup',   evBase));
+        target.dispatchEvent(new MouseEvent('click',     evBase));
+      }
+    } catch (e) { /* ignore */ }
+
+    try {
+      document.body.dispatchEvent(new MouseEvent('mousemove', { ...evBase, clientX: 4, clientY: 4 }));
+    } catch (e) { /* ignore */ }
+
+    await sleep(150);
+  }
+
+  /** 等待 Popover 从 DOM 中完全消失，防止串行读取旧数据 */
+  async function waitUntilPopoverGone(maxMs = 1000) {
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      if (!document.querySelector(POPOVER_SEL)) return;
+      await sleep(60);
+    }
+    // 超时仍未消失时强制多点几个安全区域
+    for (const [x, y] of [[4,4],[8,8],[2,2]]) {
+      try {
+        const t = document.elementFromPoint(x, y);
+        if (t) {
+          t.dispatchEvent(new MouseEvent('mousedown', { bubbles:true, cancelable:true, view:window, clientX:x, clientY:y }));
+          t.dispatchEvent(new MouseEvent('click',     { bubbles:true, cancelable:true, view:window, clientX:x, clientY:y }));
+        }
+      } catch(e) { /* ignore */ }
+    }
     await sleep(200);
   }
 
@@ -131,7 +178,8 @@
     let stableHits = 0;
     while (Date.now() < deadline) {
       const t = readPopover();
-      if (t && t.length >= 8) {
+      // 过滤加载占位文本，避免把"数据加载中..."当成有效数据稳定下来
+      if (t && t.length >= 8 && !t.includes('数据加载中') && !t.includes('加载中...')) {
         if (t === last) {
           stableHits++;
           if (stableHits >= POPOVER_STABLE_ROUNDS) return t;
@@ -142,7 +190,10 @@
       }
       await sleep(70);
     }
-    return last || readPopover();
+    const final = last || readPopover();
+    // 若最终结果仍是加载占位，视为无效
+    if (final && (final.includes('数据加载中') || final.includes('加载中...'))) return null;
+    return final;
   }
 
   function statusCount(entry) {
@@ -233,11 +284,13 @@
         } catch (e) { /* ignore */ }
         await sleep(120);
         await dismissPopover();
+        await waitUntilPopoverGone();
 
         hoverSpan(span);
         const popoverText = await readPopoverStable(HOVER_WAIT + 250);
         leaveSpan(span);
         await dismissPopover();
+        await waitUntilPopoverGone();
 
         processed.add(orderNo);
 
@@ -275,15 +328,55 @@
 
       if (!gotNew) stallCount++; else stallCount = 0;
 
-      // 向下滚动
-      const prevTop = scrollEl.scrollTop;
+      // 向下滚动，等待虚拟列表渲染新行
+      const prevTop  = scrollEl.scrollTop;
+      const prevRows = document.querySelectorAll('[data-testid="beast-core-table-body-tr"]').length;
       scrollEl.scrollTop += SCROLL_STEP;
+
+      // 先固定等基础时间，再等行数稳定（最多额外 1.5s）
       await sleep(SCROLL_WAIT);
+      const rowStableDeadline = Date.now() + 1500;
+      let lastRowCount = document.querySelectorAll('[data-testid="beast-core-table-body-tr"]').length;
+      while (Date.now() < rowStableDeadline) {
+        await sleep(150);
+        const cur = document.querySelectorAll('[data-testid="beast-core-table-body-tr"]').length;
+        if (cur === lastRowCount) break;
+        lastRowCount = cur;
+      }
+      info(`滚动后行数: ${lastRowCount}（滚前 ${prevRows}）`);
 
       const reachedBottom =
         scrollEl.scrollTop === prevTop ||
         scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 10;
-      if (reachedBottom) { info('已到达底部'); break; }
+      if (reachedBottom) {
+        info('已到达底部，再做一轮采集以防漏掉最后几行');
+        // 对底部可见行再跑一次完整的 hover 采集
+        const bottomSpans = Array.from(document.querySelectorAll('span'))
+          .filter(el => el.textContent.trim() === LOGISTICS_TEXT && !!el.closest('tr'));
+        for (const span of bottomSpans) {
+          const tr      = span.closest('tr');
+          const orderNo = getOrderNo(tr);
+          if (!orderNo || processed.has(orderNo)) continue;
+          try { span.scrollIntoView({ block: 'center', behavior: 'auto' }); } catch(e) {}
+          await sleep(120);
+          await dismissPopover();
+          await waitUntilPopoverGone();
+          hoverSpan(span);
+          const popoverText = await readPopoverStable(HOVER_WAIT + 250);
+          leaveSpan(span);
+          await dismissPopover();
+          await waitUntilPopoverGone();
+          processed.add(orderNo);
+          if (!popoverText) {
+            if (!resultsByOrder.has(orderNo)) { warn(`无 Popover: ${orderNo}`); skipped.push(orderNo); }
+            continue;
+          }
+          const lg = parseLogistics(popoverText);
+          resultsByOrder.set(orderNo, { orderNo, ...lg });
+          info(`✅ ${orderNo}  ${lg.carrier}  ${lg.trackNo}  节点${lg.allStatuses.length}条`);
+        }
+        break;
+      }
     }
 
     const results = Array.from(resultsByOrder.values());
