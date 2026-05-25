@@ -15,6 +15,7 @@ from .feishu_routes import bp as feishu_bp
 from .order_1688_routes import bp as order_1688_bp
 from .websocket_routes import bp as websocket_bp
 from .scheduler_routes import bp as scheduler_bp
+from .taobao_routes import bp as taobao_bp
 
 from utils.logger import get_logger
 
@@ -38,6 +39,7 @@ SWAGGER_TEMPLATE = {
         {'name': '1688订单', 'description': '1688 订单提取与飞书同步'},
         {'name': 'WebSocket', 'description': 'Socket.IO 客户端连接与配置'},
         {'name': '定时任务', 'description': '定时任务列表与手动触发'},
+        {'name': '淘宝', 'description': '淘宝商品数据本地保存'},
     ],
 }
 SWAGGER_CONFIG = {
@@ -85,6 +87,7 @@ def register_routes(app, browser_pool):
     app.register_blueprint(order_1688_bp)
     app.register_blueprint(websocket_bp)
     app.register_blueprint(scheduler_bp)
+    app.register_blueprint(taobao_bp)
 
     # 全局错误处理（注册在 app 上）
     @app.errorhandler(404)

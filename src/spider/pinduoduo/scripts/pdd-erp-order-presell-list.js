@@ -4,6 +4,7 @@
  *
  * 返回 **`orders` 为数组**（每项一条订单），主订单号字段 **`orderNo`** = 平台订单号（如 260513-181749727613319）。
  * 另含 **`erpOrderNo`**（ERP 订单编号，FH…，来自「订单编号/操作」列首行）。
+ * 另含 **`留言备注`**（买家留言/备注，无则为空串；优先按列索引取，兜底正则匹配行文本）。
  *
  * 「发货剩余/支付时间」列：
  * - **`发货剩余支付时间`**：单元格原文（含动态「X天X时…后超时揽收」等，仅备查）。
@@ -59,6 +60,22 @@
 
   const log = [];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const dbg = (msg) => { console.log('[pdd-presell]', msg); };
+
+  /**
+   * 清洗留言备注文本：
+   *  - "添加"            → 空（单元格无备注时的按钮文字）
+   *  - "X条备注修改/添加" → 去掉该行，保留后续真实内容（UI 状态前缀）
+   */
+  function cleanRemark(raw) {
+    if (!raw) return '';
+    // 去掉每行开头/整行为"X条备注(修改|添加)"的 UI 状态行
+    const lines = raw
+      .split(/\r?\n/)
+      .map(l => l.trim())
+      .filter(l => l && l !== '添加' && !/^\d+条备注(修改|添加)?$/.test(l));
+    return lines.join('\n').trim();
+  }
 
   function findColIndex(headers, needle) {
     const compactNeedle = String(needle || '').replace(/\s/g, '');
@@ -329,10 +346,17 @@
     let idxShipPay = findColIndex(headers, '发货剩余');
     if (idxShipPay < 0) idxShipPay = findColIndex(headers, '支付时间');
     const idxOp = findColIndex(headers, '订单编号');
+    // 留言备注列（可能叫"留言备注"/"买家留言"/"备注"，按优先级依次尝试）
+    let idxRemark = findColIndex(headers, '留言备注');
+    if (idxRemark < 0) idxRemark = findColIndex(headers, '买家留言');
+    if (idxRemark < 0) idxRemark = findColIndex(headers, '备注');
 
     if (idxPlatform < 0) {
       return { error: '表头缺少「平台订单号」', orders: [], headers };
     }
+
+    dbg(`列索引 — 平台订单号:${idxPlatform} 商品规格:${idxSpec} 发货剩余:${idxShipPay} 订单编号:${idxOp} 留言备注:${idxRemark}`);
+    dbg(`当前表头: ${JSON.stringify(headers)}`);
 
     const orders = [];
     for (let ri = 1; ri < trs.length; ri++) {
@@ -360,6 +384,30 @@
         idxShipPay >= 0 ? String(cells[idxShipPay] || '').trim() : '';
       const opCell = idxOp >= 0 ? String(cells[idxOp] || '').trim() : '';
 
+      // 留言备注：优先按列索引取，若未命中则从整行文本兜底匹配
+      let 留言备注 = '';
+      if (idxRemark >= 0 && cells[idxRemark] != null) {
+        const raw = String(cells[idxRemark] || '').trim();
+        // "添加" 是操作按钮文字；"X条备注修改/添加" 是 UI 状态行，均不是真实内容
+        留言备注 = cleanRemark(raw);
+      }
+      if (!留言备注) {
+        // 兜底：从整行原始文本里正则匹配（兼容无独立列但文本混排的情况）
+        const rowText = tds.map(c => (c.innerText || '')).join('\n');
+        const rm = rowText.match(/留言备注[：:]\s*([^\n\r]{1,200})/);
+        if (rm) {
+          const fallback = rm[1].trim();
+          const stopIdx = fallback.search(/订单编号|平台订单号|商品规格|支付时间|发货/);
+          const candidate = (stopIdx > 0 ? fallback.slice(0, stopIdx) : fallback).trim();
+          留言备注 = cleanRemark(candidate);
+        }
+      }
+
+      if (留言备注) {
+        dbg(`📝 留言备注 [${orderNo}]: "${留言备注}"`);
+        log.push(`留言备注 [${orderNo}]: "${留言备注}"`);
+      }
+
       const shipPay = parseShipRemainAndPayTime(shipPayRaw);
       const 支付时间 = formatFeishuDateTime(shipPay.payForFormat);
       const 支付时间原文 = extractPayTimeRaw(shipPay.payForFormat);
@@ -367,6 +415,7 @@
       const row = {
         orderNo,
         erpOrderNo: parseErpOrderNo(opCell),
+        留言备注,
         图片,
         图片列表,
         goods,

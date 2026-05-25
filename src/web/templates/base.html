@@ -86,14 +86,17 @@
                     <span class="nav-text">首页</span>
                 </a>
                 {% for tool in tools %}
+                {% if tool.name != 'pinduoduo' %}
                 <a href="{{ url_for('tool_page', tool_name=tool.name) }}" 
                    class="nav-item {% if request.endpoint == 'tool_page' and request.view_args.get('tool_name') == tool.name %}active{% endif %}">
                     <span class="nav-icon">{{ tool.icon or '🔧' }}</span>
                     <span class="nav-text">{{ tool.display_name }}</span>
                 </a>
+                {% endif %}
                 {% endfor %}
-                {% set _ec_endpoints = ['ecommerce_order', 'ecommerce_after_sale', 'ecommerce_delivering_print'] %}
-                {% set _ec_active = request.endpoint in _ec_endpoints %}
+                {% set _ec_endpoints = ['ecommerce_order', 'ecommerce_presell', 'ecommerce_after_sale', 'ecommerce_delivering_print'] %}
+                {% set _ec_tool_active = request.endpoint == 'tool_page' and request.view_args.get('tool_name') == 'pinduoduo' %}
+                {% set _ec_active = request.endpoint in _ec_endpoints or _ec_tool_active %}
                 <div class="nav-group {% if _ec_active %}open{% endif %}" id="nav-group-ecommerce">
                     <div class="nav-group-header" onclick="toggleNavGroup('nav-group-ecommerce')">
                         <span class="nav-icon">🛒</span>
@@ -101,10 +104,20 @@
                         <span class="nav-arrow">›</span>
                     </div>
                     <div class="nav-group-children">
+                        <a href="{{ url_for('tool_page', tool_name='pinduoduo') }}"
+                           class="nav-item nav-child {% if _ec_tool_active %}active{% endif %}">
+                            <span class="nav-icon">🛒</span>
+                            <span class="nav-text">订单助手</span>
+                        </a>
                         <a href="{{ url_for('ecommerce_order') }}"
                            class="nav-item nav-child {% if request.endpoint == 'ecommerce_order' %}active{% endif %}">
                             <span class="nav-icon">📋</span>
-                            <span class="nav-text">订单助手</span>
+                            <span class="nav-text">订单同步</span>
+                        </a>
+                        <a href="{{ url_for('ecommerce_presell') }}"
+                           class="nav-item nav-child {% if request.endpoint == 'ecommerce_presell' %}active{% endif %}">
+                            <span class="nav-icon">🏷️</span>
+                            <span class="nav-text">预售订单</span>
                         </a>
                         <a href="{{ url_for('ecommerce_delivering_print') }}"
                            class="nav-item nav-child {% if request.endpoint == 'ecommerce_delivering_print' %}active{% endif %}">
@@ -115,22 +128,6 @@
                            class="nav-item nav-child {% if request.endpoint == 'ecommerce_after_sale' %}active{% endif %}">
                             <span class="nav-icon">↩️</span>
                             <span class="nav-text">退货订单</span>
-                        </a>
-                    </div>
-                </div>
-                {% set _goods_endpoints = ['goods_presell'] %}
-                {% set _goods_active = request.endpoint in _goods_endpoints %}
-                <div class="nav-group {% if _goods_active %}open{% endif %}" id="nav-group-goods">
-                    <div class="nav-group-header" onclick="toggleNavGroup('nav-group-goods')">
-                        <span class="nav-icon">📦</span>
-                        <span class="nav-text">商品</span>
-                        <span class="nav-arrow">›</span>
-                    </div>
-                    <div class="nav-group-children">
-                        <a href="{{ url_for('goods_presell') }}"
-                           class="nav-item nav-child {% if request.endpoint == 'goods_presell' %}active{% endif %}">
-                            <span class="nav-icon">🏷️</span>
-                            <span class="nav-text">预售订单</span>
                         </a>
                     </div>
                 </div>

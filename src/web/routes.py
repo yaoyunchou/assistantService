@@ -121,6 +121,12 @@ def register_web_routes(app, tool_manager: ToolManager):
         tools_info = tool_manager.get_tools_info()
         return render_template('pinduoduo_erp_order_sync.html', tools=tools_info, config=Config)
 
+    @app.route('/ecommerce/presell')
+    def ecommerce_presell():
+        """电商 · 预售订单（ERP 预售 → 飞书）"""
+        tools_info = tool_manager.get_tools_info()
+        return render_template('pinduoduo_erp_presell.html', tools=tools_info, config=Config)
+
     @app.route('/ecommerce/after-sale')
     def ecommerce_after_sale():
         """电商 · 退货订单（ERP 售后 → 飞书）"""
@@ -132,13 +138,6 @@ def register_web_routes(app, tool_manager: ToolManager):
         """电商 · 待发货打印（ERP 待发货 → 打印）"""
         tools_info = tool_manager.get_tools_info()
         return render_template('pinduoduo_erp_delivering_print.html', tools=tools_info, config=Config)
-
-    # ── 商品模块（父路径 /goods/）────────────────────────────────
-    @app.route('/goods/presell')
-    def goods_presell():
-        """商品 · 预售订单（ERP 预售 → 飞书）"""
-        tools_info = tool_manager.get_tools_info()
-        return render_template('pinduoduo_erp_presell.html', tools=tools_info, config=Config)
 
     # 旧路径 301 重定向（向后兼容）
     @app.route('/pdd-erp-order-sync')
@@ -152,6 +151,10 @@ def register_web_routes(app, tool_manager: ToolManager):
     @app.route('/pdd-erp-delivering-print')
     def pinduoduo_erp_delivering_print():
         return redirect(url_for('ecommerce_delivering_print'), code=301)
+
+    @app.route('/goods/presell')
+    def goods_presell():
+        return redirect(url_for('ecommerce_presell'), code=301)
 
     @app.route('/websocket')
     def websocket_page():
