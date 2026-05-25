@@ -42,3 +42,6 @@ tomli-w>=1.0.0
 
 # Excel 读写
 openpyxl>=3.1.0
+
+# 浏览器反检测（伪装 webdriver、plugins、Canvas、WebGL 等 20+ 指纹检测点）
+playwright-stealth>=2.0.3

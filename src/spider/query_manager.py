@@ -14,6 +14,7 @@
 - 就像你平时用浏览器一样：始终在同一个标签页操作
 """
 from playwright.sync_api import sync_playwright, BrowserContext, Page, Playwright
+from playwright_stealth import Stealth
 from typing import Dict, Optional, Callable, TypeVar, Any
 from pathlib import Path
 from utils.path_helper import get_browser_data_dir
@@ -116,11 +117,7 @@ class BrowserPool:
             'args': [
                 '--disable-blink-features=AutomationControlled',
                 '--disable-dev-shm-usage',
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-web-security',
                 '--disable-features=VizDisplayCompositor',
-                '--disable-site-isolation-trials',
                 '--disable-infobars',
                 '--disable-notifications',
                 '--disable-popup-blocking',
@@ -134,9 +131,13 @@ class BrowserPool:
         return args
 
     def _setup_context(self, context: BrowserContext) -> None:
+        # playwright-stealth v2.x：覆盖 20+ 检测点（webdriver、plugins、chrome 对象、Canvas、WebGL 等）
+        Stealth().apply_stealth_sync(context)
+        # 额外清理 CDP 注入的全局属性（stealth 未覆盖）
         context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+            delete window.__playwright;
+            delete window.__pw_manual;
+            delete window.__chromium_automation;
         """)
 
     def _is_context_alive(self) -> bool:
