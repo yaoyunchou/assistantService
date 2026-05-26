@@ -6,9 +6,14 @@
 import sys
 from pathlib import Path
 
-# 获取 config.py 的路径（父目录）
-_parent_dir = Path(__file__).parent.parent
-_config_py_path = _parent_dir / 'config.py'
+# 获取 config.py 的路径
+# PyInstaller onedir 模式下数据文件在 sys._MEIPASS（即 _internal/）；
+# 开发环境下在 src/ 的上级目录（config/__init__.py → config/ → src/）
+if getattr(sys, 'frozen', False):
+    _config_py_path = Path(sys._MEIPASS) / 'config.py'
+else:
+    _parent_dir = Path(__file__).parent.parent
+    _config_py_path = _parent_dir / 'config.py'
 
 # 动态导入 config.py 中的内容
 if _config_py_path.exists():

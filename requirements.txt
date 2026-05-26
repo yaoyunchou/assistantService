@@ -4,8 +4,8 @@ flask>=2.3.0
 # API 文档 (Swagger UI)
 flasgger>=0.9.7
 
-# 浏览器自动化
-playwright>=1.40.0
+# 浏览器自动化（1.59.0 对应 chromium-1217，固定版本避免升级后与 playwright_drivers 不匹配）
+playwright==1.59.0
 
 # HTTP请求
 requests>=2.31.0

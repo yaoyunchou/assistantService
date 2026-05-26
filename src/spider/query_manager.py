@@ -117,6 +117,10 @@ class BrowserPool:
             'args': [
                 '--disable-blink-features=AutomationControlled',
                 '--disable-dev-shm-usage',
+                '--no-sandbox',           # Windows 环境 Chromium 沙箱初始化需要，去掉会导致启动崩溃
+                '--disable-setuid-sandbox',
+                '--disable-web-security',          # PDD ERP CDN 的 CORS 预检会返回非 200，需要绕过
+                '--disable-site-isolation-trials', # 配合 web-security 关闭，避免跨域 iframe 报错
                 '--disable-features=VizDisplayCompositor',
                 '--disable-infobars',
                 '--disable-notifications',

@@ -133,6 +133,8 @@ a = Analysis(
         (str(project_root / 'scheduler' / 'tasks.toml'), 'scheduler'),
         # Playwright 注入脚本（erp_order_sync / order_address_sync 通过 __file__ 引用）
         (str(src_dir / 'spider' / 'pinduoduo' / 'scripts'), 'spider/pinduoduo/scripts'),
+        # playwright-stealth 运行时读取的 JS 资源文件（打包时必须包含，否则启动报 FileNotFoundError）
+        (str(project_root / '.venv' / 'Lib' / 'site-packages' / 'playwright_stealth' / 'js'), 'playwright_stealth/js'),
         # Web模板文件
         (str(src_dir / 'web' / 'templates'), 'web/templates'),
         # 静态资源文件
@@ -148,6 +150,8 @@ a = Analysis(
         'flask',
         'playwright',
         'playwright.sync_api',
+        'playwright_stealth',
+        'playwright_stealth.stealth',
         'spider.logistics_query',
         'spider.query_manager',
         'spider.waybill_extractor',
@@ -267,74 +271,99 @@ def copy_dotenv_to_dist():
 
 
 # 打包后处理：自动复制浏览器驱动
+def _get_expected_chromium_revision():
+    """从 playwright 包的 browsers.json 获取当前版本期望的 Chromium revision"""
+    try:
+        import json as _json
+        browsers_json = project_root / '.venv' / 'Lib' / 'site-packages' / 'playwright' / 'driver' / 'package' / 'browsers.json'
+        if browsers_json.exists():
+            data = _json.loads(browsers_json.read_text(encoding='utf-8'))
+            for b in data.get('browsers', []):
+                if b.get('name') == 'chromium':
+                    return str(b['revision'])
+    except Exception:
+        pass
+    return None
+
+
+def _pick_best_chromium(search_dirs):
+    """
+    从多个候选目录中选出与 playwright 期望 revision 最匹配的 chromium 目录。
+    优先：精确匹配 revision；其次：revision 号最大。
+    """
+    expected = _get_expected_chromium_revision()
+    if expected:
+        print(f"playwright 期望 Chromium revision: {expected}")
+
+    candidates = []
+    for base in search_dirs:
+        if not base.exists():
+            continue
+        for d in base.glob('chromium-*'):
+            candidates.append(d)
+
+    if not candidates:
+        return None
+
+    if expected:
+        exact = [d for d in candidates if d.name == f'chromium-{expected}']
+        if exact:
+            return exact[0]
+
+    # 取 revision 号最大的
+    def _rev(p):
+        try:
+            return int(p.name.split('-', 1)[1])
+        except (IndexError, ValueError):
+            return 0
+
+    best = max(candidates, key=_rev)
+    if expected:
+        print(f"[警告] 未找到 chromium-{expected}，使用 {best.name}（版本不匹配可能导致崩溃）")
+    return best
+
+
 def copy_playwright_drivers():
     """复制 Playwright 浏览器驱动到打包目录"""
     print("\n" + "="*60)
     print("正在复制 Playwright 浏览器驱动...")
     print("="*60)
-    
-    # 打包输出目录
+
     dist_dir = project_root / 'dist' / APP_NAME
     playwright_drivers_dir = dist_dir / 'playwright_drivers'
-    
-    # 查找浏览器驱动源位置
-    sources = []
-    
-    # 方法1：查找系统安装的 Playwright 浏览器驱动
-    user_home = Path.home()
-    system_playwright = user_home / 'AppData' / 'Local' / 'ms-playwright'
-    if system_playwright.exists():
-        chromium_dirs = list(system_playwright.glob('chromium-*'))
-        if chromium_dirs:
-            sources.append(chromium_dirs[0])
-            print(f"找到系统浏览器驱动: {chromium_dirs[0]}")
-    
-    # 方法2：查找项目目录下的 playwright_drivers
-    project_playwright = project_root / 'playwright_drivers'
-    if project_playwright.exists():
-        chromium_dirs = list(project_playwright.glob('chromium-*'))
-        if chromium_dirs:
-            sources.append(chromium_dirs[0])
-            print(f"找到项目浏览器驱动: {chromium_dirs[0]}")
-    
-    # 方法3：查找虚拟环境中的 Playwright 浏览器驱动
-    venv_playwright = project_root / 'venv' / 'Lib' / 'site-packages' / 'playwright' / 'driver' / 'package' / '.local-browsers'
-    if venv_playwright.exists():
-        chromium_dirs = list(venv_playwright.glob('chromium-*'))
-        if chromium_dirs:
-            sources.append(chromium_dirs[0])
-            print(f"找到虚拟环境浏览器驱动: {chromium_dirs[0]}")
-    
-    # 复制浏览器驱动
-    if sources:
-        source_dir = sources[0]  # 使用第一个找到的
-        target_dir = playwright_drivers_dir / source_dir.name
-        
-        try:
-            # 创建目标目录
-            playwright_drivers_dir.mkdir(parents=True, exist_ok=True)
-            
-            # 如果目标目录已存在，先删除
-            if target_dir.exists():
-                print(f"删除已存在的目录: {target_dir}")
-                shutil.rmtree(target_dir)
-            
-            # 复制整个 chromium 目录
-            print(f"正在复制: {source_dir} -> {target_dir}")
-            shutil.copytree(source_dir, target_dir)
-            
-            print(f"✓ 浏览器驱动复制成功！")
-            print(f"  源目录: {source_dir}")
-            print(f"  目标目录: {target_dir}")
-            print("="*60 + "\n")
-            return True
-        except Exception as e:
-            print(f"✗ 复制浏览器驱动失败: {e}")
-            print("="*60 + "\n")
-            return False
-    else:
-        print("✗ 未找到 Playwright 浏览器驱动")
-        print("请先运行: venv\\Scripts\\python.exe -m playwright install chromium")
+
+    # 搜索顺序：项目 playwright_drivers 优先，其次系统目录，最后 venv 内
+    search_dirs = [
+        project_root / 'playwright_drivers',
+        Path.home() / 'AppData' / 'Local' / 'ms-playwright',
+        project_root / 'venv' / 'Lib' / 'site-packages' / 'playwright' / 'driver' / 'package' / '.local-browsers',
+        project_root / '.venv' / 'Lib' / 'site-packages' / 'playwright' / 'driver' / 'package' / '.local-browsers',
+    ]
+
+    for d in search_dirs:
+        if d.exists():
+            print(f"搜索目录: {d}")
+
+    source_dir = _pick_best_chromium(search_dirs)
+    if not source_dir:
+        print("未找到 Playwright 浏览器驱动")
+        print("请先运行: .venv\\Scripts\\playwright install chromium")
+        print("="*60 + "\n")
+        return False
+
+    target_dir = playwright_drivers_dir / source_dir.name
+    try:
+        playwright_drivers_dir.mkdir(parents=True, exist_ok=True)
+        if target_dir.exists():
+            print(f"删除已存在的目录: {target_dir}")
+            shutil.rmtree(target_dir)
+        print(f"正在复制: {source_dir} -> {target_dir}")
+        shutil.copytree(source_dir, target_dir)
+        print(f"浏览器驱动复制成功: {source_dir.name}")
+        print("="*60 + "\n")
+        return True
+    except Exception as e:
+        print(f"复制浏览器驱动失败: {e}")
         print("="*60 + "\n")
         return False
 
