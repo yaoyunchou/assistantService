@@ -1,5 +1,33 @@
 # 变更日志
 
+## 2026-06-03 - 安特限时秒杀：入库 API + SQLite
+
+- **`src/api/routes/antexiadan_routes.py`**：`POST /api/antexiadan/seckill-list/sync`、`GET .../products`、`GET .../batch/latest`。
+- **`src/spider/antexiadan/seckill_store.py`**：批次表 + 商品 UPSERT + 可选快照；默认 `data/antexiadan_seckill.sqlite`。
+- **`docs/webauto脚本文档/antexiadan-限时秒杀列表.md`**、**`docs/sql/antexiadan-seckill-db-schema.mysql.sql`**。
+- 与 webAuto `antexiadan-seckill-list.js` / `antexiadan-seckill-fetch.py` 联动。
+
+## 2026-05-27 - 预售订单脚本：自动筛选付款时间近30天
+
+- **`src/spider/pinduoduo/scripts/pdd-erp-order-presell-list.js`**：
+  - 新增筛选表单自动操作逻辑（仿 `pdd-erp-order-delivered-query.js`），在解析表格前先操控 ERP 筛选栏：
+    1. 等待 `#timeType` / `#timeRange` 表单加载（最多 12s）
+    2. 选择「时间类型」= **付款时间**（可通过 `window.__PDD_ERP_PRESELL_TIME_TYPE` 覆盖）
+    3. 点击日期快捷按钮 = **近30天**（可通过 `window.__PDD_ERP_PRESELL_DATE_SHORTCUT` 覆盖，如 `'今天'`、`'近7天'`）
+    4. 点击「查询」按钮并等待结果表格出现
+  - 新增 `window.__PDD_ERP_PRESELL_SKIP_FILTER = true` 开关：为 `true` 时跳过表单操作、直接解析当前页（兼容旧用法）
+  - 新增 `selectOption` 内部工具函数（与 delivered 脚本保持一致的 beast-core-select 操作方式）
+  - 新增 `normOpt` / `SCHEMA_PLACEHOLDER` 防止 OpenAPI 传入类型占位符导致配置错误
+
+---
+
+## 2026-05-27 - 开发/生产浏览器 Profile 隔离
+
+- **`src/utils/path_helper.py` → `get_browser_data_dir()`**：按 `APP_ENV` 区分目录——生产 `browser_data`，开发 `browser_data_dev`。修复 dev.py（8886）与 main/打包版（8887）同时运行时共用 `%LOCALAPPDATA%\如意助手\browser_data` 导致 Chromium profile 锁互抢、登录态被踢的问题。
+- 开发环境首次使用需在 dev 浏览器里重新登录各平台；生产登录态不变。
+
+---
+
 ## 2026-04-20 - 修复 app_config.toml 永远读不到的循环导入 Bug
 
 **根本原因**：`src/config/` 是 Python 包，`src/config.py` 是模块，包优先级高于模块，PyInstaller 打包后 `_internal/` 下同时存在两者。`config/__init__.py` 用 `exec_module` 动态加载 `config.py`，但 `config.py` 底部的 `_load_config_from_file()` 会导入 `utils.config_manager`，而 `config_manager.py` 的**模块级** `from config import Config` 在 `config` 包还未完成初始化时执行，引发 `ImportError`，被 `except: pass` 静默吞掉，toml 配置永远无法加载，ws_client_host 等字段始终保持代码默认值（localhost:8080）。
@@ -4314,3 +4342,24 @@ kuaidi/
     - 多个映射名称 → 按套装逻辑生成多条日志行
     - 未配置映射 → 走原有 AI 匹配流程
   - 返回值和日志增加 `mapping_hit` / `mapping_skip` 统计
+
+---
+
+## 2026-05-26 - 淘宝商品采集接口同步升级（SKU价格 + 规格结构）
+
+### 功能增强（2026-05-26）
+
+**变更原因**:
+- `docs/webauto脚本文档/taobao-商品信息采集.md` 同步了最新采集脚本（2026-05-26）
+- 采集脚本新增 `skus` 字段（SKU精确价格列表），`specs.values` 改为对象数组（含 `text/img/vid/empty/price`）
+- 原接口不支持 `skus` 字段保存，规格 Sheet 也缺少新增的价格/图片/vid/缺货列
+
+**修改文件**:
+- `src/api/routes/taobao_routes.py`
+  - 模块注释更新：单品 Excel 从「四个 Sheet」改为「五个 Sheet（含 SKU价格）」
+  - `SUMMARY_HEADERS`：`规格数` 改为 `规格值数`（与文档对齐）
+  - `_write_product_excel`：
+    - Sheet 2 规格：表头扩展为 `规格标签 / 规格值 / 价格 / 图片URL / vid / 缺货`，兼容旧格式（字符串）和新格式（对象）
+    - 新增 Sheet 3 SKU价格：`skuId / 规格组合 / 价格 / 缺货`，来自 `skus` 字段
+    - Sheet 编号顺序后移：参数→Sheet4，图片→Sheet5
+  - Swagger 文档：新增 `skus` 参数描述，更新 `specs` 描述

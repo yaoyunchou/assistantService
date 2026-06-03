@@ -191,6 +191,8 @@ class Config:
     ).strip()
     # 可选：SQLite 绝对路径；留空则用 get_safe_data_path('data/pdd_erp_audit.sqlite')
     PINDUODUO_ERP_AUDIT_DB_PATH = (os.getenv('PINDUODUO_ERP_AUDIT_DB_PATH') or '').strip()
+    # 安特限时秒杀 SQLite；留空则用 data/antexiadan_seckill.sqlite
+    ANTEXIADAN_SECKILL_DB_PATH = (os.getenv('ANTEXIADAN_SECKILL_DB_PATH') or '').strip()
     # 库存同步：ERP 全部店铺表 → 库存信息表 + 扣减日志表（定时任务 inventory_sync_job）
     # 库存信息表 / 扣减日志表均有默认 table_id，可用环境变量覆盖（与你们飞书实际表不一致时请改 .env）
     PINDUODUO_FEISHU_INVENTORY_INFO_TABLE_ID = os.getenv(

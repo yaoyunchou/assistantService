@@ -21,6 +21,11 @@
  *   - `'extension'`（默认）：若设置了 `window.__PDD_ERP_PRESELL_SYNC_URL`，经扩展桥 `postMessage` POST `{ orders }`；
  *   - `'python'` / `'py'`：不 POST；返回 `syncBody` + `syncUrl`。
  *
+ * 筛选配置（window 上提前设置）：
+ *   - `window.__PDD_ERP_PRESELL_TIME_TYPE`：时间类型，默认 '付款时间'
+ *   - `window.__PDD_ERP_PRESELL_DATE_SHORTCUT`：快捷日期，默认 '近30天'（可选 '今天'|'昨天'|'近7天' 等）
+ *   - `window.__PDD_ERP_PRESELL_SKIP_FILTER`：为 true 时跳过表单筛选，直接解析当前页（兼容旧用法）
+ *
  * 可选：`window.__PDD_ERP_PRESELL_AUTO_SCROLL`（默认 `false`）为 `true` 时，对 `.page-inner-content` 滚动并多次合并，按 `orderNo` 去重（虚拟表或超长列表）。
  * 可调：`__PDD_ERP_PRESELL_SCROLL_STEP`、`__PDD_ERP_PRESELL_SCROLL_PAUSE_MS`、`__PDD_ERP_PRESELL_SCROLL_MAX_STEPS`、`__PDD_ERP_PRESELL_RESTORE_SCROLL`。
  *
@@ -61,6 +66,53 @@
   const log = [];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const dbg = (msg) => { console.log('[pdd-presell]', msg); };
+
+  /* ─── 筛选配置 ─── */
+  const SCHEMA_PLACEHOLDER = new Set(['string', 'number', 'integer', 'boolean', 'object', 'array']);
+  function normOpt(v) {
+    if (v === undefined || v === null) return undefined;
+    const s = String(v).trim();
+    if (!s || SCHEMA_PLACEHOLDER.has(s)) return undefined;
+    return s;
+  }
+
+  const DEFAULT_TIME_TYPE = '付款时间';
+  const DEFAULT_DATE_SHORTCUT = '近30天';
+  const timeType = normOpt(window.__PDD_ERP_PRESELL_TIME_TYPE) || DEFAULT_TIME_TYPE;
+  const dateShortcut = normOpt(window.__PDD_ERP_PRESELL_DATE_SHORTCUT) || DEFAULT_DATE_SHORTCUT;
+  const skipFilter = window.__PDD_ERP_PRESELL_SKIP_FILTER === true;
+
+  log.push(`[配置] timeType=${timeType} dateShortcut=${dateShortcut} skipFilter=${skipFilter}`);
+
+  /** 打开 beast-core-select 并选中指定文本的选项 */
+  async function selectOption(formItemId, optionText) {
+    const container = document.querySelector(`#${formItemId} [data-testid="beast-core-select"]`);
+    if (!container) return { ok: false, reason: `#${formItemId} select not found` };
+    const header = container.querySelector('[data-testid="beast-core-select-header"]');
+    if (!header) return { ok: false, reason: 'no header' };
+
+    const currentInput = container.querySelector('input');
+    if (currentInput && currentInput.value === optionText) {
+      return { ok: true, skipped: true };
+    }
+
+    header.click();
+    await sleep(500);
+
+    const option = [...document.querySelectorAll(
+      '[class*="dropdown"] li, [class*="Dropdown"] li, [class*="ST_"] li, [class*="popup"] li'
+    )].filter((el) => el.offsetParent !== null).find((el) => el.innerText.trim() === optionText);
+
+    if (!option) {
+      header.click();
+      await sleep(200);
+      return { ok: false, reason: `option "${optionText}" not found` };
+    }
+    option.click();
+    await sleep(300);
+    const newVal = container.querySelector('input');
+    return { ok: true, newValue: newVal ? newVal.value : '' };
+  }
 
   /**
    * 清洗留言备注文本：
@@ -499,6 +551,64 @@
     if (restoreScroll && scrollEl) scrollEl.scrollTop = startTop;
 
     return { orders: Array.from(merged.values()) };
+  }
+
+  /* ─── 筛选表单操作（skipFilter=true 时跳过） ─── */
+  if (!skipFilter) {
+    /* Step F1: 等待表单加载 */
+    const tForm = Date.now();
+    while (Date.now() - tForm < 12000) {
+      if (document.querySelector('#timeType') && document.querySelector('#timeRange')) break;
+      await sleep(400);
+    }
+    if (!document.querySelector('#timeType')) {
+      return { ok: false, error: '筛选表单超时未加载（#timeType 未找到）', log };
+    }
+    log.push(`[FilterF1] 表单加载完成，耗时 ${Date.now() - tForm}ms`);
+
+    /* Step F2: 选择时间类型 */
+    const timeTypeResult = await selectOption('timeType', timeType);
+    log.push(`[FilterF2] 时间类型 → "${timeType}"：${JSON.stringify(timeTypeResult)}`);
+    if (!timeTypeResult.ok) {
+      return { ok: false, error: `时间类型选择失败：${timeTypeResult.reason}`, log };
+    }
+
+    /* Step F3: 点击日期快捷按钮 */
+    const rangeInput = document.querySelector('#timeRange [data-testid="beast-core-rangePicker-htmlInput"]');
+    if (!rangeInput) return { ok: false, error: '未找到日期范围输入框（#timeRange）', log };
+
+    rangeInput.click();
+    await sleep(500);
+
+    const shortcutBtn = [...document.querySelectorAll('button')]
+      .find((b) => b.offsetParent !== null && b.innerText.trim() === dateShortcut && b.className.includes('RPR_'));
+    if (!shortcutBtn) {
+      const allShortcuts = [...document.querySelectorAll('button')]
+        .filter((b) => b.offsetParent !== null && b.className.includes('RPR_'))
+        .map((b) => b.innerText.trim());
+      log.push(`[FilterF3] 快捷按钮列表：${JSON.stringify(allShortcuts)}`);
+      return { ok: false, error: `未找到「${dateShortcut}」快捷按钮`, log };
+    }
+    shortcutBtn.click();
+    await sleep(400);
+    log.push(`[FilterF3] 日期范围 → "${rangeInput.value}"`);
+
+    /* Step F4: 点击查询 */
+    const queryBtn = [...document.querySelectorAll('button')]
+      .find((b) => b.offsetParent !== null && b.textContent.trim() === '查询' && !b.disabled);
+    if (!queryBtn) return { ok: false, error: '未找到查询按钮', log };
+
+    queryBtn.click();
+    await sleep(2000);
+    log.push(`[FilterF4] 已点击查询，等待结果加载`);
+
+    /* Step F5: 等待表格出现 */
+    const tWait = Date.now();
+    while (Date.now() - tWait < 10000) {
+      if (document.querySelector(TABLE_SEL)) break;
+      await sleep(300);
+    }
+    log.push(`[FilterF5] 表格 ${document.querySelector(TABLE_SEL) ? '已出现' : '超时未出现'}，等待耗时 ${Date.now() - tWait}ms`);
   }
 
   const { orders, error } = await collectOrdersWithOptionalScroll();

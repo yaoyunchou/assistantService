@@ -27,7 +27,11 @@ SUMMARY_EXCEL = SAVE_ROOT / '淘宝商品汇总.xlsx'
 SUMMARY_MD = SAVE_ROOT / 'README.md'
 
 # 汇总 Excel 列头
-SUMMARY_HEADERS = ['商品标题', '价格', '已售', '规格数', '参数数', '图片数', '本地目录', '商品URL', '采集时间']
+SUMMARY_HEADERS = [
+    '商品标题', '价格', '已售', '规格数', '参数数', '图片数',
+    '本地目录', '商品URL', '采集时间',
+    '上架店铺', '上架时间', '上架链接',
+]
 
 
 def _safe_dirname(title: str) -> str:
@@ -122,7 +126,7 @@ def _write_product_excel(product_dir: Path, data: dict, img_results: list):
 
     # ── Sheet 2：规格 ───────────────────────────────────────────
     ws2 = wb.create_sheet('规格')
-    headers2 = ['规格标签', '规格值']
+    headers2 = ['规格标签', '规格值', '价格', '图片URL', 'vid', '缺货']
     for col, h in enumerate(headers2, 1):
         c = ws2.cell(row=1, column=col, value=h)
         style_header(c)
@@ -130,14 +134,44 @@ def _write_product_excel(product_dir: Path, data: dict, img_results: list):
     for spec in data.get('specs', []):
         label = spec.get('label', '')
         for val in spec.get('values', []):
+            # 兼容旧格式（字符串）和新格式（对象）
+            if isinstance(val, dict):
+                text  = val.get('text', '')
+                price = val.get('price') or ''
+                img   = val.get('img') or ''
+                vid   = val.get('vid') or ''
+                empty = '缺货' if val.get('empty') else ''
+            else:
+                text = str(val)
+                price = img = vid = empty = ''
             ws2.cell(row=row2, column=1, value=label).border = BORDER
-            ws2.cell(row=row2, column=2, value=val).border = BORDER
+            ws2.cell(row=row2, column=2, value=text).border  = BORDER
+            ws2.cell(row=row2, column=3, value=price).border = BORDER
+            ws2.cell(row=row2, column=4, value=img).border   = BORDER
+            ws2.cell(row=row2, column=5, value=vid).border   = BORDER
+            ws2.cell(row=row2, column=6, value=empty).border = BORDER
             row2 += 1
     if row2 == 2:
         ws2.cell(row=2, column=1, value='（无规格数据）').border = BORDER
     auto_width(ws2)
 
-    # ── Sheet 3：参数 ───────────────────────────────────────────
+    # ── Sheet 3：SKU价格 ─────────────────────────────────────────
+    ws_sku = wb.create_sheet('SKU价格')
+    headers_sku = ['skuId', '规格组合', '价格', '缺货']
+    for col, h in enumerate(headers_sku, 1):
+        c = ws_sku.cell(row=1, column=col, value=h)
+        style_header(c)
+    skus = data.get('skus', [])
+    for r, sku in enumerate(skus, 2):
+        ws_sku.cell(row=r, column=1, value=sku.get('skuId') or '').border  = BORDER
+        ws_sku.cell(row=r, column=2, value=' / '.join(sku.get('names', []))).border = BORDER
+        ws_sku.cell(row=r, column=3, value=sku.get('price') or '').border  = BORDER
+        ws_sku.cell(row=r, column=4, value='缺货' if sku.get('empty') else '').border = BORDER
+    if not skus:
+        ws_sku.cell(row=2, column=1, value='（无SKU数据）').border = BORDER
+    auto_width(ws_sku)
+
+    # ── Sheet 4：参数 ───────────────────────────────────────────
     ws3 = wb.create_sheet('参数')
     headers3 = ['参数名', '参数值', '类型']
     for col, h in enumerate(headers3, 1):
@@ -151,7 +185,7 @@ def _write_product_excel(product_dir: Path, data: dict, img_results: list):
         ws3.cell(row=2, column=1, value='（无参数数据）').border = BORDER
     auto_width(ws3)
 
-    # ── Sheet 4：图片 ───────────────────────────────────────────
+    # ── Sheet 5：图片 ───────────────────────────────────────────
     ws4 = wb.create_sheet('图片')
     headers4 = ['序号', '原始URL', '本地文件名', '下载状态']
     for col, h in enumerate(headers4, 1):
@@ -196,6 +230,9 @@ def _update_summary_excel(data: dict, product_dir: Path, img_count: int):
         str(product_dir),
         data.get('url', ''),
         now_str,
+        data.get('shopName', ''),   # 上架店铺（save时为空，mark-uploaded时回填）
+        data.get('uploadTime', ''), # 上架时间
+        data.get('itemUrl', ''),    # 上架链接
     ]
 
     if SUMMARY_EXCEL.exists():
@@ -246,8 +283,7 @@ def _update_summary_md(data: dict, product_dir: Path, img_count: int):
     spec_count = sum(len(s.get('values', [])) for s in data.get('specs', []))
     dir_name = product_dir.name
 
-    # 新行内容
-    # | 商品标题 | 价格 | 已售 | 规格 | 参数 | 图片 | 采集时间 | 商品链接 |
+    # 新行内容（含上架信息占位列）
     new_line = (
         f'| [{title}](./{dir_name}/) '
         f'| {price} '
@@ -256,14 +292,17 @@ def _update_summary_md(data: dict, product_dir: Path, img_count: int):
         f'| {len(data.get("params", []))} '
         f'| {img_count} '
         f'| {now_str} '
-        f'| [链接]({url}) |'
+        f'| [链接]({url}) '
+        f'|  '   # 上架店铺（待回填）
+        f'|  '   # 上架时间（待回填）
+        f'|  |'  # 上架链接（待回填）
     )
 
     md_header = (
         '# 淘宝商品数据汇总\n\n'
         '> 由 webAuto 淘宝助手自动生成，每次保存商品时追加/更新。\n\n'
-        '| 商品标题 | 价格 | 已售 | 规格值数 | 参数数 | 图片数 | 采集时间 | 商品链接 |\n'
-        '|----------|------|------|---------|--------|--------|---------|----------|\n'
+        '| 商品标题 | 价格 | 已售 | 规格值数 | 参数数 | 图片数 | 采集时间 | 商品链接 | 上架店铺 | 上架时间 | 上架链接 |\n'
+        '|----------|------|------|---------|--------|--------|---------|----------|---------|---------|----------|\n'
     )
 
     if SUMMARY_MD.exists():
@@ -303,7 +342,8 @@ def _update_summary_md(data: dict, product_dir: Path, img_count: int):
                 'sold': {'type': 'string', 'description': '已售数量'},
                 'url': {'type': 'string', 'description': '商品页面URL'},
                 'images': {'type': 'array', 'items': {'type': 'string'}, 'description': '图片URL列表'},
-                'specs': {'type': 'array', 'description': '规格列表'},
+                'specs': {'type': 'array', 'description': '规格列表（values 为对象数组，含 text/img/vid/empty/price）'},
+                'skus':  {'type': 'array', 'description': 'SKU价格列表（含 skuId/vids/names/price/empty）'},
                 'params': {'type': 'array', 'description': '参数列表'},
             },
             'required': ['title'],
@@ -361,4 +401,152 @@ def taobao_save_product():
 
     except Exception as e:
         logger.error(f'[保存商品] 异常: {e}', exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+def _backfill_summary_excel(title: str, shop_name: str, item_url: str, upload_time: str) -> bool:
+    """在汇总 Excel 中找到 title 对应行，将上架信息回填到最后三列，返回是否找到并更新。"""
+    if not SUMMARY_EXCEL.exists():
+        return False
+    from openpyxl import load_workbook
+    wb = load_workbook(str(SUMMARY_EXCEL))
+    ws = wb.active
+
+    # 找 '上架店铺' 等列索引（兼容列序）
+    header_row = [c.value for c in ws[1]]
+    try:
+        col_shop   = header_row.index('上架店铺')   + 1
+        col_time   = header_row.index('上架时间')   + 1
+        col_link   = header_row.index('上架链接')   + 1
+    except ValueError:
+        # 列不存在则追加列头
+        next_col = len(header_row) + 1
+        ws.cell(row=1, column=next_col,     value='上架店铺')
+        ws.cell(row=1, column=next_col + 1, value='上架时间')
+        ws.cell(row=1, column=next_col + 2, value='上架链接')
+        col_shop = next_col
+        col_time = next_col + 1
+        col_link = next_col + 2
+
+    found = False
+    for row in ws.iter_rows(min_row=2):
+        if row[0].value == title:
+            ws.cell(row=row[0].row, column=col_shop, value=shop_name)
+            ws.cell(row=row[0].row, column=col_time, value=upload_time)
+            ws.cell(row=row[0].row, column=col_link, value=item_url)
+            found = True
+            logger.info(f'[汇总Excel] 回填上架信息 第{row[0].row}行: {title}')
+            break
+
+    wb.save(str(SUMMARY_EXCEL))
+    return found
+
+
+def _backfill_product_excel(product_dir: Path, shop_name: str, item_url: str, upload_time: str) -> bool:
+    """在单品 Excel 基本信息 Sheet 追加/更新上架信息行。"""
+    excel_path = product_dir / '商品信息.xlsx'
+    if not excel_path.exists():
+        return False
+    from openpyxl import load_workbook
+    wb = load_workbook(str(excel_path))
+    ws = wb['基本信息']
+
+    # 找已有的上架相关行，若存在则更新，否则追加
+    upload_fields = {'上架店铺': shop_name, '上架时间': upload_time, '上架链接': item_url}
+    existing_labels = {ws.cell(row=r, column=1).value: r for r in range(2, ws.max_row + 1)}
+    for field, value in upload_fields.items():
+        if field in existing_labels:
+            ws.cell(row=existing_labels[field], column=2, value=value)
+        else:
+            next_row = ws.max_row + 1
+            ws.cell(row=next_row, column=1, value=field)
+            ws.cell(row=next_row, column=2, value=value)
+
+    wb.save(str(excel_path))
+    return True
+
+
+@bp.route('/mark-uploaded', methods=['POST'])
+@swag_from({
+    'tags': ['淘宝'],
+    'summary': '商品上架后回填店铺信息到汇总表与单品Excel',
+    'parameters': [{
+        'in': 'body',
+        'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'title':      {'type': 'string', 'description': '商品标题（用于匹配汇总表行）'},
+                'shopName':   {'type': 'string', 'description': '上架店铺名称'},
+                'itemUrl':    {'type': 'string', 'description': '上架后商品链接'},
+                'uploadTime': {'type': 'string', 'description': '上架时间（默认当前时间）'},
+            },
+            'required': ['title'],
+        }
+    }],
+    'responses': {
+        200: {'description': '回填成功'},
+        404: {'description': '汇总表中未找到该商品'},
+        500: {'description': '服务器错误'},
+    }
+})
+def taobao_mark_uploaded():
+    """商品上架完成后，将店铺名/上架时间/商品链接回填到汇总表与单品Excel"""
+    try:
+        body = request.get_json(force=True) or {}
+        title = (body.get('title') or '').strip()
+        if not title:
+            return jsonify({'ok': False, 'error': '商品标题不能为空'}), 400
+
+        shop_name   = (body.get('shopName')   or '').strip()
+        item_url    = (body.get('itemUrl')    or '').strip()
+        upload_time = (body.get('uploadTime') or datetime.now().strftime('%Y-%m-%d %H:%M:%S')).strip()
+
+        log = []
+
+        # 1. 回填汇总 Excel
+        found = _backfill_summary_excel(title, shop_name, item_url, upload_time)
+        if found:
+            log.append('✓ 汇总 Excel 已回填上架信息')
+        else:
+            log.append('⚠ 汇总 Excel 未找到该商品标题，跳过')
+
+        # 2. 回填单品 Excel（若目录存在）
+        dir_name = _safe_dirname(title)
+        product_dir = SAVE_ROOT / dir_name
+        if product_dir.exists():
+            ok2 = _backfill_product_excel(product_dir, shop_name, item_url, upload_time)
+            log.append('✓ 单品 Excel 基本信息已更新' if ok2 else '⚠ 单品 Excel 未找到，跳过')
+        else:
+            log.append('⚠ 单品目录不存在，跳过单品 Excel 更新')
+
+        # 3. 更新汇总 README.md（找到对应行追加上架信息）
+        if SUMMARY_MD.exists():
+            content = SUMMARY_MD.read_text(encoding='utf-8')
+            dir_link = f'](./{dir_name}/)'
+            new_lines = []
+            replaced = False
+            for line in content.split('\n'):
+                if dir_link in line or (f'[{title}]' in line and '|' in line):
+                    # 若行末没有上架信息列，追加；否则更新末尾三列
+                    parts = line.rstrip('|').split('|')
+                    # 确保至少有 9 个数据列（标题到采集时间）
+                    while len(parts) < 10:
+                        parts.append(' ')
+                    # 将最后三列替换为上架信息
+                    parts = parts[:10] + [f' {shop_name} ', f' {upload_time} ', f' {item_url} ']
+                    line = '|'.join(parts) + '|'
+                    replaced = True
+                new_lines.append(line)
+            SUMMARY_MD.write_text('\n'.join(new_lines), encoding='utf-8')
+            log.append('✓ 汇总 README.md 已更新' if replaced else '⚠ README.md 未匹配到商品行，跳过')
+
+        return jsonify({
+            'ok': True,
+            'found': found,
+            'log': log,
+        })
+
+    except Exception as e:
+        logger.error(f'[mark-uploaded] 异常: {e}', exc_info=True)
         return jsonify({'ok': False, 'error': str(e)}), 500

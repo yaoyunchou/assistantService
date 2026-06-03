@@ -48,6 +48,9 @@ def run_script(page, script_name: str, config: dict = None):
 | `xhs-publish.js` | 小红书创作平台 | 图文笔记发布（含图片上传） | （assistantService 不使用） |
 | *(内嵌于 TaobaoAssistant.jsx)* | 淘宝商品详情页 | 采集标题/图片/SKU规格/商品参数/价格 | [→](taobao-商品信息采集.md) |
 | `POST /api/taobao/save-product` | assistantService Flask | 下载图片 + 写单品Excel + 更新汇总（`taobao_routes.py`） | [→](taobao-商品信息采集.md#本地保存接口assistantservice) |
+| `antexiadan-seckill-list.js` | 安特 homepage | 限时秒杀全量列表 → POST 入库 | [→](antexiadan-限时秒杀列表.md) |
+| `antexiadan-seckill-fetch.py` | pcapi 直连 | 同上（CLI，无需浏览器） | [→](antexiadan-限时秒杀列表.md) |
+| `POST /api/antexiadan/seckill-list/sync` | assistantService Flask | SQLite 批次 + UPSERT + 快照（`antexiadan_routes.py`） | [→](antexiadan-限时秒杀列表.md#post-apiantexiadanseckill-listsync) |
 
 ---
 

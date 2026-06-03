@@ -41,15 +41,17 @@ def get_user_data_dir(app_name: str = '如意助手') -> Path:
 
 def get_browser_data_dir(app_name: str = '如意助手') -> Path:
     """
-    获取浏览器用户数据目录（固定持久化缓存，所有运行共用）。
+    获取浏览器用户数据目录（固定持久化缓存）。
 
-    始终使用用户数据目录下的 browser_data，保证：
-    - 每次启动、每次实例都使用同一目录，登录/缓存持久有效；
-    - 不随项目路径或运行目录变化，路径唯一；
-    - 程序不会自动清理，需要清除时由您手动删除该目录。
+    生产与开发使用不同子目录，避免 dev.py 与 main/打包版同时运行时
+    争抢同一 Chromium profile（SingletonLock 导致互踢、登录态错乱）。
 
-    Windows: %LOCALAPPDATA%\\如意助手\\browser_data
-    Linux/Mac: ~/.local/share/如意助手/browser_data 或 ~/如意助手/browser_data
+    - production: browser_data
+    - development: browser_data_dev
+
+    Windows:
+      生产 %LOCALAPPDATA%\\如意助手\\browser_data
+      开发 %LOCALAPPDATA%\\如意助手\\browser_data_dev
 
     Args:
         app_name: 应用名称，默认为 '如意助手'
@@ -57,7 +59,9 @@ def get_browser_data_dir(app_name: str = '如意助手') -> Path:
     Returns:
         浏览器数据目录路径
     """
-    browser_dir = get_user_data_dir(app_name) / 'browser_data'
+    env = (os.getenv('APP_ENV') or 'production').strip().lower()
+    subdir = 'browser_data_dev' if env == 'development' else 'browser_data'
+    browser_dir = get_user_data_dir(app_name) / subdir
     browser_dir.mkdir(parents=True, exist_ok=True)
     return browser_dir
 
