@@ -1,5 +1,54 @@
 # 变更日志
 
+## 2026-06-04 - 架构重构第一阶段：模块解耦（notify / storage / workflow）
+
+### 第一步：建立 `notify/` 统一通知模块
+
+- **`src/notify/__init__.py`**（新增）：统一通知入口，暴露 `notify(event)`、`login_alert(source)`、`task_result(source, title, desc, success)`、`custom(message)` 四个便捷函数。
+- **`src/notify/event.py`**（新增）：`NotifyEvent`、`NotifyLevel`、`NotifyChannel` 数据结构。
+- **`src/notify/filter.py`**（新增）：AI 通知过滤器。ERROR 级别强制发送；其他级别调用 `ai.ask()` 判断是否值得通知；AI 调用失败则降级直接发送。
+- **`src/notify/channels/feishu_dm.py`**（新增）：飞书私信渠道，封装 `FeishuMessageSender`。
+- **`src/notify/channels/feishu_webhook.py`**（新增）：飞书 Webhook 渠道，封装 `qudao_notify`。
+- **调用点替换**（6 处）：
+  - `spider/pinduoduo/client.py`：移除 `feishu_sender` 属性，改用 `notify.login_alert("pinduoduo")`
+  - `spider/pinduoduo/login_intercept.py`：改用 `notify.login_alert` 和 `notify.notify(NotifyEvent(...))`
+  - `spider/pinduoduo/erp_order_sync.py`：改用 `notify.task_result`
+  - `spider/pinduoduo/after_sale_sync.py`：改用 `notify.task_result`
+  - `spider/pinduoduo/erp_audit.py`：改用 `notify.task_result`
+  - `spider/pinduoduo/order_address_sync.py`：改用 `notify.login_alert`
+  - `scheduler/manager.py`：改用 `notify.custom`
+  - `api/routes/feishu_routes.py`：API 层改用 `notify.login_alert`、`notify.custom`
+
+### 第二步：拆分 storage 层
+
+- **`src/storage/__init__.py`**（新增）：存储层包入口。
+- **`src/storage/feishu/__init__.py`**（新增）：飞书多维表格存储子包。
+- **`src/storage/feishu/pdd_table.py`**（新增）：从 `spider/pinduoduo/feishutable.py` 迁移，内容不变，这是新的「源文件」。
+- **`src/storage/feishu/tu_table.py`**（新增）：从 `spider/tu/feishutable.py` 迁移。
+- **`src/spider/pinduoduo/feishutable.py`**：改为转发 stub，`from storage.feishu.pdd_table import ...`，保持所有现有 import 不变。
+- **`src/spider/tu/feishutable.py`**：改为转发 stub，`from storage.feishu.tu_table import ...`。
+
+### 第三步：建立 `workflow/` 骨架
+
+- **`src/workflow/step.py`**（新增）：`BaseStep`（抽象基类）、`StepContext`（上下文容器）、`StepResult`（执行结果）。
+- **`src/workflow/registry.py`**（新增）：`StepRegistry`（步骤注册表），支持手动注册和 `auto_discover()` 自动发现；全局单例 `get_registry()`。
+- **`src/workflow/engine.py`**（新增）：`WorkflowEngine`，支持条件执行（`condition`）、错误策略（`on_error: abort/skip/continue`）、步骤结果写入上下文。
+- **`src/workflow/steps/notify_steps.py`**（新增）：`notify.task_result`、`notify.login_alert` 两个内置步骤，验证 workflow ↔ notify 联动。
+- **`workflows/pdd_erp_full_sync.json`**（新增）：ERP 订单全量同步工作流示例配置。
+
+### 第四步：AI 融入通知过滤
+
+- **`src/notify/filter.py`**：完善 AI 过滤逻辑，`_ai_should_notify()` 调用 `ai.ask()` 对非 ERROR 事件进行分析，AI 不可用时自动降级发送。
+
+## 2026-06-04 - 架构规划：下一阶段模块解耦方向
+
+- **`docs/next/README.md`**（新增）：整理 `docs/next/` 目录下所有规划文档，形成下一阶段改造总览。
+  - 梳理现有架构核心耦合问题（spider 三职混合、飞书能力散落、通知无统一入口）
+  - 确定目标模块边界：`automation/`（执行）、`workflow/`（编排）、`storage/`（数据）、`notify/`（通知）、`ai/`（思考）
+  - 明确各模块调用规则，确保 AI 模块与业务解耦
+  - 设计 AI 融入通知过滤（小场景）和工作流步骤（深度融入）两种方案
+  - 制定五步渐进迁移路线图，每步独立可验证
+
 ## 2026-06-03 - AI 大脑模块：Windows WinError 10038 修复
 
 - **`src/ai/agent.py`**：修复 `OSError: [WinError 10038] 在一个非套接字上尝试了一个操作`。

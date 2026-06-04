@@ -260,22 +260,14 @@ def _notify_pdd_erp_sync_result(
         tlog.debug("ERP 定时同步原始响应: %s", raw)
     try:
         from config import Config
-        from tools.feishu.message_sender import get_message_sender
+        from notify import custom as _notify_custom
 
-        sender = get_message_sender()
-        if not Config.FEISHU_ENABLED or not sender.client.is_configured():
-            tlog.info("飞书未配置或未启用，跳过 ERP 同步结果通知")
-            return
-        if not (feishu_user_id or "").strip() and not sender.default_user_id:
-            tlog.info("未配置 FEISHU_USER_ID 且任务未指定 feishu_user_id，跳过 ERP 同步结果通知")
-            return
-        text = f"{title}\n{body}"
-        if len(text) > 4500:
-            text = text[:4497] + "..."
-        if sender.send_custom_message(text, user_id=feishu_user_id):
-            tlog.info("已发送 ERP 同步结果飞书通知")
-        else:
-            tlog.warning("ERP 同步结果飞书通知发送返回失败")
+        _notify_custom(
+            f"{title}\n{body[:4497]}{'...' if len(f'{title}\n{body}') > 4500 else ''}",
+            source="scheduler",
+            user_id=(feishu_user_id or "").strip() or None,
+        )
+        tlog.info("已发送 ERP 同步结果飞书通知")
     except Exception as e:
         tlog.warning("发送 ERP 同步结果飞书通知异常: %s", e, exc_info=True)
 

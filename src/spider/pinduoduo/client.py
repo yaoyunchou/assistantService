@@ -12,7 +12,7 @@ from playwright.sync_api import Page, Browser, BrowserContext, TimeoutError
 from config import Config
 from utils.logger import get_logger
 from utils.path_helper import get_safe_data_path
-from tools.feishu.message_sender import get_message_sender
+from notify import login_alert as _notify_login_alert
 from .feishutable import sync_orders_to_feishu
 
 logger = get_logger('PinduoduoClient')
@@ -31,22 +31,8 @@ class PinduoduoClient:
         self.page = page
         self.status_path = self._get_status_path()
         self.target_url = Config.PINDUODUO_TARGET_URL
-        self._feishu_sender = None  # 延迟初始化
-        
         # 确保目录存在
         self.status_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    @property
-    def feishu_sender(self):
-        """
-        获取飞书消息发送器（延迟初始化）
-        
-        Returns:
-            FeishuMessageSender实例
-        """
-        if self._feishu_sender is None:
-            self._feishu_sender = get_message_sender()
-        return self._feishu_sender
     
     def _get_status_path(self) -> Path:
         """
@@ -114,13 +100,13 @@ class PinduoduoClient:
             if 'login' in current_url.lower():
                 # 被拦截到登录页面
                 logger.warning("检测到被拦截到登录页面")
-                
+
                 # 发送飞书通知
-                if self.feishu_sender.is_available():
-                    self.feishu_sender.send_pinduoduo_login_alert()
-                    logger.info("已发送飞书通知")
-                else:
-                    logger.warning("飞书通知不可用，跳过发送")
+                try:
+                    _notify_login_alert("pinduoduo")
+                    logger.info("已发送飞书登录通知")
+                except Exception as _ex:
+                    logger.warning("飞书登录通知发送失败: %s", _ex)
                 
                 # 记录失败状态
                 self._save_execution_status(success=False, message="被拦截到登录页面")

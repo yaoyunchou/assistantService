@@ -488,12 +488,12 @@ def sync_order_addresses_from_feishu_top_records(
         from spider.pinduoduo.client import PinduoduoClient
 
         pd_client = PinduoduoClient(page=page)
-        if pd_client.feishu_sender.is_available():
-            try:
-                pd_client.feishu_sender.send_pinduoduo_login_alert()
-                logger.info('已发送拼多多需登录的飞书提醒')
-            except Exception as ex:
-                logger.warning('飞书登录提醒发送失败: %s', ex)
+        try:
+            from notify import login_alert as _notify_login_alert
+            _notify_login_alert("pinduoduo")
+            logger.info('已发送拼多多需登录的飞书提醒')
+        except Exception as ex:
+            logger.warning('飞书登录提醒发送失败: %s', ex)
 
         qr_data = pd_client.show_login_qrcode(skip_initial_navigation=True)
         need_fill_summary = [

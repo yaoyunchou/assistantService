@@ -499,34 +499,21 @@ def _notify_delivered_printed_query(
     if intercepted:
         return
     try:
-        from tools.feishu.webhook.qudao_notify import (
-            CHANNEL_PINDUODUO,
-            send_success,
-            send_warning,
-        )
+        from notify import task_result as _task_result
 
         delivered_url = Config.PINDUODUO_ERP_ORDER_DELIVERED_URL
         lines = [
             f'**概览**：{message}',
             f'**订单条数**：{row_count}',
         ]
-        description = '\n'.join(lines)
-        if success:
-            send_success(
-                CHANNEL_PINDUODUO,
-                title='ERP 已发货 · 今日打印单查询',
-                description=description,
-                link_url=page_url or delivered_url,
-                link_text='打开 ERP 已发货',
-            )
-        else:
-            send_warning(
-                CHANNEL_PINDUODUO,
-                title='ERP 已发货 · 今日打印单查询',
-                description=description,
-                link_url=page_url or delivered_url,
-                link_text='打开 ERP 已发货',
-            )
+        _task_result(
+            "pinduoduo",
+            "ERP 已发货 · 今日打印单查询",
+            '\n'.join(lines),
+            success=success,
+            link_url=page_url or delivered_url,
+            link_text='打开 ERP 已发货',
+        )
     except Exception as e:
         logger.warning('已发货查询 Webhook 通知失败: %s', e)
 

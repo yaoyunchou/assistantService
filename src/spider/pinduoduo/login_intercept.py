@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 from playwright.sync_api import Page
 
+from notify import login_alert as _notify_login_alert, NotifyEvent, NotifyLevel, NotifyChannel
 from utils.logger import get_logger
 
 logger = get_logger('PinduoduoLoginIntercept')
@@ -28,39 +29,28 @@ def handle_pdd_login_intercept(
     from spider.pinduoduo.client import PinduoduoClient
 
     pd_client = PinduoduoClient(page=page)
-    if pd_client.feishu_sender.is_available():
-        try:
-            pd_client.feishu_sender.send_pinduoduo_login_alert()
-            logger.info('已发送拼多多需登录的飞书提醒')
-        except Exception as ex:
-            logger.warning('飞书登录提醒发送失败: %s', ex)
+    try:
+        _notify_login_alert("pinduoduo")
+        logger.info('已发送拼多多需登录的飞书提醒')
+    except Exception as ex:
+        logger.warning('飞书登录提醒发送失败: %s', ex)
 
     qr_data = pd_client.show_login_qrcode(skip_initial_navigation=True)
     if qr_data and qr_data != 'ALREADY_LOGGED_IN':
-        from tools.feishu.webhook.qudao_notify import (
-            CHANNEL_PINDUODUO,
-            get_custom_bot_keyword,
-            get_webhook_url,
-        )
-
-        wh = get_webhook_url(CHANNEL_PINDUODUO)
-        if wh:
-            try:
-                from tools.feishu.webhook.notify import send_sync_notification
-
-                send_sync_notification(
-                    webhook_url=wh,
-                    system_title=title,
-                    description='需要登录拼多多商家后台，请尽快扫码。',
-                    link_url=link_url,
-                    link_text=link_text,
-                    image_base64=qr_data,
-                    custom_bot_keyword=get_custom_bot_keyword(CHANNEL_PINDUODUO),
-                )
-            except Exception as ex:
-                logger.warning('飞书 Webhook 登录通知发送失败: %s', ex, exc_info=True)
-        else:
-            logger.debug('未配置拼多多 Webhook，跳过')
+        try:
+            from notify import notify
+            notify(NotifyEvent(
+                source="pinduoduo",
+                level=NotifyLevel.WARNING,
+                title=title,
+                description='需要登录拼多多商家后台，请尽快扫码。',
+                channel=NotifyChannel.FEISHU_WEBHOOK,
+                link_url=link_url,
+                link_text=link_text,
+                image_base64=qr_data,
+            ))
+        except Exception as ex:
+            logger.warning('飞书 Webhook 登录通知发送失败: %s', ex, exc_info=True)
 
         msg = success_message_with_qr or (
             '打开页面时被要求登录，请用拼多多 APP 扫码；二维码已返回前端展示，并已尝试飞书提醒。'

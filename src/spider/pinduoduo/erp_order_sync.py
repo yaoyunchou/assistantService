@@ -70,7 +70,7 @@ def _send_sync_report(
     erp_url: str,
 ) -> None:
     """同步完成后，通过通用渠道通知发送运行报告卡片。"""
-    from tools.feishu.webhook.qudao_notify import CHANNEL_PINDUODUO, send_success, send_warning
+    from notify import task_result as _task_result
 
     success = bool(feishu_result.get('success'))
     created = feishu_result.get('create_count', 0)
@@ -86,11 +86,11 @@ def _send_sync_report(
     if msg:
         lines.append(f'**详情**：{msg}')
 
-    notify = send_success if success else send_warning
-    notify(
-        CHANNEL_PINDUODUO,
-        title='订单同步（ERP）· 运行报告',
-        description='\n'.join(lines),
+    _task_result(
+        "pinduoduo",
+        "订单同步（ERP）· 运行报告",
+        '\n'.join(lines),
+        success=success,
         link_url=erp_url,
         link_text='打开 ERP 全部订单',
     )

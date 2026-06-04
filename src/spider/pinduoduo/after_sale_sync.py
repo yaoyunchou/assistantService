@@ -73,7 +73,7 @@ def _send_sync_report(
 ) -> None:
     """同步完成后发送飞书 Webhook 通知。"""
     try:
-        from tools.feishu.webhook.qudao_notify import CHANNEL_PINDUODUO, send_success, send_warning
+        from notify import task_result as _task_result
 
         success = bool(feishu_result.get('success'))
         created = feishu_result.get('create_count', 0)
@@ -88,11 +88,11 @@ def _send_sync_report(
         if msg:
             lines.append(f'**详情**：{msg}')
 
-        notify = send_success if success else send_warning
-        notify(
-            CHANNEL_PINDUODUO,
-            title='退货物流同步 · 运行报告',
-            description='\n'.join(lines),
+        _task_result(
+            "pinduoduo",
+            "退货物流同步 · 运行报告",
+            '\n'.join(lines),
+            success=success,
             link_url=erp_url,
             link_text='打开 ERP 售后管理页',
         )

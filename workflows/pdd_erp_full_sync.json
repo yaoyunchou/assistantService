@@ -1,0 +1,31 @@
+{
+  "id": "pdd_erp_full_sync",
+  "name": "拼多多 ERP 订单全量同步",
+  "description": "登录检查 → 抓取 ERP 订单 → 同步飞书 → 结果通知",
+  "steps": [
+    {
+      "step": "pdd.check_login",
+      "params": { "target_url": "erp/order/all" },
+      "on_error": "abort"
+    },
+    {
+      "step": "pdd.scrape_erp_orders",
+      "params": { "scroll_max_steps": 50 },
+      "condition": { "key": "login_status", "equals": true },
+      "on_error": "abort"
+    },
+    {
+      "step": "storage.feishu.sync_erp_orders",
+      "on_error": "skip"
+    },
+    {
+      "step": "notify.task_result",
+      "params": {
+        "source": "pinduoduo",
+        "title": "ERP 订单同步",
+        "link_url": "https://mms.pinduoduo.com/erp/order/all"
+      },
+      "on_error": "skip"
+    }
+  ]
+}
