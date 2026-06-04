@@ -36,6 +36,12 @@ croniter>=2.0.0
 # AI API（OpenAI 兼容接口，用于库存关联匹配等）
 openai>=1.0.0
 
+# AI 大脑模块：Cursor SDK（Agent 引擎，浏览器控制等复杂任务）
+cursor-sdk>=0.1.0
+
+# AI 大脑模块：MCP 服务器协议（Playwright MCP stdio 服务器）
+mcp>=1.0.0
+
 # TOML 配置文件读写（Python 3.11+ 自带 tomllib 读取，但写入仍需 tomli-w）
 tomli>=2.0.0
 tomli-w>=1.0.0

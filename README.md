@@ -1,12 +1,13 @@
 # 如意助手
 
-一个基于Python开发的Windows桌面私人助手应用，提供脚本执行、工具管理等多种实用功能，支持模块化配置，资源占用低。
+一个基于 Python 开发的 Windows 桌面私人助手应用，以 Flask 为后端、Playwright 为浏览器自动化引擎，内置 **AI 大脑模块**（Cursor SDK + OpenAI 兼容 LLM），支持模块化配置，资源占用低。
 
 ## 功能特性
 
-- 🖥️ **现代化Web界面** - 基于Flask的响应式Web界面，美观易用
-- 🐍 **Python脚本执行** - 支持执行Python脚本，支持参数传递和结果返回
-- 🛒 **拼多多助手** - 拼多多商家后台自动化工具，支持登录管理和飞书通知
+- 🤖 **AI 智能助手** — 独立 `src/ai/` 模块，统一封装 LLM 问答（OpenAI 兼容）和 Cursor SDK Agent（浏览器控制、爬虫接管）；其他模块通过 `from ai import ask / run_agent` 调用
+- 🖥️ **现代化 Web 界面** — 基于 Flask 的响应式 Web 界面，美观易用
+- 🐍 **Python 脚本执行** — 支持执行 Python 脚本，支持参数传递和结果返回
+- 🛒 **拼多多助手** — 拼多多商家后台自动化工具，支持登录管理和飞书通知
 - 📋 **订单同步（ERP）** - 官方 ERP 全部订单表抓取，按「平台订单号」同步到指定飞书多维表格（独立页面 `/pdd-erp-order-sync`）
 - ✅ **ERP 待审核 / 入库 / 打印** - `/tools/pinduoduo` 加载待审核列表并提交审核（SQLite + 可选飞书审核表）；独立页 `/pdd-erp-delivering-print` 一键「打印并发货」待发货列表；**已发货页今日已打印快递单**：`POST /api/pinduoduo/erp-delivered/today-printed-query`（脚本 `pdd-erp-order-delivered-query.js`，结束飞书 Webhook 摘要）
 - 📡 **途强助手** - 途强智能设备管理平台（iot.tqiot.com）自动化，支持自动登录与最近 30 天记录获取
@@ -23,33 +24,159 @@
 
 ## 技术栈
 
-- **后端**: Python 3.8+, Flask
-- **前端**: HTML + CSS + JavaScript
-- **浏览器自动化**: Playwright
-- **系统托盘**: pystray
-- **打包工具**: PyInstaller
+| 层次 | 技术 |
+|------|------|
+| 后端框架 | Python 3.10+, Flask |
+| 前端 | HTML + CSS + Vanilla JS（无前端构建工具） |
+| 浏览器自动化 | Playwright（Chromium）+ playwright-stealth |
+| AI 大脑 | Cursor SDK（Agent），OpenAI 兼容 LLM，MCP 协议 |
+| 定时任务 | APScheduler + croniter |
+| 远程通信 | Socket.IO 客户端（对接 Nest 中转服务） |
+| 系统集成 | pystray（系统托盘）、pywebview（原生窗口） |
+| 打包 | PyInstaller（onedir 模式） |
+| 配置 | python-dotenv（`.env`）+ TOML（`app_config.toml`） |
 
 ## 项目结构
 
 ```
-kuaidi/
+assistantService/
 ├── src/
-│   ├── main.py              # 主程序入口
-│   ├── app.py               # Flask应用整合
-│   ├── config.py            # 配置文件
-│   ├── api/                 # API路由
-│   ├── web/                 # Web界面
-│   │   ├── routes.py        # Web路由
-│   │   └── templates/       # HTML模板
-│   ├── tools/               # 工具模块
-│   │   ├── base.py          # 工具基类
-│   │   ├── manager.py       # 工具管理器
-│   │   └── spider_tool.py   # 爬虫工具
-│   ├── tray/                # 系统托盘
-│   ├── spider/              # 爬虫模块
-│   └── utils/               # 工具函数
-├── requirements.txt         # 依赖列表
-└── README.md                # 项目说明
+│   ├── main.py                    # 应用入口（启动 Flask + 托盘 + WebView）
+│   ├── dev.py                     # 开发模式启动（热重载）
+│   ├── app.py                     # Flask 应用装配（init_tools + setup_app）
+│   ├── config.py                  # 全局配置（Config 类，读 .env + 配置文件）
+│   │
+│   ├── ai/                        # ★ AI 大脑模块（系统唯一 AI 入口）
+│   │   ├── __init__.py            #   公共 API：ask / run_agent / run_agent_stream
+│   │   ├── client.py              #   LLM 客户端（OpenAI 兼容，AI_API_KEY）
+│   │   ├── agent.py               #   Cursor SDK Agent + 会话持久化
+│   │   └── mcp/
+│   │       └── playwright_server.py  # Playwright MCP stdio 服务器（7 工具）
+│   │
+│   ├── api/                       # HTTP API 层
+│   │   ├── routes/
+│   │   │   ├── __init__.py        #   Blueprint 汇总 + Swagger 注册
+│   │   │   ├── health.py          #   GET /health
+│   │   │   ├── settings_routes.py #   系统配置（headless/port 等）
+│   │   │   ├── browser_routes.py  #   浏览器状态
+│   │   │   ├── ai_routes.py       #   ★ /api/ai/* （ask/run/stream/sessions）
+│   │   │   ├── pinduoduo_routes.py#   拼多多（登录/同步/库存）
+│   │   │   ├── tu_routes.py       #   途强
+│   │   │   ├── feishu_routes.py   #   飞书消息/Webhook
+│   │   │   ├── order_1688_routes.py #  1688 订单
+│   │   │   ├── taobao_routes.py   #   淘宝商品
+│   │   │   ├── antexiadan_routes.py # 安特限时秒杀
+│   │   │   ├── scheduler_routes.py# 定时任务
+│   │   │   ├── script_routes.py   #   脚本执行
+│   │   │   └── websocket_routes.py#   Socket.IO 配置
+│   │   └── service/               #   跨路由业务逻辑（飞书数据比对等）
+│   │
+│   ├── web/                       # Web 页面层
+│   │   ├── routes.py              #   页面路由（返回 HTML 模板）
+│   │   └── templates/
+│   │       ├── base.html          #   基础布局（侧边栏 + 导航）
+│   │       ├── index.html         #   首页
+│   │       ├── settings.html      #   设置页
+│   │       ├── scheduler.html     #   定时任务管理
+│   │       └── tools/             #   各工具独立页面
+│   │           ├── ai_assistant.html    # ★ AI 智能助手（聊天 UI + SSE 流式）
+│   │           ├── pinduoduo.html
+│   │           ├── spider.html
+│   │           ├── tu.html
+│   │           ├── order_1688.html
+│   │           └── script_executor.html
+│   │
+│   ├── tools/                     # 工具注册层（Web UI 入口）
+│   │   ├── base.py                #   BaseTool 基类
+│   │   ├── manager.py             #   ToolManager（注册/查找工具）
+│   │   ├── ai_tool.py             #   ★ AiTool（ai_assistant）
+│   │   ├── pinduoduo_tool.py      #   拼多多工具
+│   │   ├── tu_tool.py             #   途强工具
+│   │   ├── order_1688_tool.py     #   1688 工具
+│   │   ├── script_tool.py         #   脚本执行工具
+│   │   ├── spider_tool.py         #   通用爬虫工具
+│   │   └── feishu/                #   飞书 SDK 封装
+│   │       ├── feishu_client.py   #   多维表格 CRUD
+│   │       ├── feishu_table_client.py
+│   │       ├── message_sender.py  #   私聊 / 卡片消息
+│   │       └── webhook/           #   Webhook Bot
+│   │
+│   ├── spider/                    # 爬虫与业务逻辑层
+│   │   ├── pinduoduo/
+│   │   │   ├── client.py          #   PDD 核心客户端（Playwright + 飞书）
+│   │   │   ├── erp_order_sync.py  #   ERP 订单同步
+│   │   │   ├── inventory_sync_job.py # 库存飞书同步（调用 ai.ask）
+│   │   │   ├── presell_sync.py    #   预售订单
+│   │   │   ├── after_sale_sync.py #   退货订单
+│   │   │   ├── audit_store.py     #   待审核 SQLite
+│   │   │   ├── feishutable.py     #   飞书表字段映射
+│   │   │   └── scripts/           #   JS 注入脚本（ERP 页面数据抓取）
+│   │   ├── antexiadan/
+│   │   │   └── seckill_store.py   #   安特限时秒杀 SQLite
+│   │   ├── order_1688/
+│   │   │   └── order_extract.py   #   1688 订单提取
+│   │   └── tu/
+│   │       └── client.py          #   途强平台 Playwright 客户端
+│   │
+│   ├── scheduler/                 # 定时任务
+│   │   ├── manager.py             #   APScheduler 封装
+│   │   ├── task_config.py         #   任务类型注册 + 种子合并
+│   │   └── tasks.json             #   任务种子（随包打入 exe）
+│   │
+│   ├── tray/
+│   │   └── tray_icon.py           # 系统托盘图标（pystray）
+│   │
+│   ├── config/
+│   │   └── modules.py             # 模块启用/禁用配置
+│   │
+│   └── utils/
+│       ├── path_helper.py         # 安全路径（开发 vs exe 自动切换）
+│       ├── logger.py              # 统一日志
+│       ├── config_manager.py      # TOML 配置读写
+│       ├── module_manager.py      # 模块动态启停
+│       ├── browser_path.py        # Chromium 可执行文件路径
+│       ├── websocket_client.py    # Socket.IO 客户端
+│       ├── assistant_http_invoke.py # assistant_http 代理调用
+│       └── startup.py             # 开机自启注册
+│
+├── data/                          # 运行时数据（.gitignore）
+│   └── ai/sessions.json           # ★ Agent 会话持久化
+├── scheduler/                     # 运行时任务配置（.gitignore）
+│   └── tasks.json
+├── logs/                          # 日志文件（.gitignore）
+├── docs/                          # 文档
+│   ├── log.md                     # 变更日志
+│   ├── 开发指南.md
+│   └── webauto脚本文档/
+├── .env                           # 本地环境变量（不提交）
+├── .env.example                   # 环境变量说明模板
+├── app_config.production.toml     # 生产默认配置（打包时复制为 dist 中的 app_config.toml）
+├── requirements.txt               # Python 依赖
+└── main.spec                      # PyInstaller 打包配置
+```
+
+## 分层架构说明
+
+```
+┌─────────────────────────────────────────────────────────┐
+│              桌面壳 (main.py / tray / webview)           │
+├─────────────────────────────────────────────────────────┤
+│         Web 页面层 (web/routes.py + templates/)          │
+├──────────────────────────┬──────────────────────────────┤
+│   HTTP API 层             │   AI 大脑层                   │
+│   (api/routes/*)         │   (ai/)                      │
+│                          │   ├─ LLM 问答 (client.py)    │
+│                          │   ├─ Cursor SDK Agent         │
+│                          │   │  (agent.py + sessions)   │
+│                          │   └─ Playwright MCP Server   │
+│                          │      (mcp/playwright_server) │
+├──────────────────────────┴──────────────────────────────┤
+│              业务逻辑层 (tools/ + spider/)                │
+│   工具注册 ←→ 爬虫客户端 ←→ 飞书 SDK ←→ SQLite          │
+├─────────────────────────────────────────────────────────┤
+│    基础设施 (utils/ + scheduler/ + config/)              │
+│    路径安全 | 日志 | 配置 | 定时任务 | Socket.IO 客户端   │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ## 安装与运行
@@ -82,31 +209,30 @@ venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-5. **安装Playwright浏览器驱动**
+5. **安装 Playwright 浏览器驱动**
 ```bash
 playwright install chromium
 ```
 
-6. **配置环境变量（可选，用于拼多多助手）**
-
-如果需要使用拼多多助手的飞书通知功能，需要配置环境变量：
+6. **配置环境变量**
 
 ```bash
 # 复制环境变量模板
 copy .env.example .env
 
-# 编辑 .env 文件，填入飞书应用配置
-# FEISHU_APP_ID=your_app_id
-# FEISHU_APP_SECRET=your_app_secret
-# FEISHU_USER_ID=your_user_id
+# 编辑 .env，填入以下关键配置：
+# ── 飞书通知（可选）──
+# FEISHU_APP_ID / FEISHU_APP_SECRET / FEISHU_USER_ID
+#
+# ── AI 大脑：LLM 简单问答（可选）──
+# AI_BASE_URL=https://www.dmxapi.cn/v1
+# AI_API_KEY=your_ai_api_key_here
+# AI_STOCK_LINK_MODEL=qwen-flash-2025-07-28
+#
+# ── AI 大脑：Cursor SDK Agent（启用 AI 助手工具必填）──
+# CURSOR_API_KEY=your_cursor_api_key_here   获取：https://cursor.com/dashboard/api
+# CURSOR_MODEL=composer-2.5
 ```
-
-飞书应用配置获取方式：
-- 访问 https://open.feishu.cn/app 创建应用
-- 获取 App ID 和 App Secret
-- 获取接收消息的用户ID（用于私聊消息的默认接收人）
-
-同一套配置支持**文本消息**和**卡片消息**（`message_sender.send_card_message`），无需额外配置。
 
 7. **配置模块（可选）**
 
@@ -133,6 +259,42 @@ python src/main.py
 - 可以通过托盘图标控制应用
 
 ## 使用说明
+
+### AI 智能助手
+
+入口：侧栏「AI 智能助手」或 `/tools/ai_assistant`。
+
+**两种工作模式**：
+
+| 模式 | 触发条件 | 底层引擎 | 适用场景 |
+|------|---------|---------|---------|
+| 问答模式 | 默认（不勾选工具） | OpenAI 兼容 LLM（`AI_API_KEY`） | 文本分析、问答、数据解读 |
+| Agent 模式 | 勾选「浏览器控制」 | Cursor SDK + Playwright MCP（`CURSOR_API_KEY`） | 网页操作、截图、自动化任务 |
+
+**会话持久化**：同名 session 跨页面自动 resume 同一 Cursor Agent。
+
+**爬虫移交协议**：当爬虫遇到验证码、登录失效等障碍时，可把当前浏览器状态交给 Agent 接管：
+
+```python
+from ai import run_agent
+
+result = await run_agent(
+    "帮我处理验证码并继续抓取订单",
+    tools=["playwright"],
+    browser_context={
+        "url": page.url,
+        "cookies": await page.context.cookies(),
+        "screenshot": await page.screenshot(),
+    }
+)
+```
+
+**API 接口**：
+- `POST /api/ai/ask` — LLM 简单问答
+- `POST /api/ai/run` — Agent 同步运行
+- `POST /api/ai/run-stream` — Agent SSE 流式输出
+- `GET /api/ai/sessions` — 列出持久化会话
+- `DELETE /api/ai/sessions/<name>` — 删除会话
 
 ### Web界面
 

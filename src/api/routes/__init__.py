@@ -17,6 +17,7 @@ from .websocket_routes import bp as websocket_bp
 from .scheduler_routes import bp as scheduler_bp
 from .taobao_routes import bp as taobao_bp
 from .antexiadan_routes import bp as antexiadan_bp
+from .ai_routes import bp as ai_bp
 
 from utils.logger import get_logger
 
@@ -42,6 +43,7 @@ SWAGGER_TEMPLATE = {
         {'name': '定时任务', 'description': '定时任务列表与手动触发'},
         {'name': '淘宝', 'description': '淘宝商品数据本地保存'},
         {'name': '安特', 'description': '安特 PC 商城限时秒杀'},
+        {'name': 'AI', 'description': 'AI 大脑：LLM 问答与 Cursor SDK Agent'},
     ],
 }
 SWAGGER_CONFIG = {
@@ -91,6 +93,7 @@ def register_routes(app, browser_pool):
     app.register_blueprint(scheduler_bp)
     app.register_blueprint(taobao_bp)
     app.register_blueprint(antexiadan_bp)
+    app.register_blueprint(ai_bp)
 
     # 全局错误处理（注册在 app 上）
     @app.errorhandler(404)

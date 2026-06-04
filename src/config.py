@@ -288,6 +288,11 @@ class Config:
     # 库存关联匹配模型（推荐高性价比国产模型：deepseek-v3 / qwen3-flash 等）
     AI_STOCK_LINK_MODEL = os.getenv('AI_STOCK_LINK_MODEL', 'qwen-flash-2025-07-28').strip()
 
+    # Cursor SDK Agent 配置（AI 大脑核心引擎，用于浏览器控制等复杂任务）
+    # 获取方式：https://cursor.com/dashboard/api
+    CURSOR_API_KEY = os.getenv('CURSOR_API_KEY', '').strip()
+    CURSOR_MODEL = os.getenv('CURSOR_MODEL', 'composer-2.5').strip()
+
 
 # 在Config类定义后，尝试从配置文件加载配置
 def _load_config_from_file():

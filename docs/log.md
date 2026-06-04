@@ -1,6 +1,65 @@
 # 变更日志
 
-## 2026-06-03 - 安特限时秒杀：入库 API + SQLite
+## 2026-06-03 - AI 大脑模块：Windows WinError 10038 修复
+
+- **`src/ai/agent.py`**：修复 `OSError: [WinError 10038] 在一个非套接字上尝试了一个操作`。
+  - **根因**：`cursor_sdk._bridge._read_discovery` 用 `selectors.DefaultSelector`（底层 `select.select`）监听子进程 stderr 管道。Windows 上 `select.select` 仅支持 socket，不支持 pipe，因此抛出 WinError 10038。
+  - **修复**：模块加载时（`sys.platform == 'win32'`）自动执行 `_patch_bridge_for_windows()`，将 `_read_discovery` 替换为 `_read_discovery_win`——后者在独立守护线程中阻塞迭代 `process.stderr`，通过 `queue.Queue` 回传发现数据，完全绕过 `select.select`。
+
+
+
+- **`src/ai/agent.py`**：修复 `Agent.create() got an unexpected keyword argument 'mcp_servers'`。
+  - **根因**：`mcp_servers` 不属于 `Agent.create()` / `Agent.resume()`，而是属于 `agent.send()` 的第二个参数 `SendOptions(mcp_servers=...)`。
+  - **修复**：拆分 `_get_or_create_agent()`（只负责创建/恢复 Agent，不传 MCP 配置）和 `_build_mcp_servers()`（构建 mcp_servers 字典），在 `agent.send(full_instruction, SendOptions(mcp_servers=mcp_servers))` 时注入。
+  - **同步修正**：`Agent.resume(agent_id)` 只传 `agent_id`（不需要 AgentOptions）；流式消息解析改用真实 `run.stream() -> Iterator[SDKMessage]` API（`SDKAssistantMessage.message.content`、`SDKThinkingMessage.text`、`SDKToolUseMessage.name/status/result`）。
+
+
+
+### 新增：`src/ai/` 独立 AI 模块（系统 AI 大脑）
+
+- **`src/ai/__init__.py`**：公共 API，系统所有模块唯一导入点。
+  - `ask(prompt, *, system, model, max_tokens)` — 同步 LLM 问答（OpenAI 兼容，使用 `AI_API_KEY`）
+  - `run_agent(instruction, *, tools, session_name, browser_context, stream_callback)` — Cursor SDK Agent
+  - `run_agent_stream(...)` — Agent 流式版本，yield dict 事件
+  - `list_sessions()` / `delete_session(name)` — 会话管理
+- **`src/ai/client.py`**：`LLMClient` — 封装 OpenAI SDK，懒加载，支持同步和流式补全。
+- **`src/ai/agent.py`**：`AgentRunner` — 封装 cursor_sdk.Agent，支持：
+  - 会话持久化（`agent_id` 保存到 `ai/sessions.json`，同名 session 自动 resume）
+  - Playwright MCP 子进程配置（通过环境变量传递浏览器路径和 Cookie 目录）
+  - 爬虫移交协议（`browser_context={url, cookies, screenshot}` 参数）
+- **`src/ai/mcp/playwright_server.py`**：Playwright MCP stdio 服务器，7 个工具：
+  `navigate`、`screenshot`（返回 base64）、`click`、`fill`、`evaluate`、`get_text`、`wait_for`。
+  启动时自动加载 `AI_BROWSER_CONTEXT_FILE` 指定的移交协议 Cookie。
+
+### 新增：Web UI 入口
+
+- **`src/tools/ai_tool.py`**：`AiTool`，工具名 `ai_assistant`，注册为系统工具。
+- **`src/api/routes/ai_routes.py`**：Blueprint `/api/ai/`，端点：
+  - `POST /api/ai/ask` — LLM 简单问答
+  - `POST /api/ai/run` — Agent 同步运行
+  - `POST /api/ai/run-stream` — Agent SSE 流式输出
+  - `GET /api/ai/sessions` — 列出持久化会话
+  - `DELETE /api/ai/sessions/<name>` — 删除会话
+- **`src/web/templates/tools/ai_assistant.html`**：聊天式 UI，支持：
+  - 左侧历史会话列表（可新建/切换/删除）
+  - 工具开关（启用「浏览器控制」切换为 Agent 模式）
+  - 流式消息气泡（文本/思考/工具调用）
+  - 截图内嵌展示（点击放大预览）
+  - 快捷指令按钮
+
+### 修改：配置与依赖
+
+- **`requirements.txt`**：新增 `cursor-sdk>=0.1.0`、`mcp>=1.0.0`
+- **`.env.example`**：新增 `AI_BASE_URL`、`AI_API_KEY`、`AI_STOCK_LINK_MODEL`、`CURSOR_API_KEY`、`CURSOR_MODEL` 示例
+- **`src/config.py`**：新增 `Config.CURSOR_API_KEY`、`Config.CURSOR_MODEL`
+- **`src/api/routes/__init__.py`**：注册 `ai_bp`，Swagger 新增「AI」标签
+- **`src/app.py`**：`init_tools()` 中注册 `AiTool`
+
+### 迁移：inventory_sync_job.py
+
+- **`src/spider/pinduoduo/inventory_sync_job.py`** — `_ai_match_product_name()` 不再直接 `from openai import OpenAI`，改为通过 `from ai import ask` / `ai.client.LLMClient` 调用，保持行为不变，解耦业务与 AI SDK。
+
+
 
 - **`src/api/routes/antexiadan_routes.py`**：`POST /api/antexiadan/seckill-list/sync`、`GET .../products`、`GET .../batch/latest`。
 - **`src/spider/antexiadan/seckill_store.py`**：批次表 + 商品 UPSERT + 可选快照；默认 `data/antexiadan_seckill.sqlite`。

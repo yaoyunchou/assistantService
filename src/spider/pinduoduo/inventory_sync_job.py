@@ -177,30 +177,22 @@ def _ai_match_product_name(
     system_prompt: str = _SYSTEM_PROMPT_NORMAL,
 ) -> str:
     """
-    调用 AI 从候选商品名称中找出最匹配的一条。
+    调用 AI 大脑从候选商品名称中找出最匹配的一条。
     返回候选中的原文名称；无匹配或调用失败返回空字符串。
     """
+    candidates_text = '\n'.join(f'- {name}' for name in candidates)
+    prompt = f'ERP 商品信息：{erp_info}\n\n候选商品名称：\n{candidates_text}'
     try:
-        from openai import OpenAI  # noqa: PLC0415
-    except ImportError:
-        logger.warning('openai 包未安装，无法使用 AI 匹配；请执行 pip install openai')
-        return ''
-    try:
-        client = OpenAI(api_key=api_key, base_url=base_url)
-        candidates_text = '\n'.join(f'- {name}' for name in candidates)
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {'role': 'system', 'content': system_prompt},
-                {
-                    'role': 'user',
-                    'content': f'ERP 商品信息：{erp_info}\n\n候选商品名称：\n{candidates_text}',
-                },
-            ],
-            max_tokens=60,
-            temperature=0,
-        )
-        result = (resp.choices[0].message.content or '').strip()
+        # 通过 AI 大脑公共接口调用，不直接依赖 openai
+        from ai import ask  # noqa: PLC0415
+        from ai.client import LLMClient  # noqa: PLC0415
+        # 允许调用方传入自定义 api_key/base_url/model（如测试或多账号场景）
+        if api_key or base_url:
+            client = LLMClient(api_key=api_key, base_url=base_url, default_model=model)
+            result = client.complete(prompt, system=system_prompt, max_tokens=60, temperature=0.0)
+        else:
+            result = ask(prompt, system=system_prompt, model=model, max_tokens=60)
+        result = result.strip()
         return result if result in candidates else ''
     except Exception as e:
         logger.warning('AI 匹配调用失败: %s', e)

@@ -222,6 +222,17 @@ def init_tools(browser_pool: Optional[BrowserPool] = None) -> ToolManager:
         import traceback
         traceback.print_exc()
 
+    # AI 智能助手工具
+    try:
+        from tools.ai_tool import AiTool
+        ai_tool = AiTool()
+        tool_manager.register_tool(ai_tool)
+        print(f"[App] 已注册工具: {ai_tool.display_name}")
+    except Exception as e:
+        print(f"[App] 注册 AI 助手工具失败: {e}")
+        import traceback
+        traceback.print_exc()
+
     # 只初始化启动时需要初始化的工具
     tools_to_init = []
     
