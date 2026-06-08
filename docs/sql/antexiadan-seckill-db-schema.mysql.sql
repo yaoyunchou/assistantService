@@ -82,3 +82,31 @@ CREATE TABLE IF NOT EXISTS antexiadan_seckill_product_snapshot (
   UNIQUE KEY uk_batch_seckill (fetch_batch_id, seckill_id),
   KEY idx_fetch_batch (fetch_batch_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 安特 PC 商城 · 商品搜索缓存（search-goods-list）
+-- 数据源：POST https://pcapi.antexiadan.com/v1/selection/search-goods-list
+-- 用途：按 keyword（货号/搜索词）缓存安特商品信息，供秒杀预购对照等场景复用
+
+CREATE TABLE IF NOT EXISTS antexiadan_goods_search (
+  id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  keyword         VARCHAR(64)     NOT NULL COMMENT '搜索关键词，如 120002 / 008312',
+  goods_id        VARCHAR(32)     NOT NULL COMMENT '安特 goods_id',
+  goods_basic_id  VARCHAR(32)     NULL     COMMENT '安特 goods_basicid',
+  goods_name      VARCHAR(512)    NOT NULL COMMENT '商品名称',
+  goods_image     VARCHAR(512)    NULL     COMMENT '主图 URL',
+  seckill_id      VARCHAR(32)     NULL     COMMENT '搜索 API 返回的 seckill_id，可能为 null',
+  activity_type   INT             NULL     DEFAULT 0 COMMENT '活动类型，0=普通商品',
+  activity_id     INT             NULL     DEFAULT 0 COMMENT '活动 ID',
+  goods_url       VARCHAR(512)    NULL     COMMENT 'H5 商品链接',
+  price_min       DECIMAL(12,2)   NULL     COMMENT '批发最低价',
+  price_max       DECIMAL(12,2)   NULL     COMMENT '批发最高价',
+  api_flag        INT             NULL     COMMENT '接口 flag',
+  api_msg         VARCHAR(255)    NULL     COMMENT '接口 msg',
+  searched_at     DATETIME        NOT NULL COMMENT '最近一次搜索时间',
+  created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_keyword (keyword),
+  KEY idx_goods_id (goods_id),
+  KEY idx_seckill_id (seckill_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

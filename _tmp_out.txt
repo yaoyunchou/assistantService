@@ -1,0 +1,28 @@
+﻿[Config] 已加载环境变量文件: C:\Users\yao\Desktop\work\2026\assistantService\.env（编码: utf-8）
+[
+  {
+    "orderNo": "260605-155084460324015",
+    "goodsSpecText": "彼选匠品同款女士韩版植绒印花撞色短袖T恤008396【15天内发货】 咖,Lx1",
+    "matches": [
+      {
+        "seckill_id": "34071",
+        "title": "【限时抢购】女士韩版植绒印花撞色短袖T恤",
+        "match": [
+          "substring",
+          null,
+          90
+        ]
+      }
+    ]
+  },
+  {
+    "orderNo": "260601-613710589553268",
+    "goodsSpecText": "彼选匠品同款新款银离子抗菌男女款居家拖鞋120006【15天内发货】 男黑色,36-37x1",
+    "matches": []
+  },
+  {
+    "orderNo": "260527-098828357960939",
+    "goodsSpecText": "彼选匠品同款女士撞色方领弹力修身短袖T恤008407【15天内发货】 藏青,Lx1",
+    "matches": []
+  }
+]

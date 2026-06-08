@@ -127,6 +127,58 @@
     return opts;
   }
 
+  /** 在单个容器内按 img 拆出多件商品块（合单/多 SKU 同一 .sc-dUYKzm 时使用） */
+  function findGoodsContainersInElement(el) {
+    const imgs = [...el.querySelectorAll('img')];
+    if (imgs.length < 2) return [el];
+
+    /* 当前 DOM：每件商品一行 .sc-cXPBhi（img-box + render-content） */
+    let sub = [...el.querySelectorAll('.sc-cXPBhi')].filter((c) => c.querySelector('img'));
+    sub = sub.filter((d) => !sub.some((other) => other !== d && d.contains(other)));
+    if (sub.length >= 2) return sub;
+
+    /* .render-content 的最近含图祖先 */
+    sub = [...el.querySelectorAll('.render-content')].map((rc) => {
+      let p = rc.parentElement;
+      while (p && p !== el && !p.querySelector('img')) p = p.parentElement;
+      return p && p.querySelector('img') ? p : rc;
+    });
+    sub = [...new Set(sub)].filter((c) => c.querySelector('img'));
+    sub = sub.filter((d) => !sub.some((other) => other !== d && d.contains(other)));
+    if (sub.length >= 2) return sub;
+
+    /* LCA 直接子节点（与策略3相同，但作用域为单容器） */
+    const getPath = (img) => {
+      const path = [];
+      let p = img;
+      while (p && p !== el) { path.unshift(p); p = p.parentElement; }
+      return path;
+    };
+    const paths = imgs.map(getPath);
+    let commonDepth = 0;
+    while (
+      paths.every((p) => p.length > commonDepth) &&
+      paths.every((p) => p[commonDepth] === paths[0][commonDepth])
+    ) commonDepth++;
+    const lca = commonDepth > 0 ? paths[0][commonDepth - 1] : el;
+    const lcaChildren = [...lca.children].filter((c) => c.querySelector('img'));
+    if (lcaChildren.length >= 2) return lcaChildren;
+    if (lcaChildren.length === 1) {
+      const inner = [...lcaChildren[0].children].filter((c) => c.querySelector('img'));
+      if (inner.length >= 2) return inner;
+    }
+
+    return [el];
+  }
+
+  function expandMultiGoodsItems(items, diag) {
+    const expanded = items.flatMap((item) => findGoodsContainersInElement(item));
+    if (diag && expanded.length > items.length) {
+      diag.strategy = `${diag.strategy || 'unknown'}+multi-split`;
+    }
+    return expanded;
+  }
+
   /**
    * 从商品规格 td 提取商品列表
    * @param {HTMLElement} td
@@ -218,6 +270,11 @@
           }
         }
       }
+    }
+
+    /* ── 合单/多商品：单块容器内再拆（如 .sc-dUYKzm 包住多个 .sc-cXPBhi） ── */
+    if (items.length) {
+      items = expandMultiGoodsItems(items, diag);
     }
 
     /* ── 策略4：整个 td 作为单商品兜底 ── */

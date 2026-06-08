@@ -128,6 +128,7 @@ def task_result(
     *,
     success: bool,
     link_url: str = "",
+    link_text: str = "查看详情",
     image_base64: Optional[str] = None,
 ) -> bool:
     """
@@ -139,6 +140,7 @@ def task_result(
         description:  结果描述，支持 lark_md 语法
         success:      True → 绿色成功卡片，False → 橙色警告卡片
         link_url:     可选跳转链接
+        link_text:    跳转按钮文案
         image_base64: 可选截图
     """
     level = NotifyLevel.SUCCESS if success else NotifyLevel.WARNING
@@ -150,6 +152,7 @@ def task_result(
         description=description,
         channel=NotifyChannel.FEISHU_WEBHOOK,
         link_url=link_url,
+        link_text=link_text,
         image_base64=image_base64,
     ))
 

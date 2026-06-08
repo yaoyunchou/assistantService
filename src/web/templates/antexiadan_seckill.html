@@ -1,0 +1,765 @@
+{% extends "base.html" %}
+
+{% block title %}安特限时秒杀 - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+/* ── 通用卡片 ── */
+.status-card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08);
+    padding: 24px 28px;
+    margin-bottom: 20px;
+}
+.card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.card-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: #2c3e50;
+    margin: 0;
+}
+.desc { color: #7f8c8d; font-size: 14px; line-height: 1.65; margin-bottom: 12px; }
+
+/* ── 批次信息 ── */
+.batch-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    font-size: 13px;
+    color: #555;
+}
+.batch-meta span strong { color: #2c3e50; }
+
+/* ── 统计标签 ── */
+.stat-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+.stat-tag {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+}
+.tag-active   { background: #d4edda; color: #155724; }
+.tag-pending  { background: #fff3cd; color: #856404; }
+.tag-ended    { background: #e2e3e5; color: #383d41; }
+.tag-total    { background: #cce5ff; color: #004085; }
+
+/* ── 筛选栏 ── */
+.filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+.filter-bar select,
+.filter-bar input[type=text] {
+    padding: 7px 12px;
+    border: 1px solid #ced4da;
+    border-radius: 6px;
+    font-size: 14px;
+    color: #2c3e50;
+    background: #fff;
+    min-width: 140px;
+}
+.filter-bar select:focus,
+.filter-bar input[type=text]:focus { outline: none; border-color: #3498db; }
+
+/* ── 按钮 ── */
+.btn {
+    padding: 8px 18px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .18s;
+    white-space: nowrap;
+}
+.btn-primary   { background: #3498db; color: #fff; }
+.btn-primary:hover   { background: #2980b9; }
+.btn-secondary { background: #95a5a6; color: #fff; }
+.btn-secondary:hover { background: #7f8c8d; }
+.btn:disabled  { opacity: .6; cursor: not-allowed; }
+
+/* ── 表格 ── */
+.table-wrap {
+    overflow-x: auto;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    white-space: nowrap;
+}
+thead tr { background: #f8f9fa; }
+th {
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 600;
+    color: #495057;
+    border-bottom: 2px solid #e9ecef;
+    cursor: pointer;
+    user-select: none;
+}
+th:hover { background: #eef2f7; }
+td {
+    padding: 9px 14px;
+    border-bottom: 1px solid #f0f0f0;
+    color: #333;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+tbody tr:hover { background: #f8fbff; }
+tbody tr:last-child td { border-bottom: none; }
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+.badge-active  { background: #d4edda; color: #155724; }
+.badge-pending { background: #fff3cd; color: #856404; }
+.badge-ended   { background: #e2e3e5; color: #383d41; }
+
+/* ── 空状态 / loading ── */
+.empty-hint {
+    text-align: center;
+    padding: 40px 20px;
+    color: #aaa;
+    font-size: 14px;
+}
+.loading-spin {
+    display: inline-block;
+    width: 16px; height: 16px;
+    border: 2px solid rgba(52,152,219,.3);
+    border-radius: 50%;
+    border-top-color: #3498db;
+    animation: spin .9s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── 详情 Modal ── */
+.modal-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.45);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+}
+.modal-overlay.show { display: flex; }
+.modal-box {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 8px 40px rgba(0,0,0,.18);
+    width: min(680px, 96vw);
+    max-height: 88vh;
+    overflow-y: auto;
+    padding: 28px 32px;
+    position: relative;
+}
+.modal-close {
+    position: absolute; top: 16px; right: 20px;
+    font-size: 22px; color: #aaa; cursor: pointer;
+    line-height: 1; border: none; background: none;
+}
+.modal-close:hover { color: #333; }
+.modal-title {
+    font-size: 17px; font-weight: 600; color: #2c3e50;
+    margin: 0 0 18px; padding-right: 28px;
+    line-height: 1.4;
+}
+.detail-grid {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 8px 12px;
+    font-size: 14px;
+}
+.detail-label {
+    color: #7f8c8d; font-weight: 500;
+    padding: 4px 0;
+    white-space: nowrap;
+}
+.detail-value {
+    color: #2c3e50; padding: 4px 0;
+    word-break: break-all;
+}
+.detail-value a { color: #3498db; }
+.detail-divider {
+    grid-column: 1 / -1;
+    border: none; border-top: 1px solid #f0f0f0;
+    margin: 4px 0;
+}
+.btn-detail {
+    padding: 2px 10px;
+    border: 1px solid #3498db;
+    border-radius: 4px;
+    background: #fff;
+    color: #3498db;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.btn-detail:hover { background: #ebf5fb; }
+
+/* ── 排序指示 ── */
+th[data-sort] { cursor: pointer; user-select: none; }
+th[data-sort]:hover { background: #f0f4f8; }
+th[data-sort].sort-active { color: #2980b9; }
+th[data-sort].sort-active .sort-icon { font-style: normal; }
+
+/* ── 分页 ── */
+.pagination {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+    font-size: 13px;
+    color: #555;
+}
+.pagination button {
+    padding: 4px 12px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 13px;
+}
+.pagination button:hover:not(:disabled) { background: #e9ecef; }
+.pagination button:disabled { opacity: .5; cursor: not-allowed; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>安特限时秒杀</h2>
+    <p class="subtitle">查询 <strong>安特 PC 商城</strong> 限时秒杀商品列表，数据来源：<code>pcapi.antexiadan.com/v1/home/seckill-list</code></p>
+</div>
+
+<!-- 采集操作 -->
+<div class="status-card">
+    <div class="card-header">
+        <h3 class="card-title">立即采集</h3>
+    </div>
+    <p class="desc">
+        点击「采集」后自动打开 <strong>pc.antexiadan.com</strong> 首页，拦截请求获取 Key，无需任何手动操作。<br>
+        <span style="color:#7f8c8d;font-size:13px;">前提：浏览器中已登录安特账号（首次使用请先在浏览器中登录一次）。</span>
+    </p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+        <button class="btn btn-primary" id="btn-fetch" onclick="doFetch()">采集并入库</button>
+        <label style="font-size:14px;display:flex;align-items:center;gap:6px;white-space:nowrap;">
+            <input type="checkbox" id="chk-snapshot" checked> 写快照
+        </label>
+        <span style="font-size:13px;color:#95a5a6;cursor:pointer;" onclick="toggleManualKey()" id="toggle-manual-key-btn">手动输入 Key ›</span>
+    </div>
+    <div id="manual-key-row" style="display:none;margin-bottom:12px;">
+        <input type="text" id="inp-api-key" placeholder="直接填 API Key 跳过浏览器步骤"
+               style="width:100%;max-width:500px;padding:8px 12px;border:1px solid #ced4da;border-radius:6px;font-size:14px;">
+    </div>
+    <div id="fetch-result" style="display:none;padding:12px 16px;border-radius:8px;font-size:14px;
+         background:#f8f9fa;border:1px solid #e9ecef;white-space:pre-wrap;word-break:break-word;"></div>
+</div>
+
+<!-- 最近批次 -->
+<div class="status-card" id="batch-card">
+    <div class="card-header">
+        <h3 class="card-title">最近同步批次</h3>
+        <button class="btn btn-primary" id="btn-refresh" onclick="loadAll()">刷新数据</button>
+    </div>
+    <div id="batch-info" class="batch-meta">
+        <span>加载中…</span>
+    </div>
+    <div id="stat-tags" class="stat-tags"></div>
+</div>
+
+<!-- 商品列表 -->
+<div class="status-card">
+    <div class="card-header">
+        <h3 class="card-title">商品列表</h3>
+        <span id="result-count" style="font-size:13px;color:#7f8c8d;"></span>
+    </div>
+
+    <!-- 筛选栏 -->
+    <div class="filter-bar">
+        <select id="f-status" onchange="applyFilter()">
+            <option value="">全部状态</option>
+            <option value="秒杀中">秒杀中</option>
+            <option value="预热/待开始">预热/待开始</option>
+            <option value="已结束">已结束</option>
+        </select>
+        <select id="f-group" onchange="applyFilter()">
+            <option value="">全部分组</option>
+            <option value="热卖">热卖</option>
+            <option value="秒杀中">秒杀中</option>
+            <option value="预热中">预热中</option>
+            <option value="预告">预告</option>
+        </select>
+        <input type="text" id="f-slot" placeholder="时段，如 10:00" oninput="debounceFilter()" style="min-width:110px;">
+        <input type="text" id="f-keyword" placeholder="搜索标题 / ID" oninput="debounceFilter()" style="min-width:160px;">
+        <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;white-space:nowrap;">
+            <input type="checkbox" id="f-unmarked" onchange="applyFilter()"> 未下架
+        </label>
+        <button class="btn btn-secondary" onclick="filterPresaleActiveUnmarked()">正在预售·未下架</button>
+        <button class="btn btn-secondary" onclick="resetFilter()">重置</button>
+    </div>
+
+    <!-- 表格 -->
+    <div class="table-wrap">
+        <table id="product-table">
+            <thead>
+                <tr>
+                    <th data-sort="activity_status" onclick="sortBy('activity_status')">状态 <span class="sort-icon">↕</span></th>
+                    <th data-sort="group_title" onclick="sortBy('group_title')">分组 <span class="sort-icon">↕</span></th>
+                    <th data-sort="slot_time" onclick="sortBy('slot_time')">时段 <span class="sort-icon">↕</span></th>
+                    <th style="min-width:200px;">标题</th>
+                    <th data-sort="price_min" onclick="sortBy('price_min')">价格 <span class="sort-icon">↕</span></th>
+                    <th data-sort="start_time" onclick="sortBy('start_time')">开始时间 <span class="sort-icon">↕</span></th>
+                    <th data-sort="end_time" onclick="sortBy('end_time')">结束时间 <span class="sort-icon">↕</span></th>
+                    <th>秒杀ID</th>
+                    <th>商品ID</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="product-tbody">
+                <tr><td colspan="10" class="empty-hint">加载中…</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 分页 -->
+    <div class="pagination">
+        <button id="btn-prev" onclick="prevPage()" disabled>‹ 上一页</button>
+        <span id="page-info">-</span>
+        <button id="btn-next" onclick="nextPage()" disabled>下一页 ›</button>
+        <span style="margin-left:8px;">每页</span>
+        <select id="page-size" onchange="applyFilter()" style="padding:3px 6px;border:1px solid #ced4da;border-radius:4px;">
+            <option value="50">50</option>
+            <option value="100" selected>100</option>
+            <option value="200">200</option>
+            <option value="500">500</option>
+        </select>
+        <span>条</span>
+    </div>
+</div>
+<!-- 详情 Modal -->
+<div class="modal-overlay" id="detail-modal" onclick="closeModal(event)">
+    <div class="modal-box">
+        <button class="modal-close" onclick="closeModalDirect()">×</button>
+        <div class="modal-title" id="modal-title"></div>
+        <div class="detail-grid" id="modal-body"></div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+/* ── 状态 ── */
+let _allRows = [];       // 从服务端拉到的全部数据（当前批）
+let _filtered = [];      // 本地筛选后
+let _sortKey = 'start_time';
+let _sortAsc = true;
+let _page = 1;
+let _debTimer = null;
+
+/* ── 工具 ── */
+function statusBadge(s) {
+    if (s === '秒杀中')       return `<span class="badge badge-active">${s}</span>`;
+    if (s === '预热/待开始')  return `<span class="badge badge-pending">${s}</span>`;
+    return `<span class="badge badge-ended">${s || '-'}</span>`;
+}
+function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function fmtDate(s) {
+    if (!s) return '-';
+    // 已是 YYYY-MM-DD HH:mm 格式直接返回
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(String(s))) return String(s).slice(0, 16);
+    try {
+        const d = new Date(s);
+        if (isNaN(d)) return String(s);
+        const p = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    } catch { return String(s); }
+}
+function fmtPrice(row) {
+    if (row.price_display) return esc(row.price_display);
+    if (row.price_min != null) return row.price_min === row.price_max
+        ? row.price_min.toFixed(2)
+        : `${row.price_min}~${row.price_max}`;
+    return '-';
+}
+
+/* ── 手动 Key 展开 ── */
+function toggleManualKey() {
+    const row = document.getElementById('manual-key-row');
+    const btn = document.getElementById('toggle-manual-key-btn');
+    const hidden = row.style.display === 'none';
+    row.style.display = hidden ? 'block' : 'none';
+    btn.textContent = hidden ? '手动输入 Key ‹' : '手动输入 Key ›';
+}
+
+/* ── 立即采集 ── */
+async function doFetch() {
+    const btn = document.getElementById('btn-fetch');
+    const box = document.getElementById('fetch-result');
+    const manualKey = (document.getElementById('inp-api-key')?.value || '').trim();
+    const snap = document.getElementById('chk-snapshot').checked;
+
+    // 有手动 key 走直连，否则走浏览器拦截
+    const useBrowser = !manualKey;
+    const url = useBrowser
+        ? '/api/antexiadan/seckill-list/fetch-browser'
+        : '/api/antexiadan/seckill-list/fetch';
+    const body = useBrowser
+        ? { writeSnapshot: snap }
+        : { apiKey: manualKey, writeSnapshot: snap };
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spin"></span>' + (useBrowser ? '打开浏览器采集中…' : '采集中…');
+    box.style.display = 'block';
+    box.style.background = '#f8f9fa';
+    box.style.color = '#495057';
+    box.textContent = useBrowser
+        ? '正在打开浏览器，拦截 seckill-list 请求，请稍候（约 10 秒）…'
+        : '正在连接 pcapi，请稍候…';
+
+    try {
+        const r = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        if (d.ok || d.success) {
+            box.style.background = '#d4edda';
+            box.style.color = '#155724';
+            box.textContent =
+                `✅ 采集成功\n批次 ID：${d.batchId}\n`+
+                `新增：${d.inserted ?? '-'} 条　更新：${d.updated ?? '-'} 条　合计：${d.upserted ?? '-'} 条\n`+
+                `服务端时间：${fmtDate(d.serverTime) || '-'}\n`+
+                `状态分布：${JSON.stringify(d.byStatus || {})}`;
+            await loadAll();
+        } else {
+            box.style.background = '#f8d7da';
+            box.style.color = '#721c24';
+            box.textContent = `❌ 采集失败\n${d.error || JSON.stringify(d)}`;
+        }
+    } catch(e) {
+        box.style.background = '#f8d7da';
+        box.style.color = '#721c24';
+        box.textContent = `❌ 请求错误：${e.message}`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '采集并入库';
+    }
+}
+
+/* ── 批次 ── */
+async function loadBatch() {
+    try {
+        const r = await fetch('/api/antexiadan/seckill-list/batch/latest');
+        const d = await r.json();
+        if (!d.success || !d.batch) {
+            document.getElementById('batch-info').innerHTML = '<span style="color:#e74c3c">暂无批次，请先通过 webAuto 或 Python 脚本同步数据。</span>';
+            return;
+        }
+        const b = d.batch;
+        document.getElementById('batch-info').innerHTML = `
+            <span>批次 ID：<strong>${b.id}</strong></span>
+            <span>抓取时间：<strong>${fmtDate(b.fetched_at)}</strong></span>
+            <span>服务端时间：<strong>${fmtDate(b.server_time)}</strong></span>
+            <span>商品数：<strong>${b.item_count ?? '-'}</strong></span>
+            <span>来源：<strong>${b.source || 'pcapi'}</strong></span>
+            ${b.created_at ? `<span>入库时间：<strong>${fmtDate(b.created_at)}</strong></span>` : ''}
+        `;
+    } catch(e) {
+        document.getElementById('batch-info').innerHTML = `<span style="color:#e74c3c">加载失败：${e.message}</span>`;
+    }
+}
+
+/* ── 商品列表 ── */
+async function loadProducts() {
+    const limit = 2000;
+    const rows = [];
+    let offset = 0;
+    while (true) {
+        const r = await fetch(`/api/antexiadan/seckill-list/products?limit=${limit}&offset=${offset}`);
+        const d = await r.json();
+        if (!d.success) throw new Error(d.error || '接口错误');
+        rows.push(...(d.items || []));
+        if ((d.items || []).length < limit) break;
+        offset += limit;
+    }
+    return rows;
+}
+
+async function loadAll() {
+    document.getElementById('btn-refresh').disabled = true;
+    document.getElementById('btn-refresh').innerHTML = '<span class="loading-spin"></span>加载中';
+    document.getElementById('product-tbody').innerHTML = '<tr><td colspan="9" class="empty-hint"><span class="loading-spin"></span>加载中…</td></tr>';
+    try {
+        await loadBatch();
+        _allRows = await loadProducts();
+        renderStats();
+        applyFilter();
+    } catch(e) {
+        document.getElementById('product-tbody').innerHTML = `<tr><td colspan="9" class="empty-hint" style="color:#e74c3c">加载失败：${e.message}</td></tr>`;
+    } finally {
+        document.getElementById('btn-refresh').disabled = false;
+        document.getElementById('btn-refresh').textContent = '刷新数据';
+    }
+}
+
+/* ── 统计标签 ── */
+function renderStats() {
+    const cnt = {};
+    _allRows.forEach(r => { cnt[r.activity_status] = (cnt[r.activity_status] || 0) + 1; });
+    const tags = [`<span class="stat-tag tag-total">共 ${_allRows.length} 条</span>`];
+    if (cnt['秒杀中'])      tags.push(`<span class="stat-tag tag-active">秒杀中 ${cnt['秒杀中']}</span>`);
+    if (cnt['预热/待开始']) tags.push(`<span class="stat-tag tag-pending">预热/待开始 ${cnt['预热/待开始']}</span>`);
+    if (cnt['已结束'])      tags.push(`<span class="stat-tag tag-ended">已结束 ${cnt['已结束']}</span>`);
+    document.getElementById('stat-tags').innerHTML = tags.join('');
+}
+
+/* ── 筛选 & 排序 ── */
+function applyFilter() {
+    const status  = document.getElementById('f-status').value;
+    const group   = document.getElementById('f-group').value;
+    const slot    = document.getElementById('f-slot').value.trim().toLowerCase();
+    const keyword = document.getElementById('f-keyword').value.trim().toLowerCase();
+    const unmarkedOnly = document.getElementById('f-unmarked')?.checked;
+
+    _filtered = _allRows.filter(r => {
+        if (status  && r.activity_status !== status)  return false;
+        if (group   && r.group_title     !== group)   return false;
+        if (slot    && !(r.slot_time||'').toLowerCase().includes(slot)) return false;
+        if (unmarkedOnly && Number(r.goods_is_offline) === 1) return false;
+        if (keyword) {
+            const haystack = `${r.title||''} ${r.seckill_id||''} ${r.goods_id||''}`.toLowerCase();
+            if (!haystack.includes(keyword)) return false;
+        }
+        return true;
+    });
+
+const DATE_SORT_KEYS = new Set(['start_time','end_time','created_at','updated_at']);
+
+    _filtered.sort((a, b) => {
+        let va = a[_sortKey] ?? '', vb = b[_sortKey] ?? '';
+        if (DATE_SORT_KEYS.has(_sortKey)) {
+            // 转成时间戳比较，无效日期排到末尾
+            const ta = va ? (new Date(va).getTime() || 0) : 0;
+            const tb = vb ? (new Date(vb).getTime() || 0) : 0;
+            return _sortAsc ? ta - tb : tb - ta;
+        }
+        if (typeof va === 'number' || typeof vb === 'number') {
+            va = Number(va) || 0; vb = Number(vb) || 0;
+        } else {
+            va = String(va); vb = String(vb);
+        }
+        return _sortAsc ? (va > vb ? 1 : va < vb ? -1 : 0) : (va < vb ? 1 : va > vb ? -1 : 0);
+    });
+
+    _page = 1;
+    renderPage();
+}
+
+function debounceFilter() {
+    clearTimeout(_debTimer);
+    _debTimer = setTimeout(applyFilter, 280);
+}
+
+function resetFilter() {
+    document.getElementById('f-status').value  = '';
+    document.getElementById('f-group').value   = '';
+    document.getElementById('f-slot').value    = '';
+    document.getElementById('f-keyword').value = '';
+    if (document.getElementById('f-unmarked')) {
+        document.getElementById('f-unmarked').checked = false;
+    }
+    applyFilter();
+}
+
+function filterPresaleActiveUnmarked() {
+    document.getElementById('f-status').value = '预热/待开始';
+    document.getElementById('f-group').value = '预热中';
+    document.getElementById('f-unmarked').checked = true;
+    applyFilter();
+}
+
+function sortBy(key) {
+    if (_sortKey === key) { _sortAsc = !_sortAsc; }
+    else { _sortKey = key; _sortAsc = true; }
+    // 刷新表头指示
+    document.querySelectorAll('th[data-sort]').forEach(th => {
+        const k = th.dataset.sort;
+        const icon = th.querySelector('.sort-icon');
+        if (k === _sortKey) {
+            th.classList.add('sort-active');
+            icon.textContent = _sortAsc ? '↑' : '↓';
+        } else {
+            th.classList.remove('sort-active');
+            icon.textContent = '↕';
+        }
+    });
+    applyFilter();
+}
+
+/* ── 分页渲染 ── */
+function renderPage() {
+    const size  = parseInt(document.getElementById('page-size').value) || 100;
+    const total = _filtered.length;
+    const pages = Math.max(1, Math.ceil(total / size));
+    if (_page > pages) _page = pages;
+
+    const start = (_page - 1) * size;
+    const chunk = _filtered.slice(start, start + size);
+
+    document.getElementById('result-count').textContent =
+        total ? `共 ${total} 条（第 ${start+1}–${Math.min(start+size, total)} 条）` : '无结果';
+    document.getElementById('page-info').textContent = `第 ${_page} / ${pages} 页`;
+    document.getElementById('btn-prev').disabled = _page <= 1;
+    document.getElementById('btn-next').disabled = _page >= pages;
+
+    if (!chunk.length) {
+        document.getElementById('product-tbody').innerHTML =
+            '<tr><td colspan="10" class="empty-hint">暂无数据</td></tr>';
+        return;
+    }
+
+    const rows = chunk.map((r, i) => `
+        <tr>
+            <td>${statusBadge(r.activity_status)}</td>
+            <td>${esc(r.group_title)}</td>
+            <td>${esc(r.slot_time)}</td>
+            <td title="${esc(r.title)}" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;">${esc(r.title)}</td>
+            <td>${fmtPrice(r)}</td>
+            <td>${fmtDate(r.start_time)}</td>
+            <td>${fmtDate(r.end_time)}</td>
+            <td><code>${esc(r.seckill_id)}</code></td>
+            <td><code>${esc(r.goods_id)}</code></td>
+            <td><button class="btn-detail" onclick="showDetail(${start + i})">详情</button></td>
+        </tr>
+    `).join('');
+    document.getElementById('product-tbody').innerHTML = rows;
+}
+
+function prevPage() { if (_page > 1) { _page--; renderPage(); } }
+function nextPage() {
+    const size  = parseInt(document.getElementById('page-size').value) || 100;
+    const pages = Math.max(1, Math.ceil(_filtered.length / size));
+    if (_page < pages) { _page++; renderPage(); }
+}
+
+/* ── 详情 Modal ── */
+const FIELD_LABELS = {
+    seckill_id:        '秒杀ID',
+    goods_id:          '商品ID',
+    title:             '商品名称',
+    goods_image_url:   '商品图片',
+    price_min:         '最低价（分）',
+    price_max:         '最高价（分）',
+    price_display:     '价格展示',
+    activity_status:   '活动状态',
+    group_title:       '分组名称',
+    slot_time:         '场次时间',
+    start_time:        '开始时间',
+    end_time:          '结束时间',
+    sold_quantity:     '已售数量',
+    stock_quantity:    '剩余库存',
+    limit_per_person:  '限购数量',
+    coupon_info:       '优惠信息',
+    extra:             '扩展字段',
+    batch_id:          '批次ID',
+    created_at:        '首次入库',
+    updated_at:        '最近更新',
+};
+
+function showDetail(idx) {
+    const r = _filtered[idx];
+    if (!r) return;
+    document.getElementById('modal-title').textContent = r.title || '商品详情';
+
+    let html = '';
+    // 图片单独处理
+    if (r.goods_image_url) {
+        html += `
+            <div class="detail-label">商品图片</div>
+            <div class="detail-value">
+                <img src="${esc(r.goods_image_url)}" style="max-width:160px;border-radius:6px;" onerror="this.style.display='none'">
+            </div>
+            <hr class="detail-divider">
+        `;
+    }
+    // 价格块
+    const displayPrice = r.price_display || null;
+    const sp = r.price_min != null ? (r.price_min / 100).toFixed(2) : null;
+    const op = r.price_max != null ? (r.price_max / 100).toFixed(2) : null;
+    const priceHtml = displayPrice
+        ? `<span style="color:#e74c3c;font-weight:600;">${esc(displayPrice)}</span>`
+        : sp ? `<span style="color:#e74c3c;font-weight:600;">¥${sp}</span>${op && op !== sp ? ` <del style="color:#aaa;">¥${op}</del>` : ''}` : '—';
+    html += `
+        <div class="detail-label">价格</div>
+        <div class="detail-value">${priceHtml}</div>
+        <hr class="detail-divider">
+    `;
+    // 字段列表
+    const fieldOrder = [
+        'activity_status','group_title','slot_time',
+        'start_time','end_time',
+        'sold_quantity','stock_quantity','limit_per_person',
+        'price_min','price_max','price_display',
+        'seckill_id','goods_id','batch_id',
+        'created_at','updated_at',
+        'coupon_info','extra',
+    ];
+    fieldOrder.forEach(k => {
+        let v = r[k];
+        if (v == null || v === '') return;
+        if (k === 'start_time' || k === 'end_time' || k === 'created_at' || k === 'updated_at') v = fmtDate(v);
+        html += `<div class="detail-label">${FIELD_LABELS[k] || k}</div>
+                 <div class="detail-value">${esc(String(v))}</div>`;
+    });
+
+    document.getElementById('modal-body').innerHTML = html;
+    document.getElementById('detail-modal').classList.add('show');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeModal(e) {
+    if (e.target === document.getElementById('detail-modal')) closeModalDirect();
+}
+function closeModalDirect() {
+    document.getElementById('detail-modal').classList.remove('show');
+    document.body.style.overflow = '';
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModalDirect(); });
+
+/* ── 初始化 ── */
+document.addEventListener('DOMContentLoaded', () => {
+    // 渲染默认排序列高亮
+    sortBy(_sortKey);
+    loadAll();
+});
+</script>
+{% endblock %}

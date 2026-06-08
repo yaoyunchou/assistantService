@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+
+{% block title %}秒杀预购列表 - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.status-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08);
+    padding: 28px 30px;
+    margin-bottom: 24px;
+}
+.status-title { font-size: 18px; font-weight: 600; color: #2c3e50; margin-bottom: 8px; }
+.desc { color: #7f8c8d; line-height: 1.65; font-size: 14px; margin-bottom: 0; }
+
+.btn {
+    padding: 10px 20px; border: none; border-radius: 6px;
+    font-size: 14px; font-weight: 600; cursor: pointer; transition: .2s;
+}
+.btn-primary { background: #e74c3c; color: #fff; }
+.btn-primary:hover { background: #c0392b; }
+.btn-secondary { background: #ecf0f1; color: #2c3e50; }
+.btn-secondary:hover { background: #dfe6e9; }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
+
+.stat-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.stat-badge {
+    background: #fdf2f2; border-radius: 8px;
+    padding: 10px 18px; text-align: center; min-width: 88px;
+}
+.stat-badge.green { background: #e8f5e9; }
+.stat-badge.grey  { background: #f5f5f5; }
+.stat-badge.blue  { background: #ebf5fb; }
+.stat-num   { font-size: 22px; font-weight: 700; color: #2c3e50; }
+.stat-label { font-size: 11px; color: #7f8c8d; margin-top: 2px; }
+
+.msg-bar {
+    display: none; margin-top: 14px; padding: 12px 14px;
+    border-radius: 8px; font-size: 13px;
+}
+.msg-bar.info  { background: #ebf5fb; border: 1px solid #aed6f1; color: #1a5276; }
+.msg-bar.error { background: #fdecea; border: 1px solid #f5c6cb; color: #721c24; }
+
+.result-table-wrap { overflow-x: auto; margin-top: 18px; }
+table.list-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.list-table th {
+    background: #c0392b; color: #fff;
+    padding: 10px 12px; text-align: left; white-space: nowrap;
+}
+.list-table td {
+    padding: 10px 12px; border-bottom: 1px solid #f0f0f0;
+    vertical-align: top; word-break: break-word; max-width: 240px;
+}
+.list-table tr:hover td { background: #fff8f7; }
+.list-table tr.row-match td { background: #f3fbf4; }
+.list-table tr.row-match:hover td { background: #eaf7eb; }
+.list-table .no-data td { text-align: center; color: #aaa; padding: 36px; }
+
+.thumb {
+    width: 56px; height: 56px; object-fit: cover;
+    border-radius: 4px; border: 1px solid #eee; display: block;
+}
+.order-no { font-family: monospace; font-size: 12px; }
+.badge {
+    display: inline-block; padding: 3px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+.badge-yes { background: #d5f5e3; color: #1e8449; }
+.badge-no  { background: #fdebd0; color: #b9770e; }
+.meta { font-size: 12px; color: #7f8c8d; margin-top: 4px; }
+.link-btn {
+    color: #2980b9; font-size: 12px; text-decoration: none;
+}
+.link-btn:hover { text-decoration: underline; }
+
+.loading-spin {
+    display: inline-block; width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,.35);
+    border-top-color: #fff; border-radius: 50%;
+    animation: spin .7s linear infinite; vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.empty-hint { text-align: center; color: #95a5a6; padding: 48px 20px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">⚡ 秒杀预购列表</h1>
+    <p class="subtitle desc">
+        展示预售表内 <strong>online=true</strong> 且 <strong>未标记</strong>（<code>purchased=0</code>）的订单，
+        按货号联动安特商品搜索缓存（无缓存时自动打开浏览器搜索），并与限时秒杀（默认「秒杀中」）对照。
+    </p>
+</div>
+
+<div class="status-card">
+    <div class="status-title">预购 × 秒杀适配</div>
+    <div class="toolbar">
+        <button id="btn-refresh" class="btn btn-primary" onclick="loadCompare()">刷新</button>
+        <label style="font-size:13px;color:#636e72;">
+            秒杀状态
+            <select id="f-seckill-status" onchange="loadCompare()" style="margin-left:6px;padding:6px 8px;border-radius:4px;border:1px solid #ddd;">
+                <option value="秒杀中" selected>秒杀中</option>
+                <option value="预热/待开始">预热/待开始</option>
+                <option value="">全部</option>
+            </select>
+        </label>
+        <span id="load-hint" style="font-size:13px;color:#636e72;"></span>
+    </div>
+
+    <div id="msg-bar" class="msg-bar"></div>
+
+    <div class="stat-row">
+        <div class="stat-badge blue">
+            <div class="stat-num" id="stat-presell">—</div>
+            <div class="stat-label">预售未标记</div>
+        </div>
+        <div class="stat-badge green">
+            <div class="stat-num" id="stat-match">—</div>
+            <div class="stat-label">有秒杀活动</div>
+        </div>
+        <div class="stat-badge grey">
+            <div class="stat-num" id="stat-nomatch">—</div>
+            <div class="stat-label">无秒杀匹配</div>
+        </div>
+        <div class="stat-badge">
+            <div class="stat-num" id="stat-seckill">—</div>
+            <div class="stat-label">秒杀库条数</div>
+        </div>
+    </div>
+
+    <div class="result-table-wrap">
+        <table class="list-table">
+            <thead>
+                <tr>
+                    <th>适配</th>
+                    <th>图片</th>
+                    <th>平台订单号</th>
+                    <th>预售商品</th>
+                    <th>安特商品（搜索）</th>
+                    <th>支付时间</th>
+                    <th>秒杀商品</th>
+                    <th>秒杀价</th>
+                    <th>场次</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="list-tbody">
+                <tr><td colspan="10" class="empty-hint"><span class="loading-spin" style="border-color:#ccc;border-top-color:#e74c3c;"></span> 加载中…</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function esc(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function showMsg(text, type) {
+    const el = document.getElementById('msg-bar');
+    el.className = 'msg-bar ' + (type || 'info');
+    el.style.display = text ? 'block' : 'none';
+    el.textContent = text || '';
+}
+
+function renderTable(data) {
+    document.getElementById('stat-presell').textContent = data.presellTotal ?? '—';
+    document.getElementById('stat-match').textContent = data.inActivityCount ?? '—';
+    document.getElementById('stat-nomatch').textContent = data.notInActivityCount ?? '—';
+    document.getElementById('stat-seckill').textContent = data.seckillTotal ?? '—';
+
+    const rows = [
+        ...(data.inActivity || []).map(r => ({ ...r, _matched: true })),
+        ...(data.notInActivity || []).map(r => ({ ...r, _matched: false })),
+    ];
+
+    const tbody = document.getElementById('list-tbody');
+    if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="10" class="no-data">暂无符合条件的预售数据</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = rows.map(r => {
+        const sk = r.seckill || {};
+        const gs = r.goodsSearch || {};
+        const matched = r._matched;
+        const rowClass = matched ? 'row-match' : '';
+        const badge = matched
+            ? `<span class="badge badge-yes">有秒杀</span>`
+            : `<span class="badge badge-no">无匹配</span>`;
+        const img = r.imgUrl || gs.goods_image || sk.seckill_image || '';
+        const skTitle = sk.title || '—';
+        const gsTitle = gs.goods_name || (r.searchError ? '—' : '未搜索');
+        const gsMeta = [];
+        if (r.searchKeyword) gsMeta.push('词: ' + r.searchKeyword);
+        if (gs.goods_id) gsMeta.push('id: ' + gs.goods_id);
+        if (gs.seckill_id) gsMeta.push('秒杀: ' + gs.seckill_id);
+        else if (gs.goods_id) gsMeta.push('秒杀: 无');
+        if (r.searchFromCache) gsMeta.push('缓存');
+        if (r.searchError) gsMeta.push(r.searchError);
+        const gsPrice = (gs.price_min && gs.price_max)
+            ? (gs.price_min === gs.price_max ? gs.price_min : gs.price_min + '~' + gs.price_max)
+            : '';
+        const link = sk.goods_url
+            ? `<a class="link-btn" href="${esc(sk.goods_url)}" target="_blank" rel="noopener">秒杀页</a>`
+            : (gs.goods_url
+                ? `<a class="link-btn" href="${esc(gs.goods_url)}" target="_blank" rel="noopener">商品页</a>`
+                : '—');
+        const matchMeta = matched && r.matchMethod
+            ? `<div class="meta">${esc(r.matchMethod)}${r.matchDetail ? ' · ' + esc(r.matchDetail) : ''}</div>`
+            : '';
+        const activityTime = matched && (sk.start_time || sk.end_time)
+            ? `<div class="meta">${esc(sk.start_time || '—')} ~ ${esc(sk.end_time || '—')}</div>`
+            : '';
+
+        return `<tr class="${rowClass}">
+            <td>${badge}${matchMeta}${activityTime}</td>
+            <td>${img ? `<img class="thumb" src="${esc(img)}" onerror="this.style.display='none'">` : '—'}</td>
+            <td class="order-no">${esc(r.orderNo || '')}<div class="meta">${esc(r.erpOrderNo || '')}</div></td>
+            <td>${esc(r.goodsSpecText || '')}</td>
+            <td>${esc(gsTitle)}${gsMeta.length ? `<div class="meta">${esc(gsMeta.join(' · '))}</div>` : ''}${gsPrice ? `<div class="meta">¥${esc(gsPrice)}</div>` : ''}</td>
+            <td>${esc(r.payTime || '')}</td>
+            <td>${esc(skTitle)}${sk.activity_status ? `<div class="meta">${esc(sk.activity_status)}</div>` : ''}</td>
+            <td>${esc(sk.price_display || '—')}</td>
+            <td>${esc(sk.slot_time || '—')}</td>
+            <td>${link}</td>
+        </tr>`;
+    }).join('');
+}
+
+async function loadCompare() {
+    const btn = document.getElementById('btn-refresh');
+    const hint = document.getElementById('load-hint');
+    const status = document.getElementById('f-seckill-status').value;
+    const qs = new URLSearchParams({
+        online: 'true',
+        markFilter: 'unmarked',
+        seckill_status: status,
+    });
+
+    btn.disabled = true;
+    hint.textContent = '正在对照（含安特商品搜索）…';
+    showMsg('', 'info');
+    document.getElementById('list-tbody').innerHTML =
+        '<tr><td colspan="10" class="empty-hint"><span class="loading-spin" style="border-color:#ccc;border-top-color:#e74c3c;"></span> 加载中（首次可能打开浏览器搜索）…</td></tr>';
+
+    try {
+        const resp = await fetch('/api/pinduoduo/erp-order/presell-seckill-compare?' + qs.toString());
+        const data = await resp.json();
+        if (!data.success) {
+            showMsg(data.error || '加载失败', 'error');
+            document.getElementById('list-tbody').innerHTML =
+                '<tr><td colspan="10" class="no-data">加载失败</td></tr>';
+            return;
+        }
+        renderTable(data);
+        const statusLabel = status || '全部';
+        showMsg(
+            `已加载 ${data.presellTotal} 条预售（online + 未标记），对照秒杀「${statusLabel}」${data.seckillTotal} 条：` +
+            `${data.inActivityCount} 条有活动适配`,
+            'info'
+        );
+        hint.textContent = '更新于 ' + new Date().toLocaleTimeString();
+    } catch (e) {
+        showMsg('请求失败: ' + e.message, 'error');
+        document.getElementById('list-tbody').innerHTML =
+            '<tr><td colspan="10" class="no-data">请求失败</td></tr>';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', loadCompare);
+</script>
+{% endblock %}

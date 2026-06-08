@@ -114,6 +114,19 @@ def register_web_routes(app, tool_manager: ToolManager):
         tools_info = tool_manager.get_tools_info()
         return render_template('feishu_test.html', tools=tools_info, config=Config)
 
+    @app.route('/antexiadan/seckill')
+    def antexiadan_seckill():
+        """安特限时秒杀商品列表"""
+        tools_info = tool_manager.get_tools_info()
+        api_key_set = bool(Config.ANTEXI_API_KEY)
+        return render_template('antexiadan_seckill.html', tools=tools_info, config=Config, api_key_set=api_key_set)
+
+    @app.route('/antexiadan/presell-seckill')
+    def antexiadan_presell_seckill():
+        """安特 · 秒杀预购列表（预售未标记 × 安特秒杀对照）"""
+        tools_info = tool_manager.get_tools_info()
+        return render_template('pinduoduo_erp_presell_seckill.html', tools=tools_info, config=Config)
+
     # ── 电商模块（父路径 /ecommerce/）────────────────────────────
     @app.route('/ecommerce/order')
     def ecommerce_order():
@@ -155,6 +168,10 @@ def register_web_routes(app, tool_manager: ToolManager):
     @app.route('/goods/presell')
     def goods_presell():
         return redirect(url_for('ecommerce_presell'), code=301)
+
+    @app.route('/ecommerce/presell-seckill')
+    def ecommerce_presell_seckill_redirect():
+        return redirect(url_for('antexiadan_presell_seckill'), code=301)
 
     @app.route('/websocket')
     def websocket_page():

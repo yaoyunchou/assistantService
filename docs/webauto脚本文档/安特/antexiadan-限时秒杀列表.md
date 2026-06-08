@@ -1,9 +1,13 @@
 # 安特限时秒杀列表
 
-**脚本文件（webAuto）**：
+**脚本（双仓库同名，请先改 webAuto 再复制到 assistantService）**：
 
-- `antexiadan-seckill-list.js` — 页面内拉取 pcapi，双运行时，默认 POST 入库
-- `antexiadan-seckill-fetch.py` — Python 直连 pcapi，无需浏览器
+| 角色 | 路径 |
+|------|------|
+| 唯一源 | `webAuto/mcp-server/script/antexiadan-seckill-list.js` |
+| assistantService 副本 | `src/spider/antexiadan/scripts/antexiadan-seckill-list.js` |
+| CLI 唯一源 | `webAuto/mcp-server/script/antexiadan-seckill-fetch.py` |
+| CLI 副本 | `src/spider/antexiadan/scripts/antexiadan-seckill-fetch.py` |
 
 **目标页面**：`https://pc.antexiadan.com/homepage`（须登录）
 
@@ -12,10 +16,9 @@
 | 模块 | 路径 |
 |------|------|
 | Flask 路由 | `src/api/routes/antexiadan_routes.py` |
-| SQLite 存储 | `src/spider/antexiadan/seckill_store.py` |
-| MySQL DDL（可选） | `docs/sql/antexiadan-seckill-db-schema.mysql.sql` |
-
-**默认数据库文件**：`data/antexiadan_seckill.sqlite`（可通过环境变量 `ANTEXIADAN_SECKILL_DB_PATH` 覆盖）
+| Playwright 采集 | `src/spider/antexiadan/seckill_sync.py`（读 `scripts/antexiadan-seckill-list.js`） |
+| MySQL 存储 | `src/spider/antexiadan/seckill_store.py` |
+| DDL | `docs/sql/antexiadan-seckill-db-schema.mysql.sql`（与 webAuto `docs/安特/antexiadan-seckill-db-schema.sql` 对齐） |
 
 ---
 

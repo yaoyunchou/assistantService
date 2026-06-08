@@ -12,6 +12,7 @@
 - ✅ **ERP 待审核 / 入库 / 打印** - `/tools/pinduoduo` 加载待审核列表并提交审核（SQLite + 可选飞书审核表）；独立页 `/pdd-erp-delivering-print` 一键「打印并发货」待发货列表；**已发货页今日已打印快递单**：`POST /api/pinduoduo/erp-delivered/today-printed-query`（脚本 `pdd-erp-order-delivered-query.js`，结束飞书 Webhook 摘要）
 - 📡 **途强助手** - 途强智能设备管理平台（iot.tqiot.com）自动化，支持自动登录与最近 30 天记录获取
 - 📦 **1688 订单提取** - 从 1688 待收货订单列表提取订单与收货信息，支持同步到飞书多维表格（Web 页与命令行脚本）
+- ⚡ **安特限时秒杀采集** - 对接 `https://pc.antexiadan.com` pcapi，支持 Chrome 扩展页内注入（`antexiadan-seckill-list.js`，双运行时）和 Python 直连 CLI（`antexiadan-seckill-fetch.py`，无需浏览器）；采集结果 POST 入库（MySQL，三张表：批次 / 当前态 / 快照），提供 `GET /api/antexiadan/seckill-list/products` 查询与 `GET /api/antexiadan/seckill-list/batch/latest` 批次查询
 - ⚙️ **模块化配置** - 支持通过配置控制功能模块的启用/禁用和启动时机
 - 🔧 **可扩展架构** - 工具管理器设计，方便添加新工具
 - 📊 **资源监控** - 实时监控内存和CPU使用情况

@@ -1023,8 +1023,115 @@ def pinduoduo_erp_audit_sync_feishu():
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 预售订单（pdd-erp-order-presell-list.js）
+# 预售订单（pdd-erp-order-presell-list.js + erp_order_presell 表）
 # ────────────────────────────────────────────────────────────────────────────
+
+@bp.route('/erp-order/presell-records', methods=['GET'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '查询预售表 erp_order_presell（与 Nest presell-records 筛选一致）',
+    'parameters': [
+        {'name': 'page', 'in': 'query', 'type': 'integer', 'default': 1},
+        {'name': 'pageSize', 'in': 'query', 'type': 'integer', 'default': 10},
+        {
+            'name': 'online',
+            'in': 'query',
+            'type': 'boolean',
+            'description': 'true 仅上架/在线；false 仅下架',
+        },
+        {
+            'name': 'markFilter',
+            'in': 'query',
+            'type': 'string',
+            'enum': ['unmarked', 'marked', 'all'],
+            'description': 'unmarked=purchased=0；marked=purchased=1',
+        },
+    ],
+    'responses': {200: {'description': '分页列表'}},
+})
+def pinduoduo_erp_presell_records():
+    """读取 MySQL 表 erp_order_presell。"""
+    from spider.pinduoduo.presell_store import _parse_online, list_presell_records
+
+    page = request.args.get('page', 1)
+    page_size = request.args.get('pageSize', request.args.get('page_size', 10))
+    online = _parse_online(request.args.get('online'))
+    mark_filter = request.args.get('markFilter') or request.args.get('mark_filter')
+
+    try:
+        result = list_presell_records(
+            online=online,
+            mark_filter=mark_filter,
+            page=int(page),
+            page_size=int(page_size),
+        )
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        routes_logger.error('预售表查询异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    return jsonify({'success': True, **result})
+
+
+@bp.route('/erp-order/presell-seckill-compare', methods=['GET'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '预售商品 × 安特限时秒杀对照（查哪些预售单正在秒杀活动中）',
+    'parameters': [
+        {'name': 'online', 'in': 'query', 'type': 'boolean', 'default': True},
+        {
+            'name': 'markFilter',
+            'in': 'query',
+            'type': 'string',
+            'default': 'unmarked',
+            'description': 'unmarked=purchased=0',
+        },
+        {
+            'name': 'seckill_status',
+            'in': 'query',
+            'type': 'string',
+            'default': '秒杀中',
+            'description': '安特活动状态，默认仅比对正在秒杀中的商品',
+        },
+    ],
+    'responses': {200: {'description': '对照结果：inActivity / notInActivity'}},
+})
+def pinduoduo_erp_presell_seckill_compare():
+    """将 erp_order_presell 与 antexiadan_seckill_product 按货号/标题匹配。"""
+    from spider.pinduoduo.presell_seckill_match import compare_presell_with_seckill
+    from spider.pinduoduo.presell_store import _parse_online
+
+    online = _parse_online(request.args.get('online', 'true'))
+    if online is None:
+        online = True
+    mark_filter = request.args.get('markFilter') or request.args.get('mark_filter') or 'unmarked'
+    # 页面「全部」会显式传 seckill_status=；未传参时 API 默认仍比对「秒杀中」
+    if 'seckill_status' in request.args:
+        seckill_status = request.args.get('seckill_status') or ''
+    else:
+        seckill_status = '秒杀中'
+
+    use_goods_search = str(request.args.get('use_goods_search', 'true')).lower() not in (
+        '0', 'false', 'no',
+    )
+
+    try:
+        result = compare_presell_with_seckill(
+            online=online,
+            mark_filter=mark_filter,
+            seckill_status=seckill_status,
+            browser_pool=get_browser_pool() if use_goods_search else None,
+            use_goods_search=use_goods_search,
+        )
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        routes_logger.error('预售×秒杀对照异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    return jsonify({'success': True, **result})
+
 
 @bp.route('/erp-presell/collect', methods=['POST'])
 @swag_from({

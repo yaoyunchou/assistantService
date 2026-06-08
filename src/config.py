@@ -191,8 +191,16 @@ class Config:
     ).strip()
     # 可选：SQLite 绝对路径；留空则用 get_safe_data_path('data/pdd_erp_audit.sqlite')
     PINDUODUO_ERP_AUDIT_DB_PATH = (os.getenv('PINDUODUO_ERP_AUDIT_DB_PATH') or '').strip()
-    # 安特限时秒杀 SQLite；留空则用 data/antexiadan_seckill.sqlite
-    ANTEXIADAN_SECKILL_DB_PATH = (os.getenv('ANTEXIADAN_SECKILL_DB_PATH') or '').strip()
+    # 安特限时秒杀 MySQL 连接（与 .env 通用 DB_* 字段对齐）
+    ANTEXIADAN_DB_HOST     = (os.getenv('DB_HOST')     or 'localhost').strip()
+    ANTEXIADAN_DB_PORT     = int((os.getenv('DB_PORT') or '3306').strip() or '3306')
+    ANTEXIADAN_DB_USER     = (os.getenv('DB_USERNAME') or 'root').strip()
+    ANTEXIADAN_DB_PASSWORD = (os.getenv('DB_PASSWORD') or '').strip()
+    ANTEXIADAN_DB_NAME     = (os.getenv('DB_DATABASE') or 'cursor').strip()
+    ANTEXIADAN_DB_CHARSET  = (os.getenv('ANTEXIADAN_DB_CHARSET') or 'utf8mb4').strip()
+    # 安特 pcapi key（从 Chrome Network seckill-list 请求复制 key 参数；定期更新）
+    ANTEXI_API_KEY         = (os.getenv('ANTEXI_API_KEY') or '').strip()
+    ANTEXI_API_VERSION     = (os.getenv('ANTEXI_API_VERSION') or '20251218').strip()
     # 库存同步：ERP 全部店铺表 → 库存信息表 + 扣减日志表（定时任务 inventory_sync_job）
     # 库存信息表 / 扣减日志表均有默认 table_id，可用环境变量覆盖（与你们飞书实际表不一致时请改 .env）
     PINDUODUO_FEISHU_INVENTORY_INFO_TABLE_ID = os.getenv(

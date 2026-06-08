@@ -1,5 +1,74 @@
 # 变更日志
 
+## 2026-06-06 - 预售×秒杀对照排除已结束活动
+
+- **原因**：选「全部」时会匹配 `activity_status=已结束` 或 `end_time` 已过的历史活动，仍显示「有秒杀」。
+- **修复**：`list_products(exclude_ended=True)`；匹配循环内 `_is_seckill_active()` 二次校验。
+
+## 2026-06-06 - 修复秒杀预购「全部」筛选无效
+
+- **原因**：选「全部」时前端未传 `seckill_status`，后端 `get(..., '秒杀中')` 仍按「秒杀中」过滤。
+- **修复**：前端始终传 `seckill_status`（空字符串表示全部）；后端仅在参数缺失时默认「秒杀中」。
+
+## 2026-06-06 - 秒杀预购列表「适配」列展示活动时间
+
+- **`pinduoduo_erp_presell_seckill.html`**：有秒杀匹配时在「适配」列显示 `start_time ~ end_time`。
+
+## 2026-06-06 - 秒杀预购页联动安特商品搜索（方案 A）
+
+- **`src/spider/antexiadan/goods_search.py`**（新增）：浏览器拦截 pcapi key，调用 `search-goods-list` 并 UPSERT；`ensure_goods_search` / `ensure_goods_search_batch`。
+- **`src/spider/pinduoduo/presell_seckill_match.py`**：对照时按货号查 `antexiadan_goods_search`，无缓存则一次浏览器会话批量搜索；返回 `goodsSearch` / `searchKeyword` / `searchFromCache`。
+- **`GET /api/pinduoduo/erp-order/presell-seckill-compare`**：默认 `use_goods_search=true`，传入浏览器池。
+- **`POST /api/antexiadan/goods-search/fetch-browser`**、**`GET /api/antexiadan/goods-search`**：单条搜索入库与本地缓存查询。
+- **`pinduoduo_erp_presell_seckill.html`**：新增「安特商品（搜索）」列，展示搜索词、goods_id、seckill_id、价格与缓存状态。
+
+## 2026-06-06 - 安特商品搜索缓存表 antexiadan_goods_search
+
+- **`docs/sql/antexiadan-seckill-db-schema.mysql.sql`**：新增 `antexiadan_goods_search` 表 DDL（按 keyword 唯一，缓存 search-goods-list 商品信息）。
+- **`src/spider/antexiadan/goods_search_store.py`**（新增）：`init_db`、`get_by_keyword`、`get_by_keywords`、`upsert_from_search`、`upsert_from_api_response`、`list_records`、`serialize_row`。
+
+## 2026-06-06 - 秒杀预购列表移至安特导航
+
+- 页面路径由 `/ecommerce/presell-seckill` 改为 **`/antexiadan/presell-seckill`**；旧路径 301 重定向。
+- 侧边栏从「电商」分组移至 **「安特」** 分组。
+
+## 2026-06-06 - 秒杀预购列表页面
+
+- **`src/web/templates/pinduoduo_erp_presell_seckill.html`**（新增）：打开即加载 `presell-seckill-compare` 接口，展示 online + 未标记预售与安特秒杀适配结果；支持刷新与秒杀状态筛选。
+- **`src/web/routes.py`**：新增 `GET /ecommerce/presell-seckill` → `ecommerce_presell_seckill`。
+- **`src/web/templates/base.html`**：电商分组增加「秒杀预购列表」导航。
+- **`pinduoduo_erp_presell.html`**：移除临时对照按钮（功能迁移至新页）。
+
+## 2026-06-06 - 预售订单 × 安特限时秒杀对照
+
+- **`src/spider/pinduoduo/presell_seckill_match.py`**（新增）：读取 `erp_order_presell`（online + unmarked）与 `antexiadan_seckill_product`（默认秒杀中），按货号/标题匹配，输出 `inActivity` / `notInActivity`。
+- **`GET /api/pinduoduo/erp-order/presell-seckill-compare`**：对照接口，参数 `online`、`markFilter`、`seckill_status`。
+- **`pinduoduo_erp_presell.html`**：新增「对照限时秒杀」按钮与结果表格。
+
+## 2026-06-06 - 拼多多预售表查询接口（erp_order_presell）
+
+- **`src/spider/pinduoduo/presell_store.py`**（新增）：读取 MySQL 表 `erp_order_presell`，支持 `online`、`markFilter`（`unmarked`→`purchased=0`，`marked`→`purchased=1`）分页。
+- **`src/api/routes/pinduoduo_routes.py`**：新增 `GET /api/pinduoduo/erp-order/presell-records?page=1&pageSize=10&online=true&markFilter=unmarked`（与 Nest 筛选语义对齐）。
+
+## 2026-06-06 - 安特预售：正在预售且未下架商品查询
+
+- **`src/spider/antexiadan/seckill_store.py`**：
+  - `list_products()` 新增 `exclude_offline`，排除 `goods_is_offline=1`（平台已标记下架）。
+  - 新增 `list_presale_active_unmarked()`：`activity_status=预热/待开始` + `group_title=预热中` + 未下架。
+- **`src/api/routes/antexiadan_routes.py`**：
+  - `GET /api/antexiadan/seckill-list/products` 支持 `presale_active`、`exclude_offline` 查询参数。
+  - 新增 `GET /api/antexiadan/seckill-list/products/presale-active-unmarked` 专用接口。
+- **`src/web/templates/antexiadan_seckill.html`**：筛选栏增加「未下架」勾选与「正在预售·未下架」快捷按钮。
+
+## 2026-06-05 - 安特限时秒杀商品详情 Modal
+
+### 新增功能
+- **`src/web/templates/antexiadan_seckill.html`**：
+  - 商品列表末尾新增「操作」列，每行有「详情」按钮。
+  - 点击详情弹出 Modal，展示该商品的完整字段：商品图片（若有）、秒杀价/原价、活动状态、场次、开始/结束时间、已售/库存/限购数量、秒杀ID、商品ID、批次ID、入库/更新时间、优惠信息、扩展字段。
+  - Modal 支持点击遮罩、右上角 × 按钮、按 Escape 键关闭。
+  - `colspan` 从 9 改为 10 适配新增列。
+
 ## 2026-06-04 - 架构重构第一阶段：模块解耦（notify / storage / workflow）
 
 ### 第一步：建立 `notify/` 统一通知模块
@@ -4471,3 +4540,83 @@ kuaidi/
     - 新增 Sheet 3 SKU价格：`skuId / 规格组合 / 价格 / 缺货`，来自 `skus` 字段
     - Sheet 编号顺序后移：参数→Sheet4，图片→Sheet5
   - Swagger 文档：新增 `skus` 参数描述，更新 `specs` 描述
+
+---
+
+## 2026-06-04 - 安特限时秒杀列表采集入库功能上线
+
+### 新功能
+
+**变更原因**：
+- 安特 PC 商城（`https://pc.antexiadan.com`）限时秒杀商品需要定期采集存档，用于选品分析与历史对比
+
+**新增文件**：
+- `src/api/routes/antexiadan_routes.py` — Flask Blueprint，`url_prefix=/api/antexiadan`，三条路由：
+  - `POST /api/antexiadan/seckill-list/sync` — 接收 webAuto 采集结果，写批次 + UPSERT 商品 + 可选快照
+  - `GET /api/antexiadan/seckill-list/products` — 查询当前态商品（支持 `activity_status`、`group_title`、`slot_time`、`limit`、`offset`）
+  - `GET /api/antexiadan/seckill-list/batch/latest` — 查询最近一次抓取批次元数据
+- `src/spider/antexiadan/seckill_store.py` — SQLite 存储层（默认 `data/antexiadan_seckill.sqlite`，可由 `ANTEXIADAN_SECKILL_DB_PATH` 覆盖），包含：
+  - `init_db()` — 建三张表（`antexiadan_seckill_fetch_batch` / `antexiadan_seckill_product` / `antexiadan_seckill_product_snapshot`）及索引
+  - `sync_payload()` — 事务写入：插入批次 → UPSERT 商品 → 按 `writeSnapshot` 决定是否写快照
+  - `list_products()` / `get_latest_batch()` — 查询接口
+- `src/spider/antexiadan/__init__.py` — 包初始化
+
+**webAuto 侧脚本**（`C:\Users\yao\Desktop\work\webAuto\mcp-server\script\`）：
+- `antexiadan-seckill-list.js` — 页面内 fetch pcapi，双运行时（`extension` 走扩展桥 POST；`python` 返回 `syncUrl/syncBody` 由 Python 调用）；支持 `window.__ANTEXI_SECKILL_API_KEY` / `__ANTEXI_SECKILL_SYNC_URL` / `__ANTEXI_SECKILL_SYNC` 配置
+- `antexiadan-seckill-fetch.py` — Python 直连 pcapi（不依赖浏览器），支持 `--sync` 直接 POST 入库、`-o` 导出 JSON/CSV，key 通过 `ANTEXI_API_KEY` 环境变量或 `--key` 传入
+
+**注册变更**：
+- `src/api/routes/__init__.py` — 已注册 `antexiadan_bp`，Swagger 标签 `安特`
+
+---
+
+## 2026-06-04 - 安特限时秒杀页面
+
+### 新增文件
+- `src/web/templates/antexiadan_seckill.html` — 限时秒杀商品列表页，功能：
+  - 顶部批次卡：显示最近一次抓取时间、服务端时间、商品数、来源
+  - 统计标签：总数 / 秒杀中 / 预热中 / 已结束分色显示
+  - 多维筛选栏：活动状态、分组、时段、关键词（标题/ID）
+  - 商品表格：状态徽章、分组、时段、标题、价格、开始/结束时间、秒杀ID、商品ID
+  - 前端排序（点击表头切换升降序）、分页（每页 50/100/200/500 可选）
+  - 页面打开自动加载，「刷新数据」按钮手动触发
+
+### 修改文件
+- `src/web/routes.py` — 新增 `GET /antexiadan/seckill` → 渲染 `antexiadan_seckill.html`
+- `src/web/templates/base.html` — 侧边栏「电商」分组后新增「安特」折叠分组，子项「限时秒杀」链接至 `/antexiadan/seckill`
+**数据库表结构**：
+- `antexiadan_seckill_fetch_batch` — 每次抓取批次元数据（`fetched_at`、`server_time`、`item_count` 等）
+- `antexiadan_seckill_product` — 商品当前态（按 `seckill_id` UPSERT，含 `last_fetch_batch_id`、`updated_at`）
+- `antexiadan_seckill_product_snapshot` — 每批次全量快照（`UNIQUE(fetch_batch_id, seckill_id)`）
+
+**关联文档**：
+- `docs/webauto脚本文档/安特/antexiadan-限时秒杀列表.md`
+- `docs/sql/antexiadan-seckill-db-schema.mysql.sql`（MySQL DDL，已由用户手动初始化）
+- webAuto：`docs/安特/antexiadan-seckill-list.md`
+
+---
+
+## 2026-06-04 - 安特秒杀存储层改为 MySQL
+
+### 变更原因
+
+用户使用 MySQL，已通过 `docs/sql/antexiadan-seckill-db-schema.mysql.sql` 初始化三张表。
+
+### 修改文件
+
+- `requirements.txt` — 新增 `pymysql>=1.1.0`
+- `src/config.py`
+  - 移除 `ANTEXIADAN_SECKILL_DB_PATH`（SQLite 路径）
+  - 新增 MySQL 连接参数（均可通过 `.env` 覆盖）：
+    - `ANTEXIADAN_DB_HOST`（默认 `localhost`）
+    - `ANTEXIADAN_DB_PORT`（默认 `3306`）
+    - `ANTEXIADAN_DB_USER`（默认 `root`）
+    - `ANTEXIADAN_DB_PASSWORD`
+    - `ANTEXIADAN_DB_NAME`（默认 `antexiadan`）
+    - `ANTEXIADAN_DB_CHARSET`（默认 `utf8mb4`）
+- `src/spider/antexiadan/seckill_store.py` — 完全重写：
+  - 移除 `sqlite3` / `init_db()`，改用 `pymysql.connect()` + `DictCursor`
+  - `_PRODUCT_UPSERT_SQL` 改为 `INSERT ... ON DUPLICATE KEY UPDATE`
+  - `_SNAPSHOT_INSERT_SQL` 改为 `INSERT IGNORE INTO ...`
+  - `_row_tuple` 空字符串改为 `None`（MySQL NULL 友好）
+  - 去掉 `dbPath` 返回字段（MySQL 无路径概念）
