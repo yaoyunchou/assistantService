@@ -89,7 +89,7 @@
 
                 {# ── 电商分组 ── #}
                 {% set _ec_endpoints = ['ecommerce_order', 'ecommerce_presell', 'ecommerce_after_sale', 'ecommerce_delivering_print'] %}
-                {% set _ec_tool_active = request.endpoint == 'tool_page' and request.view_args.get('tool_name') == 'pinduoduo' %}
+                {% set _ec_tool_active = request.endpoint == 'tool_page' and request.view_args.get('tool_name') in ('pinduoduo', 'taobao') %}
                 {% set _ec_active = request.endpoint in _ec_endpoints or _ec_tool_active %}
                 <div class="nav-group {% if _ec_active %}open{% endif %}" id="nav-group-ecommerce">
                     <div class="nav-group-header" onclick="toggleNavGroup('nav-group-ecommerce')">
@@ -99,9 +99,14 @@
                     </div>
                     <div class="nav-group-children">
                         <a href="{{ url_for('tool_page', tool_name='pinduoduo') }}"
-                           class="nav-item nav-child {% if _ec_tool_active %}active{% endif %}">
+                           class="nav-item nav-child {% if request.endpoint == 'tool_page' and request.view_args.get('tool_name') == 'pinduoduo' %}active{% endif %}">
                             <span class="nav-icon">🛒</span>
                             <span class="nav-text">订单助手</span>
+                        </a>
+                        <a href="{{ url_for('tool_page', tool_name='taobao') }}"
+                           class="nav-item nav-child {% if request.endpoint == 'tool_page' and request.view_args.get('tool_name') == 'taobao' %}active{% endif %}">
+                            <span class="nav-icon">🛍️</span>
+                            <span class="nav-text">淘宝上架</span>
                         </a>
                         <a href="{{ url_for('ecommerce_order') }}"
                            class="nav-item nav-child {% if request.endpoint == 'ecommerce_order' %}active{% endif %}">
@@ -165,7 +170,7 @@
 
                 {# ── 工具分组（其余业务工具 + 系统工具页） ── #}
                 {% set _tool_names_in_group = [] %}
-                {% for tool in tools %}{% if tool.name not in ('pinduoduo', 'ai_assistant') %}{% set _ = _tool_names_in_group.append(tool.name) %}{% endif %}{% endfor %}
+                {% for tool in tools %}{% if tool.name not in ('pinduoduo', 'taobao', 'ai_assistant') %}{% set _ = _tool_names_in_group.append(tool.name) %}{% endif %}{% endfor %}
                 {% set _sys_endpoints = ['browser_status', 'feishu_test', 'websocket_page', 'settings'] %}
                 {% set _other_tool_active = request.endpoint == 'tool_page' and request.view_args.get('tool_name') in _tool_names_in_group %}
                 {% set _tools_group_active = _other_tool_active or request.endpoint in _sys_endpoints %}
@@ -177,7 +182,7 @@
                     </div>
                     <div class="nav-group-children">
                         {% for tool in tools %}
-                        {% if tool.name not in ('pinduoduo', 'ai_assistant') %}
+                        {% if tool.name not in ('pinduoduo', 'taobao', 'ai_assistant') %}
                         <a href="{{ url_for('tool_page', tool_name=tool.name) }}"
                            class="nav-item nav-child {% if request.endpoint == 'tool_page' and request.view_args.get('tool_name') == tool.name %}active{% endif %}">
                             <span class="nav-icon">{{ tool.icon or '🔧' }}</span>

@@ -1,5 +1,103 @@
 # 变更日志
 
+- **上传入口**：`https://item.upload.taobao.com/sell/ai/category.htm`（以图发品）；「打开以图发品」直达该页，已登录则无需再走 login.taobao.com。
+
+## 2026-06-16 - 拼多多库存 AI 匹配改用 Cursor Agent
+
+- **变更**：`inventory_sync_job._ai_match_product_name` 从 OpenAI 兼容 `ask()` 改为 `run_agent()`（Cursor SDK）。
+- **配置**：需配置 `CURSOR_API_KEY` 与 `CURSOR_MODEL`；不再依赖 `AI_API_KEY` / `AI_BASE_URL` 做库存关联匹配。
+- **行为**：新增 `_parse_ai_match_result` 解析 Agent 回复；日志前缀 `[Cursor AI匹配]`；同次任务 `ai_cache` 去重逻辑不变。
+- **注意**：单次匹配耗时显著增加（数秒级），批量订单同步整体会变慢；修改后需重启 `dev.py`。
+
+## 2026-06-16 - 上传确认条误匹配「确认，下一步」
+
+- **现象**：报错 `上传确认条可见但未找到可点的确认按钮`，probe 为 `确认，下一步` 且 `disabled=true`。
+- **原因**：`[class*="image-mode-footer"]` 误匹配类目页底栏，非 `#ai-category-image-mode-footer`；该类目按钮本就不能在上传阶段点击。
+- **修复**：仅识别 `ai-category-image-mode-footer`；排除含「下一步」的底栏；等待真正上传确认条；移除 `set_viewport_size` 兜底避免 no_viewport 比例错乱。
+
+## 2026-06-16 - 主图流程梳理（本地上传 → 审计 → 图库 1:1）
+
+- **流程**：`flows/category_images.py` 统一三步——① 逐张本地上传+底部确认 ② 审计主图/更多图 ③ 主图不足则从图库勾选**最近 N 张**做 1:1 入主图。
+- **日志**：`[主图流程]`、`[浏览器状态]` 写入 app 日志与 `step.jsonl`（`images_*` 阶段）。
+- **调试浏览器**：上架时**不再关闭**用户手动打开的标签页；自动化占用主标签页时请在**新 tab** 手动操作。
+
+## 2026-06-16 - 本地上传确认条不出现（绕过 image-mode）
+
+- **现象**：选完文件后 `#ai-category-image-mode-footer` 始终不出现，底部确认按钮看不到。
+- **原因**：页面存在 hidden `input[type=file]` 时代码直接 `set_input_files`，**跳过了「从本地上传」→ image-mode**；另 `dismiss_overlays` 的 Escape 会关掉 image-mode。
+- **修复**：每张图必须「点从本地上传 → 文件选择器 → 等底部确认条 → 点确认」；去掉上传前 Escape；确认条轮询 60s + fixed 底栏兜底探测。
+
+## 2026-06-16 - 淘宝浏览器窗口恢复默认最大化
+
+- **现象**：`ai-category-image-mode-footer` 确认条在页面最底部，窗口较小时看不见、点不到。
+- **原因**：BrowserPool 固定 `viewport=1920x1080` 与持久化窗口尺寸冲突；设置页 `window_width/height` 只影响助手桌面窗口，不影响 Chromium。
+- **修复**：BrowserPool 改为 `no_viewport=True`（跟随真实窗口）；淘宝流程启动时 CDP 最大化；点击确认条前 `scrollIntoView`。
+- **注意**：修改后需**重启** `dev.py`；若仍偏小，可在 Chromium 窗口手动拖大一次后会记住。
+
+## 2026-06-16 - 本地上传缺少 ai-category-image-mode-footer 确认
+
+- **现象**：选文件后页面应出现 `#ai-category-image-mode-footer` 确认条，但自动化未点击，审计 main/more 全 0。
+- **原因**：`upload_one_local` 仅 `set_input_files` + sleep，未点确认条；`dismiss_overlays` 的 Escape 还可能误关确认条。
+- **修复**：新增 `confirm_upload_footer()` 等待并点击确认条；确认条可见时跳过 dismiss/Escape；审计 debug 增加 `uploadFooter` 探测。
+- **说明**：多数情况不是反爬，而是图片仍在「预览态」未入库；若确认条 30s 内仍不出现再排查登录/验证码/页面改版。
+
+## 2026-06-16 - 淘宝非 1:1 主图补救未触发
+
+- **现象**：3 张非 1:1 图本地上传后进「更多图片」，审计 `main=0 more=0 hint=null`，`needs_main_recovery=False`，未走图片空间补救即报「商品主图仍为空」。
+- **原因**：补救闸门仅依赖 DOM 审计到的 `more_count` / `uploaded_hint`；页面结构或文案变化时审计漏数，本地上传张数未参与判断。
+- **修复**：`should_recover_main()` — 本地上传后主图仍空则**强制**走图片空间；审计 JS 增加 relaxed 计数、多 hint 正则、`raw_debug`（section 预览、page CDN 图数）；上传/补救全流程加详细日志。
+- **注意**：修改后需**重启** `dev.py` 调试进程。
+
+## 2026-06-15 - 修复淘宝「已有上架链接」误报失败
+
+- **现象**：点击上架时日志显示 `[publish] 失败 msg=商品已有上架链接，跳过`，但商品仍出现在待上架列表。
+- **原因**：汇总表 `淘宝商品汇总.xlsx` 的「上架链接」为空，但单品 `商品信息.xlsx` 基本信息里已有链接（如 2026-05-27 回填）；`load_pending_products` 只查汇总表，而 `publish_one` 以单品链接为准跳过。
+- **修复**：`load_pending_products` 加载单品后也排除已有链接的商品；跳过上架时输出详细日志（链接、时间、目录、是否同步汇总表），并自动将单品链接回填到汇总表；API 将 `skipped` 与真正失败区分日志级别（info vs warning）。
+- **注意**：修改后需**重启** `dev.py` 调试进程。
+
+## 2026-06-14 - 修复淘宝模块循环引用 ImportError
+
+- **现象**：`POST /api/taobao/publish`、`GET /api/taobao/pending` 返回 500，`login_intercept` ↔ `browser_visible` 互相 import。
+- **修复**：新增 `spider/taobao/page_guard.py` 集中 `is_login_page` / `is_category_page` / `focus_browser_page`；`login_intercept`、`browser_visible` 均改从 `page_guard` 导入；`taobao/__init__.py` 改为惰性加载 `TaobaoPublishClient`，避免包初始化时拉起整条依赖链。
+- **注意**：修改后需**重启** `dev.py` 调试进程，否则仍可能命中旧模块缓存。
+
+## 2026-06-14 - 修复淘宝操作误显示拼多多页面
+
+- **原因**：BrowserPool 长驻复用同一 page，预热时 `bring_to_front` 仍停留在拼多多 ERP 登录页。
+- **修复**：`prepare_taobao_browser` 强制 `goto` 淘宝 URL；移除 `ensure_visible` 的无导航预热。
+
+## 2026-06-14 - 淘宝登录页不可见：强制弹出浏览器窗口
+
+- **`BrowserPool.ensure_visible()`**：淘宝操作前自动关闭 headless、软重启并预热可见 Chromium。
+- **`spider/taobao/browser_visible.py`**：`open_url_visible` / `focus_browser_page`。
+- **`open-login` / `publish`**：调用前强制可见窗口；页面增加操作指引与 Alt+Tab 提示。
+
+## 2026-06-14 - 修复淘宝上架 Web 端 500（未登录）
+
+- **原因**：Web 请求 `pause_on_captcha=false`，未登录时直接失败；API 将 `ok:false` 当成 HTTP 500。
+- **修复**：`login_intercept` 增加 `wait_login_timeout_sec` 轮询等待浏览器登录；`publish`/`publish-next` 默认 `wait_for_login=true`（180s）；业务失败统一返回 200 + `need_login`；页面展示明确提示。
+
+## 2026-06-14 - 淘宝商品上架 Web 页面
+
+- **`src/tools/taobao_tool.py`**、`src/web/templates/tools/taobao.html`：独立操作页（待上架列表、检查/打开登录、关键词上架、逐条/下一个上架、执行日志）。
+- **`src/web/templates/base.html`**：电商分组新增 **淘宝上架** 菜单（`/tools/taobao`），从「工具」分组中排除避免重复。
+- **`src/app.py`**：注册 `TaobaoTool`。
+- **`POST /api/taobao/open-login`**：Web 页一键打开淘宝登录页。
+
+## 2026-06-14 - 淘宝商品 Playwright 自动上架
+
+- **`src/spider/taobao/`**（新增）：按 `docs/淘宝商品上传/淘宝商品上传-Playwright开发文档.md` 落地以图发品全链路——数据加载（`data/loader.py`）、图片审计与主图补救（`audit/image_lists.py`、`pages/media_popup.py`）、类目页上传（`pages/category_page.py`）、发布页填表提交（`pages/publish_page.py`）、备案号参考页抓取（`pages/reference_page.py`）、单商品状态机（`flows/publish_one.py`）、步骤日志（`step_logger.py`）。
+- **数据目录**：`C:\Users\yao\Desktop\work\电商数据\淘宝`（总表 `淘宝商品汇总.xlsx` + 单品 `商品信息.xlsx` + `images/`）。
+- **`src/api/routes/taobao_routes.py`**：新增 `GET /api/taobao/pending`、`GET /api/taobao/login-status`、`POST /api/taobao/publish`、`POST /api/taobao/publish-next`。
+- **CLI**：`python -m spider.taobao.cli --list-pending` / `--keyword` / `--next-pending` / `--stop-after audit`。
+
+## 2026-06-09 - ERP 待审核列表加锁（与小程序 order-center 共用）
+
+- **`src/spider/pinduoduo/audit_lock_store.py`**：锁单读写改直连 Nest 共用 MySQL 表 `dictionary`（`category=pingduoduo`,`name=lockGoods`，与 `.env` 的 `DB_*` 一致）；DB 失败回退本地 `data/pdd_audit_locked_orders.json`；`validate_submit_order_nos` 供提交过滤。
+- **锁状态回显修复**：`pinduoduo.html` 待审核列表拉完后再 `GET locked-orders`；`pickOrderNo` 与小程序字段对齐；PUT 成功后用服务端 `order_nos` 回写。
+- **`src/api/routes/pinduoduo_routes.py`**：新增 `GET/PUT /api/pinduoduo/erp-audit/locked-orders`；**`POST /api/pinduoduo/erp-audit/submit`** 提交前拉取 lockGoods，**自动过滤已锁单号** 仅执行未锁订单；全被锁时 400；响应含 `skipped_locked_order_nos`。
+- **`src/web/templates/tools/pinduoduo.html`**：待审核表格增加锁列；已锁订单不可勾选、排序置底、全选/提交均跳过；状态栏显示「已锁 N 单」。
+
 ## 2026-06-06 - 预售×秒杀对照排除已结束活动
 
 - **原因**：选「全部」时会匹配 `activity_status=已结束` 或 `end_time` 已过的历史活动，仍显示「有秒杀」。

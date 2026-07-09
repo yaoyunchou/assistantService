@@ -10,9 +10,9 @@
 - 库存信息表：按订单号无则新增（从订单行复制常用列）。
 - 扣减日志表：默认仅当「快递单号」非空时新增/更新出库相关列。
 - 提醒列命中退货关键词时，若已有日志行则更新退货时间/数量（与已有值相同则跳过 API）。
-- 「库存关联」列（扣减日志表）：扫描库存信息表**全部行**的「商品名称」（SKU 短名，如 "30W 充电头-白色"），
-  用字符多集覆盖 + 功率 + 类别 + Jaccard 综合打分，取分最高的候选；
-  分数 ≥ 阈值（默认 80）则写入该名称，否则写未匹配说明（含商品信息、店铺、失败原因）。
+- 「库存关联」列（扣减日志表）：无手工映射时，从库存信息表「商品名称」候选中经类型预筛后，
+  调用 **Cursor SDK Agent**（`CURSOR_API_KEY` / `CURSOR_MODEL`）做 AI 匹配；命中则写入名称，
+  否则写未匹配说明（含商品信息、店铺、失败原因）。
 - **平台订单号**：三表比对时统一规范化（NFKC、全角横线→-、去空白），避免字符差异导致误判重复。
 """
 from __future__ import annotations
@@ -167,35 +167,66 @@ _SYSTEM_PROMPT_BUNDLE_CHARGER = (
 )
 
 
+def _parse_ai_match_result(result: str, candidates: List[str]) -> str:
+    """从 Cursor Agent 回复中提取候选列表中的匹配项。"""
+    if not result:
+        return ''
+    text = result.strip()
+    if text in candidates:
+        return text
+    if text == '无匹配':
+        return ''
+    for name in candidates:
+        if name in text:
+            return name
+    for line in reversed(text.splitlines()):
+        cleaned = line.strip().lstrip('-•* ').strip('`"\'「」')
+        if cleaned in candidates:
+            return cleaned
+        if cleaned == '无匹配':
+            return ''
+    return ''
+
+
 def _ai_match_product_name(
     erp_info: str,
     candidates: List[str],
-    api_key: str,
-    base_url: str,
-    model: str,
     *,
     system_prompt: str = _SYSTEM_PROMPT_NORMAL,
 ) -> str:
     """
-    调用 AI 大脑从候选商品名称中找出最匹配的一条。
+    通过 Cursor SDK Agent 从候选商品名称中找出最匹配的一条。
     返回候选中的原文名称；无匹配或调用失败返回空字符串。
     """
+    if not Config.CURSOR_API_KEY:
+        logger.warning('CURSOR_API_KEY 未配置，无法进行 AI 匹配')
+        return ''
+
     candidates_text = '\n'.join(f'- {name}' for name in candidates)
-    prompt = f'ERP 商品信息：{erp_info}\n\n候选商品名称：\n{candidates_text}'
+    instruction = (
+        f'{system_prompt}\n\n'
+        f'---\n\n'
+        f'ERP 商品信息：{erp_info}\n\n'
+        f'候选商品名称：\n{candidates_text}\n\n'
+        f'请只返回候选列表中的原文名称；无匹配则只返回「无匹配」。禁止任何解释。'
+    )
     try:
-        # 通过 AI 大脑公共接口调用，不直接依赖 openai
-        from ai import ask  # noqa: PLC0415
-        from ai.client import LLMClient  # noqa: PLC0415
-        # 允许调用方传入自定义 api_key/base_url/model（如测试或多账号场景）
-        if api_key or base_url:
-            client = LLMClient(api_key=api_key, base_url=base_url, default_model=model)
-            result = client.complete(prompt, system=system_prompt, max_tokens=60, temperature=0.0)
+        from ai import run_agent  # noqa: PLC0415
+
+        logger.info(
+            '[Cursor AI匹配] 调用 model=%s 候选数=%d',
+            Config.CURSOR_MODEL,
+            len(candidates),
+        )
+        result = run_agent(instruction, tools=[])
+        matched = _parse_ai_match_result(result, candidates)
+        if matched:
+            logger.info('[Cursor AI匹配] 命中 → %s', matched[:80])
         else:
-            result = ask(prompt, system=system_prompt, model=model, max_tokens=60)
-        result = result.strip()
-        return result if result in candidates else ''
+            logger.info('[Cursor AI匹配] 未命中 raw=%.120s', (result or '').strip())
+        return matched
     except Exception as e:
-        logger.warning('AI 匹配调用失败: %s', e)
+        logger.warning('Cursor AI 匹配调用失败: %s', e)
         return ''
 
 
@@ -310,9 +341,6 @@ def _find_best_stock_link(
     erp_fields: Dict[str, Any],
     product_names: List[str],
     *,
-    ai_api_key: str = '',
-    ai_base_url: str = '',
-    ai_model: str = 'deepseek-v3',
     ai_cache: Optional[Dict[str, str]] = None,
 ) -> str:
     """
@@ -357,11 +385,11 @@ def _find_best_stock_link(
             reason_lines=['按商品类型筛选后无匹配候选（充电头/数据线/套装类型不符）'],
         )
 
-    if not ai_api_key or not ai_base_url:
+    if not Config.CURSOR_API_KEY:
         return _stock_link_unmatched_text(
             info_raw=info_raw,
             shop=shop,
-            reason_lines=['未配置 AI_API_KEY / AI_BASE_URL，无法进行 AI 匹配'],
+            reason_lines=['未配置 CURSOR_API_KEY，无法进行 Cursor AI 匹配'],
         )
 
     # 同一商品信息在本次任务内直接复用缓存结果
@@ -376,7 +404,7 @@ def _find_best_stock_link(
             reason_lines=['AI 未找到匹配商品名称'],
         )
 
-    matched = _ai_match_product_name(info_raw, filtered, ai_api_key, ai_base_url, ai_model)
+    matched = _ai_match_product_name(info_raw, filtered)
     if ai_cache is not None:
         ai_cache[cache_key] = matched
 
@@ -394,9 +422,6 @@ def _find_stock_link_for_kind(
     kind_candidates: List[str],
     kind_label: str,
     *,
-    ai_api_key: str = '',
-    ai_base_url: str = '',
-    ai_model: str = 'deepseek-v3',
     ai_cache: Optional[Dict[str, str]] = None,
     system_prompt: str = _SYSTEM_PROMPT_NORMAL,
 ) -> str:
@@ -413,11 +438,11 @@ def _find_stock_link_for_kind(
             shop=shop,
             reason_lines=[f'库存表中无{kind_label}类候选商品名称'],
         )
-    if not ai_api_key or not ai_base_url:
+    if not Config.CURSOR_API_KEY:
         return _stock_link_unmatched_text(
             info_raw=info_raw,
             shop=shop,
-            reason_lines=['未配置 AI_API_KEY / AI_BASE_URL，无法进行 AI 匹配'],
+            reason_lines=['未配置 CURSOR_API_KEY，无法进行 Cursor AI 匹配'],
         )
 
     cache_key = f'{info_raw}\x00{kind_label}'
@@ -432,7 +457,7 @@ def _find_stock_link_for_kind(
         )
 
     matched = _ai_match_product_name(
-        info_raw, kind_candidates, ai_api_key, ai_base_url, ai_model,
+        info_raw, kind_candidates,
         system_prompt=system_prompt,
     )
     if ai_cache is not None:
@@ -546,9 +571,6 @@ def run_inventory_sync_job(options: Optional[Dict[str, Any]] = None) -> Dict[str
     inv_name_field = (
         opt.get('inventory_product_name_field') or Config.PINDUODUO_INVENTORY_PRODUCT_NAME_FIELD or '商品名称'
     ).strip()
-    ai_api_key = (opt.get('ai_api_key') or Config.AI_API_KEY or '').strip()
-    ai_base_url = (opt.get('ai_base_url') or Config.AI_BASE_URL or '').strip()
-    ai_model = (opt.get('ai_model') or Config.AI_STOCK_LINK_MODEL or 'deepseek-v3').strip()
     ai_cache: Dict[str, str] = {}
 
     _pad = opt.get('pay_after_date')
@@ -740,14 +762,12 @@ def run_inventory_sync_job(options: Optional[Dict[str, Any]] = None) -> Dict[str
                         cable_cands = [n for n in product_names if _detect_accessory_kind(n) == 'cable']
                         charger_link = _find_stock_link_for_kind(
                             fields, charger_cands, '充电头',
-                            ai_api_key=ai_api_key, ai_base_url=ai_base_url,
-                            ai_model=ai_model, ai_cache=ai_cache,
+                            ai_cache=ai_cache,
                             system_prompt=_SYSTEM_PROMPT_BUNDLE_CHARGER,
                         )
                         cable_link = _find_stock_link_for_kind(
                             fields, cable_cands, '数据线',
-                            ai_api_key=ai_api_key, ai_base_url=ai_base_url,
-                            ai_model=ai_model, ai_cache=ai_cache,
+                            ai_cache=ai_cache,
                             system_prompt=_SYSTEM_PROMPT_BUNDLE_CABLE,
                         )
                         logger.info('[AI匹配结果] 订单=%s 套装 充电头→%s 数据线→%s', pk_raw, charger_link[:60], cable_link[:60])
@@ -776,8 +796,7 @@ def run_inventory_sync_job(options: Optional[Dict[str, Any]] = None) -> Dict[str
                     else:
                         stock_link = _find_best_stock_link(
                             fields, product_names,
-                            ai_api_key=ai_api_key, ai_base_url=ai_base_url,
-                            ai_model=ai_model, ai_cache=ai_cache,
+                            ai_cache=ai_cache,
                         )
                         logger.info('[AI匹配结果] 订单=%s 单品→%s', pk_raw, stock_link[:80] if stock_link else '(空)')
                         proposed_log_fields_list = [

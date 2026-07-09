@@ -222,6 +222,21 @@ def init_tools(browser_pool: Optional[BrowserPool] = None) -> ToolManager:
         import traceback
         traceback.print_exc()
 
+    # 淘宝商品上架工具
+    try:
+        from tools.taobao_tool import TaobaoTool
+        taobao_tool = TaobaoTool()
+        tool_manager.register_tool(taobao_tool)
+        print(f"[App] 已注册工具: {taobao_tool.display_name}")
+        if taobao_tool.initialize(browser_pool=browser_pool):
+            print(f"[App] 工具 taobao 初始化成功")
+        else:
+            print(f"[App] 工具 taobao 初始化失败")
+    except Exception as e:
+        print(f"[App] 注册淘宝上架工具失败: {e}")
+        import traceback
+        traceback.print_exc()
+
     # AI 智能助手工具
     try:
         from tools.ai_tool import AiTool

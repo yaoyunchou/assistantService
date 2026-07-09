@@ -1,11 +1,12 @@
 """
-淘宝商品数据保存 API
+淘宝商品 API
 
-POST /api/taobao/save-product
-  - 接收 webAuto popup 发来的商品数据
-  - 下载图片到本地
-  - 写入单品 Excel（基本信息 / 规格 / 参数 / 图片 四个 Sheet）
-  - 更新根目录汇总 Excel 与 README.md
+POST /api/taobao/save-product — webAuto 采集数据落盘
+POST /api/taobao/mark-uploaded — 上架信息回填
+GET  /api/taobao/pending — 待上架列表
+POST /api/taobao/publish — 按关键词/标题上架
+POST /api/taobao/publish-next — 上架下一个待上架商品
+GET  /api/taobao/login-status — 检查卖家登录态
 """
 import os
 import re
@@ -20,6 +21,39 @@ from utils.logger import get_logger
 
 logger = get_logger('TaobaoRoutes')
 bp = Blueprint('taobao', __name__, url_prefix='/api/taobao')
+
+DEFAULT_WAIT_LOGIN_SEC = 180
+PUBLISH_TIMEOUT_SEC = 600
+
+
+def _publish_response(result: dict) -> tuple:
+    """业务失败（未登录、上架失败）仍返回 200 + ok:false，避免前端当成服务器异常。"""
+    return jsonify(result), 200
+
+
+def _publish_timeout(wait_login_timeout_sec: int) -> float:
+    return float(PUBLISH_TIMEOUT_SEC + max(0, wait_login_timeout_sec))
+
+
+def _log_publish_result(prefix: str, result: dict) -> None:
+    if result.get('skipped'):
+        logger.info(
+            '[%s] 跳过 title=%s link=%s summary_synced=%s msg=%s',
+            prefix,
+            (result.get('product') or {}).get('title'),
+            result.get('upload_link'),
+            result.get('summary_synced'),
+            result.get('message'),
+        )
+    elif not result.get('ok'):
+        logger.warning('[%s] 失败 step=%s msg=%s err=%s', prefix, result.get('step'), result.get('message'), result.get('error'))
+
+
+def _prepare_taobao_browser(pool, *, open_url: str | None = None):
+    """淘宝相关操作前：可见窗口 + 跳转到淘宝页面（不复用拼多多标签页）。"""
+    from spider.taobao.browser_visible import prepare_taobao_browser
+    from spider.taobao.config import CATEGORY_URL
+    return prepare_taobao_browser(pool, open_url=open_url or CATEGORY_URL)
 
 # 保存根目录
 SAVE_ROOT = Path(r'C:\Users\yao\Desktop\work\电商数据\淘宝')
@@ -549,4 +583,207 @@ def taobao_mark_uploaded():
 
     except Exception as e:
         logger.error(f'[mark-uploaded] 异常: {e}', exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@bp.route('/pending', methods=['GET'])
+@swag_from({
+    'tags': ['淘宝'],
+    'summary': '获取待上架商品列表（有图且上架链接为空）',
+    'responses': {200: {'description': '列表'}},
+})
+def taobao_pending_list():
+    """待上架商品列表"""
+    try:
+        from spider.taobao.client import TaobaoPublishClient
+        items = TaobaoPublishClient().list_pending()
+        return jsonify({'ok': True, 'count': len(items), 'items': items}), 200
+    except Exception as e:
+        logger.error('[pending] 异常: %s', e, exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@bp.route('/login-status', methods=['GET'])
+@swag_from({
+    'tags': ['淘宝'],
+    'summary': '检查淘宝卖家中心登录状态',
+    'responses': {200: {'description': '登录状态'}, 500: {'description': '浏览器池未初始化'}},
+})
+def taobao_login_status():
+    """检查是否已进入以图发品页（未登录时返回 intercepted）"""
+    try:
+        from api.routes.context import get_browser_pool
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'ok': False, 'error': '浏览器池未初始化'}), 500
+        browser_info = _prepare_taobao_browser(pool)
+        from spider.taobao.client import TaobaoPublishClient
+
+        def _check(page):
+            client = TaobaoPublishClient(page=page)
+            return client.check_login(pause_on_captcha=False)
+
+        result = pool.execute(_check, timeout=90)
+        if isinstance(result, dict):
+            result['logged_in'] = bool(result.get('logged_in') or result.get('upload_ready'))
+        return jsonify({'ok': True, 'browser': browser_info, **result}), 200
+    except Exception as e:
+        logger.error('[login-status] 异常: %s', e, exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@bp.route('/publish', methods=['POST'])
+@swag_from({
+    'tags': ['淘宝'],
+    'summary': '上架指定商品（Playwright 以图发品全链路）',
+    'parameters': [{
+        'in': 'body',
+        'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'keyword': {'type': 'string', 'description': '标题关键词'},
+                'title': {'type': 'string', 'description': '完整标题（优先于 keyword）'},
+                'stop_after': {'type': 'string', 'enum': ['audit', 'category_confirm', 'submit']},
+                'shop_name': {'type': 'string', 'description': '回填店铺名'},
+                'pause_on_captcha': {'type': 'boolean', 'default': True},
+            },
+        },
+    }],
+    'responses': {200: {'description': '执行结果'}, 500: {'description': '失败'}},
+})
+def taobao_publish():
+    """按关键词或标题执行单商品上架"""
+    try:
+        from api.routes.context import get_browser_pool
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'ok': False, 'error': '浏览器池未初始化'}), 500
+
+        browser_info = _prepare_taobao_browser(pool)
+
+        body = request.get_json(force=True) or {}
+        keyword = (body.get('keyword') or '').strip()
+        title = (body.get('title') or '').strip()
+        stop_after = (body.get('stop_after') or '').strip() or None
+        shop_name = (body.get('shop_name') or '').strip()
+        pause_on_captcha = body.get('pause_on_captcha', False)
+        wait_for_login = body.get('wait_for_login', True)
+        wait_login_timeout_sec = int(body.get('wait_login_timeout_sec') or DEFAULT_WAIT_LOGIN_SEC)
+        if not wait_for_login:
+            wait_login_timeout_sec = 0
+
+        if not keyword and not title:
+            return jsonify({'ok': False, 'error': '请提供 keyword 或 title'}), 400
+
+        skip_ready = bool(browser_info.get('upload_ready'))
+
+        from spider.taobao.client import TaobaoPublishClient
+
+        def _run(page):
+            client = TaobaoPublishClient(page=page)
+            common = dict(
+                stop_after=stop_after,
+                pause_on_captcha=pause_on_captcha,
+                wait_login_timeout_sec=wait_login_timeout_sec,
+                skip_if_upload_ready=skip_ready,
+                shop_name=shop_name,
+            )
+            if title:
+                return client.publish_by_title(title, **common)
+            return client.publish_by_keyword(keyword, **common)
+
+        result = pool.execute(_run, timeout=_publish_timeout(wait_login_timeout_sec))
+        if isinstance(result, dict):
+            result['browser'] = browser_info
+        _log_publish_result('publish', result)
+        return _publish_response(result)
+    except Exception as e:
+        logger.error('[publish] 异常: %s', e, exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@bp.route('/publish-next', methods=['POST'])
+@swag_from({
+    'tags': ['淘宝'],
+    'summary': '上架队列中第一个待上架商品',
+    'parameters': [{
+        'in': 'body',
+        'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'stop_after': {'type': 'string'},
+                'shop_name': {'type': 'string'},
+                'pause_on_captcha': {'type': 'boolean', 'default': True},
+            },
+        },
+    }],
+    'responses': {200: {'description': '执行结果'}, 500: {'description': '失败'}},
+})
+def taobao_publish_next():
+    """上架下一个待上架商品"""
+    try:
+        from api.routes.context import get_browser_pool
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'ok': False, 'error': '浏览器池未初始化'}), 500
+
+        browser_info = _prepare_taobao_browser(pool)
+
+        body = request.get_json(force=True) or {}
+        stop_after = (body.get('stop_after') or '').strip() or None
+        shop_name = (body.get('shop_name') or '').strip()
+        pause_on_captcha = body.get('pause_on_captcha', False)
+        wait_for_login = body.get('wait_for_login', True)
+        wait_login_timeout_sec = int(body.get('wait_login_timeout_sec') or DEFAULT_WAIT_LOGIN_SEC)
+        if not wait_for_login:
+            wait_login_timeout_sec = 0
+
+        skip_ready = bool(browser_info.get('upload_ready'))
+
+        from spider.taobao.client import TaobaoPublishClient
+
+        def _run(page):
+            client = TaobaoPublishClient(page=page)
+            return client.publish_next_pending(
+                stop_after=stop_after,
+                pause_on_captcha=pause_on_captcha,
+                wait_login_timeout_sec=wait_login_timeout_sec,
+                skip_if_upload_ready=skip_ready,
+                shop_name=shop_name,
+            )
+
+        result = pool.execute(_run, timeout=_publish_timeout(wait_login_timeout_sec))
+        if isinstance(result, dict):
+            result['browser'] = browser_info
+        _log_publish_result('publish-next', result)
+        return _publish_response(result)
+    except Exception as e:
+        logger.error('[publish-next] 异常: %s', e, exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@bp.route('/open-login', methods=['POST'])
+@bp.route('/open-category', methods=['POST'])
+@swag_from({
+    'tags': ['淘宝'],
+    'summary': '在浏览器中打开淘宝以图发品入口（category.htm）',
+    'responses': {200: {'description': '已打开'}, 500: {'description': '失败'}},
+})
+def taobao_open_login():
+    """打开以图发品入口；已登录则直达上传页，未登录会由淘宝跳转到登录页"""
+    try:
+        from api.routes.context import get_browser_pool
+        from spider.taobao.browser_visible import open_url_visible
+        from spider.taobao.config import CATEGORY_URL
+
+        pool = get_browser_pool()
+        if not pool:
+            return jsonify({'ok': False, 'error': '浏览器池未初始化'}), 500
+
+        result = open_url_visible(pool, CATEGORY_URL, timeout=90)
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error('[open-login] 异常: %s', e, exc_info=True)
         return jsonify({'ok': False, 'error': str(e)}), 500

@@ -97,7 +97,7 @@ class BrowserPool:
         args = {
             'user_data_dir': str(user_data_dir),
             'headless': self.headless,
-            'viewport': {'width': 1920, 'height': 1080},
+            'no_viewport': True,
             'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
             'locale': 'zh-CN',
             'timezone_id': 'Asia/Shanghai',
@@ -126,6 +126,7 @@ class BrowserPool:
                 '--disable-notifications',
                 '--disable-popup-blocking',
                 '--start-maximized',
+                '--force-device-scale-factor=1',
             ],
         }
         if chrome_executable_path:
@@ -253,9 +254,12 @@ class BrowserPool:
         def _task():
             self._busy = True
             try:
-                # 尝试获取 page 并执行
                 page = self._ensure_page()
-                return fn(page)
+                tab_n = len(page.context.pages)
+                print(f"[BrowserPool] 自动化任务开始 tabs={tab_n} url={(page.url or '')[:100]}")
+                result = fn(page)
+                print(f"[BrowserPool] 自动化任务结束 tabs={len(page.context.pages)}")
+                return result
             except Exception as e:
                 if not self._is_page_error(e):
                     raise  # 非浏览器关闭类错误，直接抛出
@@ -303,6 +307,31 @@ class BrowserPool:
             self._busy = False
 
     # ─── 关闭与状态 ────────────────────────────────────────────
+
+    def ensure_visible(self, *, timeout: float = 25.0) -> dict:
+        """
+        强制使用可见浏览器窗口（淘宝登录等场景）。
+        若当前为 headless，会切换为 False、持久化配置并软重启 context。
+        """
+        was_headless = self.headless
+        self.headless = False
+        try:
+            from config import Config
+            Config.HEADLESS = False
+            from utils.config_manager import get_config_manager
+            get_config_manager().save_config({'headless': False})
+        except Exception as e:
+            print(f"[BrowserPool] 保存 headless=False 失败: {e}")
+
+        restarted = False
+        if was_headless:
+            restarted = self.restart_browser_context(timeout=timeout)
+
+        return {
+            'headless': self.headless,
+            'was_headless': was_headless,
+            'restarted': restarted,
+        }
 
     def restart_browser_context(self, *, timeout: float = 15.0) -> bool:
         """

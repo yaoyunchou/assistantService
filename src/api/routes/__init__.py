@@ -41,7 +41,7 @@ SWAGGER_TEMPLATE = {
         {'name': '1688订单', 'description': '1688 订单提取与飞书同步'},
         {'name': 'WebSocket', 'description': 'Socket.IO 客户端连接与配置'},
         {'name': '定时任务', 'description': '定时任务列表与手动触发'},
-        {'name': '淘宝', 'description': '淘宝商品数据本地保存'},
+        {'name': '淘宝', 'description': '淘宝商品采集与 Playwright 自动上架'},
         {'name': '安特', 'description': '安特 PC 商城限时秒杀'},
         {'name': 'AI', 'description': 'AI 大脑：LLM 问答与 Cursor SDK Agent'},
     ],

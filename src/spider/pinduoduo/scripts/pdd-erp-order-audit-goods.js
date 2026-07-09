@@ -120,23 +120,81 @@
     return (clone.innerText || '').trim().split('\n')[0].trim();
   }
 
+  /**
+   * 在单个容器内按 img 拆出多件商品块（合单处理）
+   * 三种子策略依次尝试，最后用 LCA 逐层向下直到找到 2+ 个含图直接子节点
+   */
+  function findGoodsContainersInElement(el) {
+    const imgs = [...el.querySelectorAll('img')];
+    if (imgs.length < 2) return [el];
+
+    // 子策略A：.sc-cXPBhi（保留最内层）
+    let sub = [...el.querySelectorAll('.sc-cXPBhi')].filter((c) => c.querySelector('img'));
+    sub = sub.filter((d) => !sub.some((other) => other !== d && d.contains(other)));
+    if (sub.length >= 2) return sub;
+
+    // 子策略B：.render-content 最近含图祖先
+    sub = [...el.querySelectorAll('.render-content')].map((rc) => {
+      let p = rc.parentElement;
+      while (p && p !== el && !p.querySelector('img')) p = p.parentElement;
+      return p && p.querySelector('img') ? p : rc;
+    });
+    sub = [...new Set(sub)].filter((c) => c.querySelector('img'));
+    sub = sub.filter((d) => !sub.some((other) => other !== d && d.contains(other)));
+    if (sub.length >= 2) return sub;
+
+    // 子策略C：LCA + 逐层向下，直到出现 2+ 个含图直接子节点（最多下探 8 层）
+    const getPath = (img) => {
+      const path = [];
+      let p = img;
+      while (p && p !== el) { path.unshift(p); p = p.parentElement; }
+      return path;
+    };
+    const paths = imgs.map(getPath);
+    let commonDepth = 0;
+    while (
+      paths.every((p) => p.length > commonDepth) &&
+      paths.every((p) => p[commonDepth] === paths[0][commonDepth])
+    ) commonDepth++;
+    let cur = commonDepth > 0 ? paths[0][commonDepth - 1] : el;
+    for (let depth = 0; depth < 8; depth++) {
+      const children = [...cur.children].filter((c) => c.querySelector('img'));
+      if (children.length >= 2) return children;
+      if (children.length !== 1) break;
+      cur = children[0];
+    }
+
+    return [el];
+  }
+
+  function expandMultiGoodsItems(items) {
+    return items.flatMap((item) => findGoodsContainersInElement(item));
+  }
+
   /** 从商品规格 td 提取商品列表 */
   function extractGoods(td) {
     if (!td) return [];
+
+    // 策略1：.sc-dUYKzm，保留最内层（去掉自身还包含其他集合元素的外层容器）
     let items = [...td.querySelectorAll('.sc-dUYKzm')];
+    if (items.length > 1) {
+      items = items.filter((d) => !items.some((other) => other !== d && d.contains(other)));
+    }
+
+    // 策略2：任意 sc- 类名含图 div，同样保留最内层
     if (!items.length) {
       items = [...td.querySelectorAll('div[class]')].filter(
         (el) => /\bsc-\w+/.test(el.className) && el.querySelector('img')
       );
       if (items.length > 1) {
-        const s = new Set(items);
-        items = items.filter((d) => {
-          for (let p = d.parentElement; p && p !== td; p = p.parentElement)
-            if (s.has(p)) return false;
-          return true;
-        });
+        items = items.filter((d) => !items.some((other) => other !== d && d.contains(other)));
       }
     }
+
+    // 合单拆分：单个容器内可能还藏有多件商品
+    if (items.length) items = expandMultiGoodsItems(items);
+
+    // 兜底：整个 td 作为单商品
     if (!items.length) {
       const img = td.querySelector('img');
       const text = (td.innerText || '').trim();
@@ -146,8 +204,10 @@
         title: m ? text.slice(0, m.index).trim() : text,
         spec: '',
         qty: m ? parseInt(m[1], 10) : 0,
+        rawText: text.replace(/\s+/g, ' '),
       }];
     }
+
     return items.map((item) => {
       const img = item.querySelector('img');
       const imgRaw =
@@ -195,7 +255,8 @@
           title = m2 ? ft.slice(0, m2.index).trim() : ft;
         }
       }
-      return { imgSrc, title, spec, qty };
+      const rawText = (item.innerText || '').trim().replace(/\s+/g, ' ');
+      return { imgSrc, title, spec, qty, rawText };
     });
   }
 

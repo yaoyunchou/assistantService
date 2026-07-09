@@ -12,6 +12,7 @@
 - ✅ **ERP 待审核 / 入库 / 打印** - `/tools/pinduoduo` 加载待审核列表并提交审核（SQLite + 可选飞书审核表）；独立页 `/pdd-erp-delivering-print` 一键「打印并发货」待发货列表；**已发货页今日已打印快递单**：`POST /api/pinduoduo/erp-delivered/today-printed-query`（脚本 `pdd-erp-order-delivered-query.js`，结束飞书 Webhook 摘要）
 - 📡 **途强助手** - 途强智能设备管理平台（iot.tqiot.com）自动化，支持自动登录与最近 30 天记录获取
 - 📦 **1688 订单提取** - 从 1688 待收货订单列表提取订单与收货信息，支持同步到飞书多维表格（Web 页与命令行脚本）
+- 🛍️ **淘宝商品上架** - Playwright 以图发品全链路（本地上传 → 主图审计/补救 → 类目确认 → 发布填表 → 提交 → Excel 回填）；数据目录 `C:\Users\yao\Desktop\work\电商数据\淘宝`；详见 `docs/淘宝商品上传/淘宝商品上传-Playwright开发文档.md`
 - ⚡ **安特限时秒杀采集** - 对接 `https://pc.antexiadan.com` pcapi，支持 Chrome 扩展页内注入（`antexiadan-seckill-list.js`，双运行时）和 Python 直连 CLI（`antexiadan-seckill-fetch.py`，无需浏览器）；采集结果 POST 入库（MySQL，三张表：批次 / 当前态 / 快照），提供 `GET /api/antexiadan/seckill-list/products` 查询与 `GET /api/antexiadan/seckill-list/batch/latest` 批次查询
 - ⚙️ **模块化配置** - 支持通过配置控制功能模块的启用/禁用和启动时机
 - 🔧 **可扩展架构** - 工具管理器设计，方便添加新工具
@@ -116,6 +117,11 @@ assistantService/
 │   │   │   └── seckill_store.py   #   安特限时秒杀 SQLite
 │   │   ├── order_1688/
 │   │   │   └── order_extract.py   #   1688 订单提取
+│   │   ├── taobao/                #   淘宝以图发品自动上架（Playwright）
+│   │   │   ├── client.py          #   上架客户端（API/CLI 入口）
+│   │   │   ├── flows/publish_one.py
+│   │   │   ├── pages/             #   类目页 / 发布页 / 图片空间
+│   │   │   └── data/              #   Excel 加载与回填
 │   │   └── tu/
 │   │       └── client.py          #   途强平台 Playwright 客户端
 │   │
@@ -373,6 +379,35 @@ result = await run_agent(
 - 种子合并：首次启动或 `scheduler/.scheduler_seed_merge_version` 版本低于代码内版本时，会自动把种子里有、本地没有的 **任务 id** 追加进去（升级种子时需递增 `task_config._SCHEDULER_SEED_MERGE_VERSION`）。
 - 任务类型 **`pdd_erp_order_sync`**：请求本机 `POST /api/pinduoduo/sync-erp-orders`，执行结束后向飞书 **`FEISHU_USER_ID`** 发一条结果摘要（需已配置飞书应用）。
 - 任务类型 **`pdd_inventory_sync`**：进程内直接调用 `run_inventory_sync_job`（不调 HTTP）；库存/日志表 `table_id` 有默认值，可按需在 `.env` 覆盖并在任务页启用。
+
+### 淘宝商品上架
+
+基于 Playwright 的「以图发品」自动上架，数据来自 `C:\Users\yao\Desktop\work\电商数据\淘宝`（总表 `淘宝商品汇总.xlsx` + 单品目录 `商品信息.xlsx` + `images/`）。
+
+**前置**：首次需在浏览器中登录淘宝/千牛卖家账号（复用 BrowserPool 持久化 Profile）。
+
+**页面**：侧栏 **电商 → 淘宝上架**（`/tools/taobao`）
+
+**CLI（在 `src` 目录）**：
+
+```bash
+python -m spider.taobao.cli --list-pending
+python -m spider.taobao.cli --keyword "宋朝" --stop-after audit
+python -m spider.taobao.cli --next-pending
+```
+
+**API**：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/taobao/pending` | 待上架列表 |
+| GET | `/api/taobao/login-status` | 检查卖家登录 |
+| POST | `/api/taobao/publish` | 按 `keyword` 或 `title` 上架 |
+| POST | `/api/taobao/publish-next` | 上架下一个待上架商品 |
+
+步骤日志与失败截图：`data/logs/taobao-pw/YYYY-MM-DD/{商品slug}/`。
+
+开发文档：`docs/淘宝商品上传/淘宝商品上传-Playwright开发文档.md`。
 
 ### 途强助手
 

@@ -217,6 +217,7 @@
     z-index: 1;
 }
 .audit-table-wrap td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+/* 单图 */
 .audit-thumb-wrap {
     position: relative;
     display: inline-block;
@@ -252,6 +253,46 @@
     padding: 6px;
     z-index: 10;
 }
+/* 合单多图：纵向排列小图 */
+.audit-multi-imgs {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.audit-thumb-sm-wrap {
+    position: relative;
+    display: inline-block;
+    width: 42px;
+    height: 42px;
+}
+.audit-thumb-sm {
+    width: 42px;
+    height: 42px;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid #e9ecef;
+    display: block;
+}
+.audit-thumb-sm-wrap:hover .audit-thumb-preview {
+    display: block;
+}
+/* 合单标记 */
+.audit-merged-badge {
+    display: inline-block;
+    background: #fff3cd;
+    color: #856404;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-bottom: 5px;
+    font-weight: 500;
+}
+/* 合单内每件商品加分隔线 */
+.audit-goods-item + .audit-goods-item {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed #e9ecef;
+}
 .audit-goods-cell { line-height: 1.45; max-width: 420px; }
 .qrcode-container-audit {
     display: none;
@@ -267,6 +308,20 @@
 .qrcode-status-audit { margin-top: 12px; padding: 10px; border-radius: 6px; font-size: 14px; }
 .qrcode-status-audit.waiting { background: #fff3cd; color: #856404; }
 .qrcode-status-audit.success { background: #d4edda; color: #155724; }
+.audit-lock-count { font-size: 13px; color: #b45309; margin-left: 8px; }
+.audit-row-locked { background: #fffbeb; opacity: 0.92; }
+.audit-row-locked .audit-row-cb { cursor: not-allowed; opacity: 0.45; }
+.audit-lock-btn {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 4px;
+}
+.audit-lock-btn:hover { background: #f3f4f6; }
+.audit-lock-btn:disabled { opacity: 0.5; cursor: wait; }
 </style>
 {% endblock %}
 
@@ -301,7 +356,8 @@
         <table>
             <thead>
                 <tr>
-                    <th style="width:36px;"><input type="checkbox" id="audit-check-all" title="全选"></th>
+                    <th style="width:36px;"><input type="checkbox" id="audit-check-all" title="全选（不含已锁）"></th>
+                    <th style="width:40px;" title="锁定后不可参与批量审核">锁</th>
                     <th style="width:52px;">图</th>
                     <th>商品 / 规格 / 数量</th>
                     <th style="width:140px;">店铺 / 实收</th>
@@ -309,7 +365,7 @@
                 </tr>
             </thead>
             <tbody id="audit-tbody">
-                <tr><td colspan="5" style="padding:24px;text-align:center;color:#adb5bd;">加载中...</td></tr>
+                <tr><td colspan="6" style="padding:24px;text-align:center;color:#adb5bd;">加载中...</td></tr>
             </tbody>
         </table>
     </div>
@@ -367,7 +423,103 @@ function showError(message) {
     const loginBtn = document.getElementById('audit-login-btn');
     const checkAll = document.getElementById('audit-check-all');
     let auditRows = [];
+    let lockedSet = new Set();
+    let lockingOrderNo = '';
+    let lockSource = '';
     let pollTimer = null;
+
+    /** 与小程序 pickOrderNo 对齐，避免字段名不一致导致锁状态对不上 */
+    function pickOrderNo(row) {
+        if (!row || typeof row !== 'object') return '';
+        return String(
+            row.orderNo ?? row.order_no ?? row.order_sn ?? row.tradeNo ?? row.erpOrderNo ?? row.key ?? ''
+        ).trim();
+    }
+
+    function applyLockedOrderNos(list) {
+        lockedSet = new Set((list || []).map((s) => String(s).trim()).filter(Boolean));
+    }
+
+    async function refreshLockedSet() {
+        try {
+            const r = await fetch('/api/pinduoduo/erp-audit/locked-orders');
+            const d = await r.json();
+            if (d.success && Array.isArray(d.order_nos)) {
+                applyLockedOrderNos(d.order_nos);
+                lockSource = d.source || '';
+            }
+            return d;
+        } catch (e) {
+            console.warn('[audit] fetch locked orders failed', e);
+            return null;
+        }
+    }
+
+    function isLocked(orderNo) {
+        const no = (orderNo || '').trim();
+        return !!no && lockedSet.has(no);
+    }
+
+    function lockedCountInRows() {
+        let n = 0;
+        auditRows.forEach((row) => {
+            const no = pickOrderNo(row);
+            if (no && lockedSet.has(no)) n += 1;
+        });
+        return n;
+    }
+
+    function selectableCount() {
+        return Math.max(0, auditRows.length - lockedCountInRows());
+    }
+
+    function updateStatusCount() {
+        const lockedN = lockedCountInRows();
+        let text = `共 ${auditRows.length} 条待审核`;
+        if (lockedN) text += `，列表中已锁 ${lockedN} 单`;
+        if (lockedSet.size > lockedN) text += `（字典共 ${lockedSet.size} 单）`;
+        if (lockSource === 'local') text += ' · 锁数据来自本机缓存';
+        else if (lockSource === 'database') text += ' · 锁数据来自字典表';
+        statusText.textContent = text;
+    }
+
+    async function setLocked(orderNo, locked) {
+        const no = (orderNo || '').trim();
+        if (!no || lockingOrderNo) return;
+        const prev = [...lockedSet];
+        const next = locked ? [...new Set([...prev, no])] : prev.filter((x) => x !== no);
+        lockedSet = new Set(next);
+        lockingOrderNo = no;
+        try {
+            const r = await fetch('/api/pinduoduo/erp-audit/locked-orders', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_nos: next }),
+            });
+            const d = await r.json();
+            if (!d.success) throw new Error(d.message || '保存失败');
+            if (Array.isArray(d.order_nos)) applyLockedOrderNos(d.order_nos);
+            lockSource = d.source || lockSource;
+            renderTable(auditRows);
+        } catch (e) {
+            lockedSet = new Set(prev);
+            renderTable(auditRows);
+            showError(e.message || '锁单状态保存失败');
+        } finally {
+            lockingOrderNo = '';
+        }
+    }
+
+    function onLockToggle(orderNo) {
+        const no = (orderNo || '').trim();
+        if (!no) return;
+        const locked = isLocked(no);
+        const msg = locked
+            ? `确认解锁订单 ${no}？解锁后可参与批量审核。`
+            : `确认锁定订单 ${no}？锁定后将无法参与批量审核。`;
+        if (!confirm(msg)) return;
+        setLocked(no, !locked);
+    }
 
     function showQR(dataUrl) {
         document.getElementById('qrcode-image-audit').src = dataUrl;
@@ -415,80 +567,115 @@ function showError(message) {
         auditRows = rows || [];
         tbody.innerHTML = '';
         if (!auditRows.length) {
-            tbody.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#adb5bd;">暂无待审核订单</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" style="padding:24px;text-align:center;color:#adb5bd;">暂无待审核订单</td></tr>';
             submitBtn.disabled = true;
             checkAll.checked = false;
+            updateStatusCount();
             return;
         }
+        const unlocked = [];
+        const locked = [];
         auditRows.forEach((row) => {
-            const on = (row.orderNo || '').trim();
+            const on = pickOrderNo(row);
+            if (on && lockedSet.has(on)) locked.push(row);
+            else unlocked.push(row);
+        });
+        [...unlocked, ...locked].forEach((row) => {
+            const on = pickOrderNo(row);
+            const rowLocked = isLocked(on);
             const goods = row.goods || [];
-            const firstImg = goods.length && goods[0].imgSrc ? goods[0].imgSrc : '';
             const shopName = (row.shopName || '').trim();
             const actualAmount = (row.actualAmount || '').trim();
-            let goodsHtml = '';
+            const isMerged = goods.length > 1;
+
+            // ── 图片列 ──
+            const imgs = goods.map(g => g.imgSrc || '').filter(Boolean);
+            let imgHtml = '';
+            if (imgs.length === 1) {
+                imgHtml = `<span class="audit-thumb-wrap"><a href="${imgs[0]}" target="_blank" rel="noopener"><img class="audit-thumb" src="${imgs[0]}" alt="" loading="lazy"></a><img class="audit-thumb-preview" src="${imgs[0]}" alt=""></span>`;
+            } else if (imgs.length > 1) {
+                const thumbs = imgs.slice(0, 4).map(src =>
+                    `<span class="audit-thumb-sm-wrap"><a href="${src}" target="_blank" rel="noopener"><img class="audit-thumb-sm" src="${src}" alt="" loading="lazy"></a><img class="audit-thumb-preview" src="${src}" alt=""></span>`
+                ).join('');
+                imgHtml = `<div class="audit-multi-imgs">${thumbs}</div>`;
+            }
+
+            // ── 商品列 ──
+            let goodsHtml = isMerged ? `<div class="audit-merged-badge">合单 ${goods.length} 件</div>` : '';
             goods.forEach((g) => {
-                const t = (g.title || '').trim();
-                const sp = (g.spec || '').trim();
+                const t = escapeHtml((g.title || '').trim());
+                const sp = escapeHtml((g.spec || '').trim());
                 const q = g.qty != null ? g.qty : '';
-                goodsHtml += `<div>${t || ''} ${sp ? '<span style="color:#7f8c8d;">' + sp + '</span>' : ''} <strong>×${q}</strong></div>`;
+                goodsHtml += `<div class="audit-goods-item">${t}${sp ? ` <span style="color:#7f8c8d;">${sp}</span>` : ''} <strong>×${q}</strong></div>`;
             });
+
             const shopHtml = (shopName || actualAmount)
                 ? `${shopName ? `<div style="display:inline-block;background:#eef3ff;color:#1971c2;padding:2px 6px;border-radius:4px;font-size:12px;margin-bottom:4px;">${escapeHtml(shopName)}</div>` : ''}
                    ${actualAmount ? `<div style="color:#e8590c;font-size:12px;">实收 ${escapeHtml(actualAmount)}</div>` : ''}`
                 : '<span style="color:#adb5bd;">-</span>';
             const tr = document.createElement('tr');
+            if (rowLocked) tr.classList.add('audit-row-locked');
             tr.innerHTML = `
-                <td><input type="checkbox" class="audit-row-cb" data-order-no="${on.replace(/"/g, '&quot;')}"></td>
-                <td>${firstImg ? `<span class="audit-thumb-wrap"><a href="${firstImg}" target="_blank" rel="noopener"><img class="audit-thumb" src="${firstImg}" alt="" loading="lazy"></a><img class="audit-thumb-preview" src="${firstImg}" alt=""></span>` : ''}</td>
+                <td><input type="checkbox" class="audit-row-cb" data-order-no="${on.replace(/"/g, '&quot;')}" ${rowLocked ? 'disabled' : ''}></td>
+                <td><button type="button" class="audit-lock-btn" data-order-no="${on.replace(/"/g, '&quot;')}" title="${rowLocked ? '已锁定，点击解锁' : '点击锁定'}" ${lockingOrderNo === on ? 'disabled' : ''}>${rowLocked ? '🔒' : '🔓'}</button></td>
+                <td>${imgHtml}</td>
                 <td class="audit-goods-cell">${goodsHtml || '-'}</td>
                 <td style="vertical-align:top;">${shopHtml}</td>
                 <td style="word-break:break-all;">${on}</td>`;
             tbody.appendChild(tr);
         });
-        submitBtn.disabled = false;
+        submitBtn.disabled = selectableCount() === 0;
         checkAll.checked = false;
         tbody.querySelectorAll('.audit-row-cb').forEach((cb) => {
             cb.addEventListener('change', syncCheckAllState);
         });
+        tbody.querySelectorAll('.audit-lock-btn').forEach((btn) => {
+            btn.addEventListener('click', () => onLockToggle(btn.dataset.orderNo));
+        });
+        syncCheckAllState();
+        updateStatusCount();
     }
 
     function syncCheckAllState() {
-        const cbs = tbody.querySelectorAll('.audit-row-cb');
-        const all = cbs.length && [...cbs].every((c) => c.checked);
-        const none = [...cbs].every((c) => !c.checked);
+        const cbs = [...tbody.querySelectorAll('.audit-row-cb:not(:disabled)')];
+        const checked = cbs.filter((c) => c.checked);
+        const all = cbs.length > 0 && checked.length === cbs.length;
+        const none = checked.length === 0;
         checkAll.checked = all;
         checkAll.indeterminate = !all && !none;
+        submitBtn.disabled = checked.length === 0;
     }
 
     checkAll.addEventListener('change', () => {
         const on = checkAll.checked;
-        tbody.querySelectorAll('.audit-row-cb').forEach((c) => { c.checked = on; });
+        tbody.querySelectorAll('.audit-row-cb:not(:disabled)').forEach((c) => { c.checked = on; });
+        syncCheckAllState();
     });
 
     async function loadPending() {
-        statusText.textContent = '加载中…';
+        statusText.textContent = '加载待审核列表…';
         refreshBtn.disabled = true;
         try {
-            const r = await fetch('/api/pinduoduo/erp-audit/pending', {
+            const pendingResp = await fetch('/api/pinduoduo/erp-audit/pending', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: '{}',
             });
-            const data = await r.json();
+            const data = await pendingResp.json();
+            // 列表拉取完成后再读锁（pending 可能耗时数分钟，并行读会得到过期锁状态）
+            statusText.textContent = '同步锁单状态…';
+            await refreshLockedSet();
             if (handleIntercepted(data)) {
                 statusText.textContent = data.message || '请先登录';
-                tbody.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#adb5bd;">需登录后刷新</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" style="padding:24px;text-align:center;color:#adb5bd;">需登录后刷新</td></tr>';
                 return;
             }
             if (!data.success) {
                 statusText.textContent = data.message || '加载失败';
-                tbody.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#e74c3c;">' + (data.message || '失败') + '</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" style="padding:24px;text-align:center;color:#e74c3c;">' + (data.message || '失败') + '</td></tr>';
                 return;
             }
-            const rows = data.rows || [];
-            statusText.textContent = `共 ${rows.length} 条待审核`;
-            renderTable(rows);
+            renderTable(data.rows || []);
         } catch (e) {
             statusText.textContent = '请求异常';
             showError(e.message);
@@ -521,9 +708,11 @@ function showError(message) {
     });
 
     submitBtn.addEventListener('click', async () => {
-        const selected = [...tbody.querySelectorAll('.audit-row-cb:checked')].map((c) => c.dataset.orderNo).filter(Boolean);
+        const selected = [...tbody.querySelectorAll('.audit-row-cb:checked')]
+            .map((c) => c.dataset.orderNo)
+            .filter((no) => no && !isLocked(no));
         if (!selected.length) {
-            showError('请先勾选订单');
+            showError('请先勾选未锁定的订单');
             return;
         }
         if (!confirm('确认审核已选中的 ' + selected.length + ' 笔订单？')) return;

@@ -524,6 +524,59 @@ def pinduoduo_erp_audit_pending():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@bp.route('/erp-audit/locked-orders', methods=['GET'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '获取 ERP 待审核已锁订单号（Nest 字典 lockGoods，与小程序共用）',
+    'responses': {200: {'description': '单号列表'}, 500: {'description': '异常'}},
+})
+def pinduoduo_erp_audit_locked_orders_get():
+    try:
+        from spider.pinduoduo import audit_lock_store
+        return jsonify(audit_lock_store.fetch_locked_order_nos()), 200
+    except Exception as e:
+        routes_logger.error('ERP 待审核锁单读取异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/erp-audit/locked-orders', methods=['PUT'])
+@swag_from({
+    'tags': ['拼多多'],
+    'summary': '更新 ERP 待审核已锁订单号（Nest 字典 lockGoods）',
+    'parameters': [{
+        'in': 'body',
+        'name': 'body',
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'order_nos': {
+                    'type': 'array',
+                    'items': {'type': 'string'},
+                    'description': '已锁平台订单号列表',
+                },
+                'orderNos': {
+                    'type': 'array',
+                    'items': {'type': 'string'},
+                    'description': '同 order_nos',
+                },
+            },
+        },
+    }],
+    'responses': {200: {'description': '更新结果'}, 400: {'description': '参数错误'}, 500: {'description': '异常'}},
+})
+def pinduoduo_erp_audit_locked_orders_put():
+    try:
+        body = request.get_json(silent=True) or {}
+        order_nos = body.get('order_nos') or body.get('orderNos') or []
+        if not isinstance(order_nos, list):
+            return jsonify({'success': False, 'message': 'order_nos 须为数组'}), 400
+        from spider.pinduoduo import audit_lock_store
+        return jsonify(audit_lock_store.update_locked_order_nos(order_nos)), 200
+    except Exception as e:
+        routes_logger.error('ERP 待审核锁单写入异常: %s', e, exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @bp.route('/erp-audit/submit', methods=['POST'])
 @swag_from({
     'tags': ['拼多多'],
@@ -563,6 +616,19 @@ def pinduoduo_erp_audit_submit():
         if not isinstance(order_nos, list):
             return jsonify({'success': False, 'message': 'order_nos 须为数组'}), 400
 
+        from spider.pinduoduo import audit_lock_store
+
+        lock_check = audit_lock_store.validate_submit_order_nos(order_nos)
+        skipped_locked = lock_check.get('blocked') or []
+        order_nos = lock_check.get('allowed') or []
+        if not order_nos:
+            return jsonify({
+                'success': False,
+                'message': '没有可提交的订单（可能均已锁定）',
+                'skipped_locked_order_nos': skipped_locked,
+                'lock_source': lock_check.get('lock_source'),
+            }), 400
+
         sms = body.get('scroll_max_steps')
         spm = body.get('scroll_pause_ms')
         try:
@@ -589,6 +655,11 @@ def pinduoduo_erp_audit_submit():
             return jsonify({'success': False, 'message': str(result)}), 200
 
         out = dict(result)
+        if skipped_locked:
+            out['skipped_locked_order_nos'] = skipped_locked
+            out['lock_source'] = lock_check.get('lock_source')
+            skip_hint = f'已跳过 {len(skipped_locked)} 个已锁订单'
+            out['message'] = f"{out.get('message') or ''}；{skip_hint}".lstrip('；')
         feishu_sync = None
         if result.get('success') and result.get('rows'):
             from spider.pinduoduo import audit_store
