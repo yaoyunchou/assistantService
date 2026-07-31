@@ -21,7 +21,7 @@
 | 2 | **提交审核**（选中订单） | `POST` | `/api/pinduoduo/erp-audit/submit` | 620s | 勾选并提交审核；成功后可写 SQLite + 飞书 |
 | 3 | **今日已审核**（本地库） | `GET` | `/api/pinduoduo/erp-audit/today` | — | 读助手本地 SQLite，**非** ERP 网页 |
 | 4 | 今日已打印快递单（已发货页） | `POST` | `/api/pinduoduo/erp-delivered/today-printed-query` | 620s | 筛选今日 + 已打印并抓表 |
-| 5 | **待发货 · 实时列表**（不入库） | `POST` | `/api/pinduoduo/erp-delivering/pending-list` | 200s | 仅打开待发货页抓当前表 |
+| 5 | **待发货 · 实时列表**（不入库） | `POST` | `/api/pinduoduo/erp-delivering/pending-list` | 200s | 打开待发货页，虚拟滚动去重抓表 |
 | 6 | **待发货 · 打印并发货** | `POST` | `/api/pinduoduo/erp-delivering/print-ship` | 180s | 待发货页一键流程 |
 
 可选扩展：`POST /api/pinduoduo/erp-audit/sync-feishu`（本地审核记录同步飞书），详见路由与 Swagger。
@@ -226,9 +226,11 @@ Content-Type: application/json
 
 ### 3.5 `POST .../erp-delivering/pending-list` —— **待发货 · 实时列表（不入库）**
 
-Body 可无（`{}`）。打开待发货页并抓取当前表格行 **`orderNo` + `goods`**，**不写 SQLite**；虚拟滚动下列表可能仅为当前视区可见行。
+Body 可无（`{}`）。打开待发货页并抓取表格行 **`orderNo` + `goods`**，**不写 SQLite**。默认开启虚拟列表滚动，按 `orderNo` 去重合并（避免只抓视口十几行漏单）。
 
-**响应要点**：`success`、`empty`、`rows`、`message`、`script_result`、`page_url`。
+可选 Body：`autoScroll`（默认 true）、`scrollMaxSteps`、`scrollPauseMs`。
+
+**响应要点**：`success`、`empty`、`rows`、`count`、`scroll`、`message`、`script_result`、`page_url`。
 
 ---
 

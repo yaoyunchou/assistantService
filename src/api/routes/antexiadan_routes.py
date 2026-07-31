@@ -15,6 +15,7 @@ from flasgger import swag_from
 from api.routes.context import get_browser_pool
 from spider.antexiadan.goods_search import ensure_goods_search
 from spider.antexiadan.goods_search_store import get_by_keyword, init_db, list_records, serialize_row
+from spider.antexiadan.login import ensure_logged_in
 from spider.antexiadan.seckill_store import (
     fetch_and_sync,
     get_latest_batch,
@@ -54,6 +55,10 @@ def seckill_list_fetch_browser():
         return jsonify({'success': False, 'ok': False, 'error': '浏览器池未初始化'}), 500
 
     def _capture_key(page):
+        gate = ensure_logged_in(page)
+        if not gate.get('ok'):
+            return {'ok': False, **gate}
+
         captured = {}
 
         def on_request(req):
@@ -80,18 +85,31 @@ def seckill_list_fetch_browser():
             page.wait_for_timeout(500)
 
         page.remove_listener('request', on_request)
-        return captured.get('key', '')
+        key = captured.get('key', '')
+        if not key:
+            return {
+                'ok': False,
+                'error': '已登录但未能拦截到 seckill-list 请求，请稍后重试',
+            }
+        return {'ok': True, 'apiKey': key}
 
     try:
-        api_key = pool.execute(_capture_key, timeout=90)
+        # 含自动登录 + Nest /ai/chat 滑块最多 5 次（单次远程 AI 可能较慢）
+        captured = pool.execute(_capture_key, timeout=600)
     except Exception as e:
         return jsonify({'success': False, 'ok': False, 'error': f'浏览器执行异常: {e}'}), 500
 
-    if not api_key:
+    if not isinstance(captured, dict) or not captured.get('ok'):
+        err = (captured or {}).get('error') if isinstance(captured, dict) else '浏览器采集失败'
+        need_login = bool((captured or {}).get('needLogin')) if isinstance(captured, dict) else False
         return jsonify({
-            'success': False, 'ok': False,
-            'error': '未能从浏览器拦截到 seckill-list 请求，请确认已登录 pc.antexiadan.com',
+            'success': False,
+            'ok': False,
+            'needLogin': need_login,
+            'error': err,
         }), 400
+
+    api_key = captured.get('apiKey') or ''
 
     result = fetch_and_sync(api_key=api_key, write_snapshot=bool(write_snapshot))
     status = 200 if result.get('ok') else 500
@@ -362,3 +380,139 @@ def goods_search_query():
         'count': len(items),
         'items': [serialize_row(r) for r in items],
     })
+
+
+# ── 预售抢购 ─────────────────────────────────────────────────
+
+
+@bp.route('/presale-rush/candidates', methods=['GET'])
+@swag_from({
+    'tags': ['安特'],
+    'summary': '预售抢购候选商品（未标记预售单 × 秒杀对照命中）',
+    'parameters': [
+        {'name': 'limit', 'in': 'query', 'type': 'integer', 'default': 500},
+    ],
+    'responses': {200: {'description': '候选列表（含建议数量与按开售时间分组）'}},
+})
+def presale_rush_candidates():
+    from spider.antexiadan.presale_rush import list_candidates
+    limit = min(int(request.args.get('limit', 500)), 2000)
+    result = list_candidates(limit=limit)
+    return jsonify({'success': True, **result})
+
+
+@bp.route('/presale-rush/plans', methods=['GET'])
+@swag_from({
+    'tags': ['安特'],
+    'summary': '列出预售抢购计划（加购+结算任务）',
+    'responses': {200: {'description': '计划列表'}},
+})
+def presale_rush_plans_list():
+    from spider.antexiadan.presale_rush import list_plans
+    result = list_plans()
+    return jsonify({'success': True, **result})
+
+
+@bp.route('/presale-rush/plans', methods=['POST'])
+@swag_from({
+    'tags': ['安特'],
+    'summary': '按选中商品创建预售抢购计划（同开售时间合并）',
+    'parameters': [{
+        'in': 'body', 'name': 'body', 'required': True,
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'items': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'seckillId': {'type': 'string'},
+                            'goodsId': {'type': 'string'},
+                            'title': {'type': 'string'},
+                            'goodsUrl': {'type': 'string'},
+                            'qty': {'type': 'integer'},
+                            'startUnix': {'type': 'integer'},
+                            'startTime': {'type': 'string'},
+                        },
+                    },
+                },
+            },
+            'required': ['items'],
+        },
+    }],
+    'responses': {200: {'description': '创建结果'}},
+})
+def presale_rush_plans_create():
+    from spider.antexiadan.presale_rush import create_plans
+    body = request.get_json(silent=True) or {}
+    items = body.get('items') or []
+    if not isinstance(items, list) or not items:
+        return jsonify({'success': False, 'ok': False, 'error': 'items 不能为空'}), 400
+    result = create_plans(items)
+    ok = bool(result.get('ok'))
+    return jsonify({'success': ok, **result}), (200 if ok else 400)
+
+
+@bp.route('/presale-rush/plans/<plan_id>', methods=['DELETE'])
+@swag_from({
+    'tags': ['安特'],
+    'summary': '取消预售抢购计划（删除同 plan 的加购+结算任务）',
+    'responses': {200: {'description': '取消结果'}},
+})
+def presale_rush_plans_cancel(plan_id: str):
+    from spider.antexiadan.presale_rush import cancel_plan
+    result = cancel_plan(plan_id)
+    return jsonify({'success': True, **result})
+
+
+@bp.route('/presale-rush/tasks/<task_id>/run', methods=['POST'])
+@swag_from({
+    'tags': ['安特'],
+    'summary': '立即执行预售抢购任务（加购或结算）',
+    'responses': {200: {'description': '触发结果'}},
+})
+def presale_rush_task_run(task_id: str):
+    from scheduler import run_task_by_id
+    from scheduler.task_config import get_task
+    task = get_task(task_id)
+    if not task:
+        return jsonify({'success': False, 'ok': False, 'error': '任务不存在'}), 404
+    if task.get('type') not in ('antexiadan_presale_cart', 'antexiadan_presale_checkout'):
+        return jsonify({'success': False, 'ok': False, 'error': '非预售抢购任务'}), 400
+    import threading
+    threading.Thread(
+        target=lambda: run_task_by_id(task_id),
+        name=f'presale-rush-{task_id[:8]}',
+        daemon=True,
+    ).start()
+    return jsonify({'success': True, 'ok': True, 'taskId': task_id, 'message': '已触发执行'})
+
+
+@bp.route('/presale-rush/mark-presell', methods=['POST'])
+@swag_from({
+    'tags': ['安特'],
+    'summary': '手动标记预售单为已采购（结算后补标）',
+    'parameters': [{
+        'in': 'body', 'name': 'body', 'required': True,
+        'schema': {
+            'type': 'object',
+            'properties': {
+                'orderNos': {'type': 'array', 'items': {'type': 'string'}},
+                'purchased': {'type': 'integer', 'default': 1},
+            },
+            'required': ['orderNos'],
+        },
+    }],
+    'responses': {200: {'description': '标记结果'}},
+})
+def presale_rush_mark_presell():
+    from spider.pinduoduo.presell_store import mark_purchased
+    body = request.get_json(silent=True) or {}
+    order_nos = body.get('orderNos') or body.get('order_nos') or []
+    if not isinstance(order_nos, list) or not order_nos:
+        return jsonify({'success': False, 'ok': False, 'error': 'orderNos 不能为空'}), 400
+    purchased = body.get('purchased', 1)
+    result = mark_purchased(order_nos, purchased=purchased)
+    ok = bool(result.get('ok'))
+    return jsonify({'success': ok, **result}), (200 if ok else 500)

@@ -92,3 +92,40 @@ def list_presell_records(
         'pageSize': page_size,
         'items': rows,
     }
+
+
+def mark_purchased(
+    order_nos: List[str],
+    *,
+    purchased: int = 1,
+) -> Dict[str, Any]:
+    """按平台订单号批量标记预售单 purchased（1=已采购，0=取消标记）。"""
+    nos = []
+    seen = set()
+    for raw in order_nos or []:
+        no = str(raw or '').strip()
+        if not no or no in seen:
+            continue
+        seen.add(no)
+        nos.append(no)
+    if not nos:
+        return {'ok': True, 'updated': 0, 'orderNos': []}
+
+    flag = 1 if int(purchased or 0) else 0
+    placeholders = ','.join(['%s'] * len(nos))
+    sql = (
+        f'UPDATE erp_order_presell SET purchased = %s, updatedAt = NOW() '
+        f'WHERE orderNo IN ({placeholders})'
+    )
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, [flag] + nos)
+            updated = int(cur.rowcount or 0)
+        logger.info('预售单标记 purchased=%s updated=%s nos=%s', flag, updated, nos[:10])
+        return {'ok': True, 'updated': updated, 'orderNos': nos, 'purchased': flag}
+    except Exception as e:
+        logger.error('标记预售单失败: %s', e, exc_info=True)
+        return {'ok': False, 'updated': 0, 'orderNos': nos, 'error': str(e)}
+    finally:
+        conn.close()

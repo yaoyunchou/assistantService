@@ -65,6 +65,22 @@ async (args) => {
 
 _EVAL_DELIVER = """
 async (args) => {
+  delete window.__PDD_ERP_DELIVERING_LIST_AUTO_SCROLL;
+  delete window.__PDD_ERP_DELIVERING_LIST_SCROLL_MAX_STEPS;
+  delete window.__PDD_ERP_DELIVERING_LIST_SCROLL_PAUSE_MS;
+  delete window.__PDD_ERP_DELIVERING_LIST_RESTORE_SCROLL;
+  if (args.autoScroll !== undefined) {
+    window.__PDD_ERP_DELIVERING_LIST_AUTO_SCROLL = args.autoScroll;
+  }
+  if (args.scrollMaxSteps != null && args.scrollMaxSteps !== '') {
+    window.__PDD_ERP_DELIVERING_LIST_SCROLL_MAX_STEPS = Number(args.scrollMaxSteps);
+  }
+  if (args.scrollPauseMs != null && args.scrollPauseMs !== '') {
+    window.__PDD_ERP_DELIVERING_LIST_SCROLL_PAUSE_MS = Number(args.scrollPauseMs);
+  }
+  if (args.restoreScroll !== undefined) {
+    window.__PDD_ERP_DELIVERING_LIST_RESTORE_SCROLL = args.restoreScroll;
+  }
   const source = args.source;
   const run = new Function('return ' + source);
   return await run();
@@ -310,8 +326,11 @@ def run_delivering_list_query(
     page: Page,
     *,
     evaluate_timeout_ms: float = 120_000.0,
+    auto_scroll: Optional[bool] = None,
+    scroll_max_steps: Optional[int] = None,
+    scroll_pause_ms: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """待发货页仅抓取当前表格（不写库、不打单），用于前端展示实时列表。"""
+    """待发货页抓取表格（不写库、不打单）；默认滚动虚拟列表按 orderNo 去重收齐。"""
     ship_url = Config.PINDUODUO_ERP_ORDER_DELIVERING_URL
     page.goto(ship_url, wait_until='domcontentloaded', timeout=120000)
     try:
@@ -333,6 +352,12 @@ def run_delivering_list_query(
 
     source = _load_script_source(_DELIVERING_LIST_JS_PATH)
     args: Dict[str, Any] = {'source': source}
+    if auto_scroll is not None:
+        args['autoScroll'] = auto_scroll
+    if scroll_max_steps is not None:
+        args['scrollMaxSteps'] = int(scroll_max_steps)
+    if scroll_pause_ms is not None:
+        args['scrollPauseMs'] = int(scroll_pause_ms)
 
     ctx = page.context
     restore_ms = 30000.0
@@ -362,7 +387,7 @@ def run_delivering_list_query(
     elif empty:
         msg = '待发货列表当前为空'
     else:
-        msg = f'已抓取 {len(rows)} 条（当前页可见区域）'
+        msg = f'已抓取 {len(rows)} 条（虚拟滚动去重）'
 
     return {
         'success': ok,
@@ -370,6 +395,8 @@ def run_delivering_list_query(
         'empty': empty,
         'message': msg,
         'rows': rows,
+        'count': len(rows),
+        'scroll': raw.get('scroll'),
         'script_result': raw,
         'page_url': page.url,
         'source': 'erp_delivering_page',
@@ -463,7 +490,15 @@ def run_delivering_print_ship(
 def _open_delivered_page(page: Page) -> Optional[Dict[str, Any]]:
     """打开已发货订单页；若跳转登录则走统一拦截。"""
     delivered_url = Config.PINDUODUO_ERP_ORDER_DELIVERED_URL
-    page.goto(delivered_url, wait_until='domcontentloaded', timeout=120000)
+    # commit 先于 domcontentloaded，弱网下减少误超时；再补一轮网络空闲等待
+    try:
+        page.goto(delivered_url, wait_until='commit', timeout=180000)
+    except Exception:
+        page.goto(delivered_url, wait_until='domcontentloaded', timeout=180000)
+    try:
+        page.wait_for_load_state('domcontentloaded', timeout=60000)
+    except Exception as e:
+        logger.debug('delivered wait domcontentloaded: %s', e)
     try:
         page.bring_to_front()
     except Exception as e:
@@ -643,8 +678,15 @@ def fetch_delivered_today_printed_rows(
     ok = bool(raw.get('ok'))
     rows: List[Dict[str, Any]] = raw.get('rows') or []
     row_count = len(rows)
+    page_total = raw.get('pageTotal')
+    incomplete = bool(raw.get('incomplete'))
     if ok:
-        msg = f'共 {row_count} 条（今日已打印快递单筛选）'
+        if page_total is not None:
+            msg = f'共 {row_count} 条（页脚 {page_total}）'
+            if incomplete:
+                msg += '，未抓全'
+        else:
+            msg = f'共 {row_count} 条（已发货筛选）'
     else:
         msg = str(raw.get('error') or '脚本执行失败')
 
@@ -653,6 +695,9 @@ def fetch_delivered_today_printed_rows(
         'intercepted': False,
         'message': msg,
         'rows': rows,
+        'count': row_count,
+        'pageTotal': page_total,
+        'incomplete': incomplete,
         'extract': {'count': raw.get('count'), 'log': raw.get('log')},
         'page_url': page.url,
     }

@@ -17,11 +17,13 @@ from typing import Any, Dict, Optional
 
 # —— 模块标识（引用时请使用常量，避免手写字符串散落）——
 CHANNEL_PINDUODUO = 'pinduoduo'
+CHANNEL_ANTEXIADAN = 'antexiadan'
 CHANNEL_DEFAULT = 'default'  # 通用：读 FEISHU_SYNC_WEBHOOK_URL，无代码内默认 URL
 
 # 环境变量名 → 覆盖对应模块的 Webhook（非空则优先于下方代码默认值）
 _ENV_WEBHOOK_BY_CHANNEL: Dict[str, str] = {
     CHANNEL_PINDUODUO: 'FEISHU_WEBHOOK_PINDUODUO',
+    CHANNEL_ANTEXIADAN: 'FEISHU_WEBHOOK_ANTEXIADAN',
     CHANNEL_DEFAULT: 'FEISHU_SYNC_WEBHOOK_URL',
 }
 
@@ -36,10 +38,12 @@ _DEFAULT_WEBHOOK_BY_CHANNEL: Dict[str, str] = {
 # 关键词：若环境变量「已设置」（含置空），则以环境为准；未设置时用默认值，满足常见「拼多多」机器人关键词
 _ENV_KEYWORD_BY_CHANNEL: Dict[str, str] = {
     CHANNEL_PINDUODUO: 'FEISHU_WEBHOOK_PINDUODUO_KEYWORD',
+    CHANNEL_ANTEXIADAN: 'FEISHU_WEBHOOK_ANTEXIADAN_KEYWORD',
 }
 
 _DEFAULT_KEYWORD_BY_CHANNEL: Dict[str, str] = {
     CHANNEL_PINDUODUO: '拼多多',
+    CHANNEL_ANTEXIADAN: '安特',
 }
 
 

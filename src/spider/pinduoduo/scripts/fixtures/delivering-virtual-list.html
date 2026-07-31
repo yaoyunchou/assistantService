@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>ERP delivering virtual-list fixture (2026-07-15 × 50)</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    #scroll {
+      height: 360px;
+      overflow: auto;
+      border: 1px solid #ccc;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    td { border-bottom: 1px solid #eee; padding: 6px 8px; height: 48px; box-sizing: border-box; }
+  </style>
+</head>
+<body>
+  <div data-testid="beast-core-table">
+    <div data-testid="beast-core-table-middle-body">
+      <div id="scroll" data-testid="beast-core-scrollbar-root">
+        <table>
+          <tbody id="tbody" data-testid="beast-core-table-middle-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <script>
+    /**
+     * 模拟 beast-core 虚拟列表：
+     * - 共 TOTAL=50 单常驻 DOM（撑开滚动）
+     * - 仅视口窗口 VISIBLE≈12 行挂 data-testid="beast-core-table-body-tr"
+     * - 轮询 scrollTop 同步窗口（程序化改 scrollTop 时 scroll 事件可能不触发）
+     */
+    const TOTAL = 50;
+    const VISIBLE = 12;
+    const COLS = 14;
+    const DATE_PREFIX = '260715';
+    const allRows = [];
+
+    function orderNo(i) {
+      return DATE_PREFIX + String(i + 1).padStart(10, '0');
+    }
+
+    function buildRow(index) {
+      const tr = document.createElement('tr');
+      tr.dataset.index = String(index);
+      for (let c = 0; c < COLS; c++) {
+        const td = document.createElement('td');
+        if (c === 6) {
+          const goodsWrap = document.createElement('div');
+          goodsWrap.className = 'sc-dUYKzm';
+          const img = document.createElement('img');
+          img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+          const wrapper = document.createElement('div');
+          wrapper.className = 'content-wrapper';
+          const title = document.createElement('span');
+          title.textContent = '测试商品-' + (index + 1);
+          const qty = document.createElement('span');
+          qty.className = 'light-span';
+          qty.textContent = 'x1';
+          wrapper.appendChild(title);
+          wrapper.appendChild(qty);
+          goodsWrap.appendChild(img);
+          goodsWrap.appendChild(wrapper);
+          td.appendChild(goodsWrap);
+        } else if (c === 11) {
+          const link = document.createElement('a');
+          link.setAttribute('data-testid', 'beast-core-button-link');
+          const span = document.createElement('span');
+          span.textContent = orderNo(index);
+          link.appendChild(span);
+          td.appendChild(link);
+        }
+        tr.appendChild(td);
+      }
+      return tr;
+    }
+
+    const scrollEl = document.getElementById('scroll');
+    const tbody = document.getElementById('tbody');
+    for (let i = 0; i < TOTAL; i++) {
+      const tr = buildRow(i);
+      allRows.push(tr);
+      tbody.appendChild(tr);
+    }
+
+    function rowHeight() {
+      const h = allRows[0] && allRows[0].getBoundingClientRect().height;
+      return h > 0 ? h : 55;
+    }
+
+    function syncWindow() {
+      const rowH = rowHeight();
+      const maxStart = Math.max(0, TOTAL - VISIBLE);
+      const start = Math.min(maxStart, Math.floor(scrollEl.scrollTop / rowH));
+      const end = Math.min(TOTAL, start + VISIBLE);
+      allRows.forEach((tr, i) => {
+        if (i >= start && i < end) {
+          tr.setAttribute('data-testid', 'beast-core-table-body-tr');
+        } else {
+          tr.removeAttribute('data-testid');
+        }
+      });
+      window.__FIXTURE_VISIBLE = end - start;
+      window.__FIXTURE_START = start;
+      window.__FIXTURE_TOTAL = TOTAL;
+      window.__FIXTURE_ROW_H = rowH;
+    }
+
+    scrollEl.addEventListener('scroll', syncWindow);
+    let lastTop = -1;
+    setInterval(() => {
+      if (scrollEl.scrollTop !== lastTop) {
+        lastTop = scrollEl.scrollTop;
+        syncWindow();
+      }
+    }, 16);
+    syncWindow();
+  </script>
+</body>
+</html>

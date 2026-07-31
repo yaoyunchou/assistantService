@@ -7,6 +7,7 @@
 """
 import collections
 import json
+import re
 import threading
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
@@ -151,7 +152,7 @@ def _infer_handler_success(task_type: str, result: Any) -> bool:
             err_markers = ("失败", "拒绝", "Connection", "Max retries", "HTTP", "错误", "异常", "超时")
             return not any(m in msg for m in err_markers)
         return False
-    if task_type in ("http_request", "python_script"):
+    if task_type in ("http_request", "python_script", "antexiadan_presale_cart", "antexiadan_presale_checkout"):
         return code == 1
     if task_type == "pdd_inventory_sync":
         # handler：成功为 eligible_count（可為 0），失敗為 -1
@@ -459,6 +460,36 @@ def _run_python_script(data: Dict[str, Any], _tid: str = "") -> Tuple[int, str]:
                 pass
 
 
+def _run_antexiadan_presale_phase(data: Dict[str, Any], _tid: str = "") -> Tuple[int, str]:
+    """安特预售加购/结算：走浏览器池执行 Playwright 编排。"""
+    from api.routes.context import get_browser_pool
+    from spider.antexiadan.presale_rush import run_phase
+
+    pool = get_browser_pool()
+    if not pool:
+        return 0, "浏览器池未初始化"
+
+    phase = str((data or {}).get("phase") or "cart")
+    items = (data or {}).get("items") or []
+    _task_log(_tid, "INFO", "安特预售 phase=%s items=%d", phase, len(items))
+
+    def _job(page):
+        return run_phase(page, data or {})
+
+    try:
+        result = pool.execute(_job, timeout=900)
+    except Exception as e:
+        _task_log(_tid, "ERROR", "安特预售执行异常: %s", e)
+        return 0, f"执行异常: {e}"
+
+    if not isinstance(result, dict):
+        return 0, f"返回异常: {result!r}"
+    ok = bool(result.get("ok"))
+    msg = result.get("message") or result.get("error") or json.dumps(result, ensure_ascii=False)[:500]
+    _task_log(_tid, "INFO" if ok else "WARNING", "安特预售结果: %s", msg)
+    return (1 if ok else 0), msg
+
+
 def get_task_handlers() -> Dict[str, Dict[str, Any]]:
     """任务类型 -> { name, run(data) -> (code, message) or raise。"""
     return {
@@ -481,6 +512,14 @@ def get_task_handlers() -> Dict[str, Dict[str, Any]]:
         "pdd_inventory_sync": {
             "name": "拼多多库存（飞书 ERP→库存/日志）",
             "run": _run_pdd_inventory_sync,
+        },
+        "antexiadan_presale_cart": {
+            "name": "安特预售加购",
+            "run": _run_antexiadan_presale_phase,
+        },
+        "antexiadan_presale_checkout": {
+            "name": "安特预售结算",
+            "run": _run_antexiadan_presale_phase,
         },
     }
 
@@ -533,6 +572,22 @@ def get_task_type_schemas() -> Dict[str, Dict[str, Any]]:
                 {"key": "require_express", "label": "日志是否要求快递单号 (可选 true/false)", "type": "text", "placeholder": "留空使用 Config"},
                 {"key": "inventory_info_table_id", "label": "库存信息表 table_id (可选)", "type": "text", "placeholder": "留空使用 .env"},
                 {"key": "inventory_log_table_id", "label": "扣减日志表 table_id (可选)", "type": "text", "placeholder": "留空使用 .env"},
+            ],
+        },
+        "antexiadan_presale_cart": {
+            "name": handlers["antexiadan_presale_cart"]["name"],
+            "description": "安特预售：开售前加入购物车（建议在预售抢购页创建，勿手填）",
+            "fields": [
+                {"key": "phase", "label": "阶段", "type": "text", "default": "cart"},
+                {"key": "startTime", "label": "开售时间", "type": "text"},
+            ],
+        },
+        "antexiadan_presale_checkout": {
+            "name": handlers["antexiadan_presale_checkout"]["name"],
+            "description": "安特预售：开售时刻结算/提交（建议在预售抢购页创建）",
+            "fields": [
+                {"key": "phase", "label": "阶段", "type": "text", "default": "checkout"},
+                {"key": "startTime", "label": "开售时间", "type": "text"},
             ],
         },
     }
@@ -677,9 +732,44 @@ def _run_startup_catch_up_in_background() -> None:
     threading.Thread(target=_worker, name="scheduler-catch-up", daemon=True).start()
 
 
-def _register_jobs_from_config() -> None:
-    """从配置文件加载任务并注册到调度器（tasks.json，可由种子文件按规范初始化）。跳过 enabled=false 的任务。"""
+def _parse_run_at(run_at: Any) -> Optional[datetime]:
+    """将 run_at（unix 秒 / ISO 字符串 / datetime）解析为本地 naive datetime。"""
+    if run_at is None or run_at == "":
+        return None
+    if isinstance(run_at, datetime):
+        return run_at.replace(tzinfo=None) if run_at.tzinfo else run_at
+    if isinstance(run_at, (int, float)):
+        return datetime.fromtimestamp(float(run_at))
+    s = str(run_at).strip()
+    if not s:
+        return None
+    if re.fullmatch(r"\d+(\.\d+)?", s):
+        return datetime.fromtimestamp(float(s))
+    try:
+        # 支持 2026-07-09T16:00:00 / 2026-07-09 16:00:00
+        s2 = s.replace("Z", "").replace("T", " ")
+        return datetime.fromisoformat(s2)
+    except Exception:
+        logger.warning("无法解析 run_at=%s", run_at)
+        return None
+
+
+def _build_trigger(task: Dict[str, Any]):
+    """优先 DateTrigger(run_at)，否则 CronTrigger。"""
     from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.triggers.date import DateTrigger
+
+    run_at = _parse_run_at(task.get("run_at"))
+    if run_at is not None:
+        return DateTrigger(run_date=run_at), f"run_at={run_at.isoformat(sep=' ', timespec='seconds')}"
+    cron = (task.get("cron") or "").strip() or "0 * * * *"
+    if len(cron.split()) < 5:
+        return None, None
+    return CronTrigger.from_crontab(cron), f"cron={cron}"
+
+
+def _register_jobs_from_config() -> None:
+    """从配置文件加载任务并注册到调度器。跳过 enabled=false 的任务。"""
     from scheduler.task_config import list_tasks
 
     sched = get_scheduler()
@@ -688,11 +778,16 @@ def _register_jobs_from_config() -> None:
         if not task.get("enabled", True):
             logger.info("跳过已禁用任务: id=%s name=%s", task_id, task.get("name"))
             continue
-        cron = (task.get("cron") or "").strip() or "0 * * * *"
-        if not task_id or len(cron.split()) < 5:
+        if not task_id:
             continue
         try:
-            trigger = CronTrigger.from_crontab(cron)
+            trigger, label = _build_trigger(task)
+            if trigger is None:
+                continue
+            # 一次性任务若已过期则跳过注册
+            if hasattr(trigger, "run_date") and trigger.run_date and trigger.run_date < datetime.now():
+                logger.info("跳过已过期一次性任务: id=%s %s", task_id, label)
+                continue
             sched.add_job(
                 lambda tid=task_id: _run_task_by_id(tid),
                 trigger=trigger,
@@ -702,7 +797,7 @@ def _register_jobs_from_config() -> None:
                 misfire_grace_time=600,
                 coalesce=True,
             )
-            logger.info("已注册定时任务: id=%s name=%s cron=%s", task_id, task.get("name"), cron)
+            logger.info("已注册定时任务: id=%s name=%s %s", task_id, task.get("name"), label)
         except Exception as e:
             logger.warning("注册任务失败 id=%s: %s", task_id, e)
 
@@ -765,6 +860,7 @@ def list_jobs() -> List[Dict[str, Any]]:
             "type_name": type_name,
             "data": t.get("data"),
             "cron": t.get("cron"),
+            "run_at": t.get("run_at"),
             "enabled": enabled,
             "next_run_time": next_run if enabled else None,
             "running": status.get("running", False),
@@ -776,31 +872,41 @@ def list_jobs() -> List[Dict[str, Any]]:
     return out
 
 
-def add_task_and_register(name: str, task_type: str, data: Optional[Dict[str, Any]] = None, cron: str = "0 * * * *") -> Dict[str, Any]:
-    """新增任务配置并注册到调度器。返回任务项。"""
-    from apscheduler.triggers.cron import CronTrigger
+def add_task_and_register(
+    name: str,
+    task_type: str,
+    data: Optional[Dict[str, Any]] = None,
+    cron: str = "0 * * * *",
+    *,
+    run_at: Any = None,
+) -> Dict[str, Any]:
+    """新增任务配置并注册到调度器。返回任务项。支持一次性 run_at。"""
     from scheduler.task_config import add_task as config_add_task
 
-    task = config_add_task(name=name, task_type=task_type, data=data, cron=cron)
-    cron = (task.get("cron") or "").strip() or "0 * * * *"
-    if len(cron.split()) >= 5:
-        try:
-            sched = get_scheduler()
-            trigger = CronTrigger.from_crontab(cron)
-            sched.add_job(
-                lambda tid=task["id"]: _run_task_by_id(tid),
-                trigger=trigger,
-                id=task["id"],
-                name=task.get("name") or task["id"],
-                replace_existing=True,
-                misfire_grace_time=600,
-                coalesce=True,
-            )
-            if not sched.running:
-                sched.start()
-                _run_startup_catch_up_in_background()
-        except Exception as e:
-            logger.warning("注册新任务到调度器失败: %s", e)
+    task = config_add_task(name=name, task_type=task_type, data=data, cron=cron, run_at=run_at)
+    try:
+        trigger, label = _build_trigger(task)
+        if trigger is None:
+            return task
+        if hasattr(trigger, "run_date") and trigger.run_date and trigger.run_date < datetime.now():
+            logger.warning("一次性任务 run_at 已过期，仍保存配置但不注册: id=%s %s", task.get("id"), label)
+            return task
+        sched = get_scheduler()
+        sched.add_job(
+            lambda tid=task["id"]: _run_task_by_id(tid),
+            trigger=trigger,
+            id=task["id"],
+            name=task.get("name") or task["id"],
+            replace_existing=True,
+            misfire_grace_time=600,
+            coalesce=True,
+        )
+        if not sched.running:
+            sched.start()
+            _run_startup_catch_up_in_background()
+        logger.info("已注册新任务: id=%s %s", task.get("id"), label)
+    except Exception as e:
+        logger.warning("注册新任务到调度器失败: %s", e)
     return task
 
 
@@ -833,19 +939,20 @@ def pause_task(task_id: str) -> bool:
 
 def resume_task(task_id: str) -> bool:
     """恢复任务：配置标记 enabled=true，重新注册到调度器。"""
-    from apscheduler.triggers.cron import CronTrigger
     from scheduler.task_config import get_task, update_task_field
 
     update_task_field(task_id, "enabled", True)
     task = get_task(task_id)
     if not task:
         return False
-    cron = (task.get("cron") or "").strip() or "0 * * * *"
-    if len(cron.split()) < 5:
-        return False
     try:
+        trigger, label = _build_trigger(task)
+        if trigger is None:
+            return False
+        if hasattr(trigger, "run_date") and trigger.run_date and trigger.run_date < datetime.now():
+            logger.warning("恢复失败：一次性任务已过期 id=%s %s", task_id, label)
+            return False
         sched = get_scheduler()
-        trigger = CronTrigger.from_crontab(cron)
         sched.add_job(
             lambda tid=task_id: _run_task_by_id(tid),
             trigger=trigger,
@@ -858,7 +965,7 @@ def resume_task(task_id: str) -> bool:
         if not sched.running:
             sched.start()
             _run_startup_catch_up_in_background()
-        logger.info("已恢复任务: id=%s", task_id)
+        logger.info("已恢复任务: id=%s %s", task_id, label)
     except Exception as e:
         logger.warning("恢复任务到调度器失败: %s", e)
     return True

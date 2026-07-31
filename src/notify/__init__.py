@@ -186,6 +186,8 @@ def custom(
 
 _SOURCE_DISPLAY = {
     "pinduoduo": "拼多多助手",
+    "goofish": "闲鱼助手",
+    "antexiadan": "安特助手",
     "tu": "途强助手",
     "ali1688": "1688助手",
     "scheduler": "定时任务",

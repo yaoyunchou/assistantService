@@ -19,6 +19,7 @@ from spider.antexiadan.goods_search_store import (
     serialize_row,
     upsert_from_api_response,
 )
+from spider.antexiadan.login import ensure_logged_in
 from utils.logger import get_logger
 
 logger = get_logger('AntexiadanGoodsSearch')
@@ -38,7 +39,18 @@ def extract_search_keyword(text: str) -> Optional[str]:
 
 
 def capture_pcapi_credentials(page) -> Dict[str, str]:
-    """打开安特首页，从 pcapi 请求中拦截 key 与 version。"""
+    """登录门禁通过后打开安特首页，从 pcapi 请求中拦截 key 与 version。
+
+    返回值可能含 error / needLogin（登录失败时无 key）。
+    """
+    gate = ensure_logged_in(page)
+    if not gate.get('ok'):
+        return {
+            'key': '',
+            'error': gate.get('error') or '安特登录失败',
+            'needLogin': bool(gate.get('needLogin')),
+        }
+
     captured: Dict[str, str] = {}
 
     def on_request(req):
@@ -167,7 +179,8 @@ def ensure_goods_search(
         if not creds.get('key'):
             return {
                 'ok': False,
-                'error': '未能拦截 pcapi key，请确认浏览器已登录 pc.antexiadan.com',
+                'needLogin': bool(creds.get('needLogin')),
+                'error': creds.get('error') or '未能拦截 pcapi key，请确认浏览器已登录 pc.antexiadan.com',
             }
         try:
             row = search_and_cache(
@@ -180,7 +193,7 @@ def ensure_goods_search(
             return {'ok': False, 'error': str(e)}
 
     try:
-        result = browser_pool.execute(_run, timeout=90)
+        result = browser_pool.execute(_run, timeout=600)
     except Exception as e:
         return {
             'ok': False,
@@ -196,6 +209,7 @@ def ensure_goods_search(
             'keyword': kw,
             'fromCache': False,
             'goodsSearch': None,
+            'needLogin': bool(result.get('needLogin')),
             'error': result.get('error') or '搜索失败',
         }
 
@@ -259,7 +273,8 @@ def ensure_goods_search_batch(
         if not creds.get('key'):
             return {
                 'ok': False,
-                'error': '未能拦截 pcapi key，请确认浏览器已登录 pc.antexiadan.com',
+                'needLogin': bool(creds.get('needLogin')),
+                'error': creds.get('error') or '未能拦截 pcapi key，请确认浏览器已登录 pc.antexiadan.com',
                 'results': {},
             }
         results: Dict[str, Any] = {}
@@ -276,7 +291,7 @@ def ensure_goods_search_batch(
         return {'ok': True, 'results': results, 'errors': errors}
 
     try:
-        batch = browser_pool.execute(_run_batch, timeout=max(90, 30 + len(missing) * 10))
+        batch = browser_pool.execute(_run_batch, timeout=max(600, 120 + len(missing) * 10))
     except Exception as e:
         err = f'浏览器搜索异常: {e}'
         for kw in missing:
@@ -291,12 +306,14 @@ def ensure_goods_search_batch(
 
     if not batch.get('ok'):
         err = batch.get('error') or '搜索失败'
+        need_login = bool(batch.get('needLogin'))
         for kw in missing:
             out[kw] = {
                 'ok': False,
                 'keyword': kw,
                 'fromCache': False,
                 'goodsSearch': None,
+                'needLogin': need_login,
                 'error': err,
             }
         return out

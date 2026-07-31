@@ -16,6 +16,7 @@ from .order_1688_routes import bp as order_1688_bp
 from .websocket_routes import bp as websocket_bp
 from .scheduler_routes import bp as scheduler_bp
 from .taobao_routes import bp as taobao_bp
+from .goofish_routes import bp as goofish_bp
 from .antexiadan_routes import bp as antexiadan_bp
 from .ai_routes import bp as ai_bp
 
@@ -42,6 +43,7 @@ SWAGGER_TEMPLATE = {
         {'name': 'WebSocket', 'description': 'Socket.IO 客户端连接与配置'},
         {'name': '定时任务', 'description': '定时任务列表与手动触发'},
         {'name': '淘宝', 'description': '淘宝商品采集与 Playwright 自动上架'},
+        {'name': '闲鱼', 'description': '闲鱼卖家工作台：商品发布与在线商品管理'},
         {'name': '安特', 'description': '安特 PC 商城限时秒杀'},
         {'name': 'AI', 'description': 'AI 大脑：LLM 问答与 Cursor SDK Agent'},
     ],
@@ -92,6 +94,7 @@ def register_routes(app, browser_pool):
     app.register_blueprint(websocket_bp)
     app.register_blueprint(scheduler_bp)
     app.register_blueprint(taobao_bp)
+    app.register_blueprint(goofish_bp)
     app.register_blueprint(antexiadan_bp)
     app.register_blueprint(ai_bp)
 

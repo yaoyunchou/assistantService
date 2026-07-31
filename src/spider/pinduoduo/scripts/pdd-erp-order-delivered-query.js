@@ -18,6 +18,7 @@
  *   - `window.__PDD_ERP_DELIVERED_FILTER_PRINT_STATUS`：打印状态过滤
  *       默认「已打印快递单」；填 `__ALL__` 或 `*` 表示不筛选（全部）
  *       （误传空串 / null 仍按默认筛「已打印快递单」）
+ *       **补历史全日发货单时务必传 `__ALL__`**，否则未打印单会漏入库
  *   - `window.__PDD_ERP_DELIVERED_TIME_TYPE`：时间类型，默认 '发货时间'
  *       可选 '付款时间' | '审核时间'
  *   - `window.__PDD_ERP_DELIVERED_DATE_SHORTCUT`：快捷日期选项，默认 '今天'
@@ -484,11 +485,12 @@
     log.push('[Step6] 首行未找到，可能无数据或表格结构已变更');
   }
 
-  /* ─── Step 7: 抓取数据（支持虚拟滚动） ─── */
+  /* ─── Step 7: 抓取数据（虚拟滚动 + 可选翻页） ─── */
   const ROW_SEL = 'tr[data-testid="beast-core-table-body-tr"]';
   const TBODY_SEL = '[data-testid="beast-core-table-middle-tbody"]';
   const TABLE_ROOT_SEL = '[data-testid="beast-core-table"]';
   const BODY_WRAP_SEL = '[data-testid="beast-core-table-middle-body"]';
+  const SCROLLBAR_ROOT_SEL = '[data-testid="beast-core-scrollbar-root"]';
 
   /* 前 N 行商品 td 诊断（用于发给 AI 分析） */
   const goodsDiag = [];
@@ -564,62 +566,199 @@
     return added;
   }
 
-  if (!autoScroll) {
-    mergeRows();
-    log.push(`[Step7] 静态模式：抓取 ${rowMap.size} 条`);
-  } else {
-    const tableRoot = document.querySelector(TABLE_ROOT_SEL);
-    const bodyWrap = tableRoot && tableRoot.querySelector(BODY_WRAP_SEL);
+  /** 页脚「共 N 条」——用于判断是否抓全 / 是否还需翻页 */
+  function readListedTotal() {
+    const roots = [
+      document.querySelector('[data-testid="beast-core-pagination"]'),
+      document.querySelector('.PGT_pagination_5-184-0'),
+      document.body,
+    ].filter(Boolean);
+    for (const root of roots) {
+      const text = (root.innerText || '').replace(/\s+/g, '');
+      const m = text.match(/共(\d+)条/);
+      if (m) return parseInt(m[1], 10);
+    }
+    return null;
+  }
 
-    // 探测可滚动层
-    function probeScroll(el) {
-      if (!el || el.nodeType !== 1) return false;
-      try {
-        if (el.scrollHeight <= el.clientHeight + 6) return false;
-        const prev = el.scrollTop; el.scrollTop = prev + 8;
-        const moved = el.scrollTop !== prev; el.scrollTop = prev;
-        return moved;
-      } catch (e) { return false; }
+  function probeVerticalScrollable(el) {
+    if (!el || el.nodeType !== 1) return false;
+    try {
+      if (el.scrollHeight <= el.clientHeight + 6) return false;
+      const prev = el.scrollTop;
+      el.scrollTop = prev + 8;
+      const moved = el.scrollTop !== prev;
+      el.scrollTop = prev;
+      return moved;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function findTableBodyScrollEl(root) {
+    const candidates = [];
+    const tbody = root.querySelector(TBODY_SEL);
+    let p = tbody;
+    while (p && p !== document.documentElement) {
+      if (probeVerticalScrollable(p)) candidates.push(p);
+      p = p.parentElement;
+    }
+    const wrap = root.querySelector(BODY_WRAP_SEL) || root;
+    [wrap, ...wrap.querySelectorAll('*')].forEach((n) => {
+      if (probeVerticalScrollable(n)) candidates.push(n);
+    });
+    const sr = root.querySelector(SCROLLBAR_ROOT_SEL);
+    if (sr && probeVerticalScrollable(sr)) candidates.push(sr);
+    if (!candidates.length) return null;
+    return candidates.reduce(
+      (best, c) => (c.scrollHeight >= best.scrollHeight ? c : best),
+      candidates[0]
+    );
+  }
+
+  function dispatchWheel(target, deltaY) {
+    if (!target) return;
+    try {
+      target.dispatchEvent(
+        new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          deltaY,
+          deltaMode: 0,
+          view: window,
+        })
+      );
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function broadcastWheel(root, deltaY) {
+    [
+      root.querySelector(SCROLLBAR_ROOT_SEL),
+      root.querySelector(BODY_WRAP_SEL),
+      root,
+    ]
+      .filter(Boolean)
+      .forEach((t) => dispatchWheel(t, deltaY));
+  }
+
+  async function scrollCollectCurrentPage(pageLabel) {
+    const tableRoot = document.querySelector(TABLE_ROOT_SEL) || document.body;
+    if (!autoScroll) {
+      const n = mergeRows();
+      log.push(`[Step7][${pageLabel}] 静态模式：+${n}，累计=${rowMap.size}`);
+      return;
     }
 
-    let scrollEl = null;
-    const candidates = bodyWrap ? [bodyWrap, ...bodyWrap.querySelectorAll('*')] : [];
-    for (const c of candidates) {
-      if (probeScroll(c)) { scrollEl = c; break; }
-    }
-
+    const scrollEl = findTableBodyScrollEl(tableRoot);
     if (scrollEl) {
-      log.push(`[Step7] 滚动容器：tag=${scrollEl.tagName} class="${scrollEl.className.slice(0, 60)}" scrollHeight=${scrollEl.scrollHeight} clientHeight=${scrollEl.clientHeight}`);
+      log.push(
+        `[Step7][${pageLabel}] 滚动容器：tag=${scrollEl.tagName} scrollHeight=${scrollEl.scrollHeight} clientHeight=${scrollEl.clientHeight}`
+      );
     } else {
-      log.push(`[Step7] 未找到可滚动容器（bodyWrap=${!!bodyWrap} tableRoot=${!!tableRoot}），将作静态抓取`);
+      log.push(`[Step7][${pageLabel}] 未找到 scrollTop 层，改用 wheel`);
     }
 
     if (scrollEl) scrollEl.scrollTop = 0;
-    await sleep(300);
-    const initCount = mergeRows();
-    log.push(`[Step7] 初始可见：${initCount} 条（rowMap=${rowMap.size}）`);
+    broadcastWheel(tableRoot, -9999);
+    await sleep(pauseMs);
+
+    const initAdded = mergeRows();
+    log.push(`[Step7][${pageLabel}] 初始视口：+${initAdded}，累计=${rowMap.size}`);
 
     let stale = 0;
-    const stepPx = Math.max(100, Math.round((scrollEl ? scrollEl.clientHeight : 600) * 0.88));
-    log.push(`[Step7] 每步滚动 ${stepPx}px，最多 ${maxSteps} 步，间隔 ${pauseMs}ms`);
+    const viewportH = scrollEl ? scrollEl.clientHeight : window.innerHeight;
+    const stepPx = Math.max(80, Math.round(viewportH * 0.7));
+    log.push(`[Step7][${pageLabel}] 每步 ${stepPx}px，最多 ${maxSteps} 步，间隔 ${pauseMs}ms`);
+
     for (let step = 0; step < maxSteps; step++) {
       if (scrollEl) scrollEl.scrollTop += stepPx;
+      broadcastWheel(tableRoot, stepPx);
       await sleep(pauseMs);
       const added = mergeRows();
       if (added > 0) {
-        log.push(`[scroll step=${step + 1}] +${added} 条，累计=${rowMap.size}`);
         stale = 0;
+        log.push(`[scroll ${pageLabel} step=${step + 1}] +${added}，累计=${rowMap.size}`);
       } else {
         stale++;
-        if (stale >= 3) { log.push(`[Step7] 连续 3 步无新数据，触底停止（step=${step + 1}，总计=${rowMap.size} 条）`); break; }
+        // 触底后再多滚 2 步防抖；虚拟列表偶发一步无新增
+        if (stale >= 5) {
+          log.push(`[Step7][${pageLabel}] 连续 5 步无新数据，停止（step=${step + 1}）`);
+          break;
+        }
       }
     }
+
     if (scrollEl) scrollEl.scrollTop = 0;
-    log.push(`[Step7] 滚动完成，共 ${rowMap.size} 条`);
+    broadcastWheel(tableRoot, -9999);
+  }
+
+  function findNextPageButton() {
+    const pag = document.querySelector('[data-testid="beast-core-pagination"]') || document.body;
+    const candidates = [...pag.querySelectorAll('li, button, a, span')];
+    return candidates.find((el) => {
+      if (!el || el.offsetParent === null) return false;
+      const t = (el.getAttribute('aria-label') || el.textContent || '').trim();
+      if (/^下一[页頁]$|^›$|^»$|Next/i.test(t)) return true;
+      if (el.className && /next/i.test(String(el.className)) && !/disabled/i.test(String(el.className))) {
+        return /下一|›|»|next/i.test(t) || el.querySelector('svg, i');
+      }
+      return false;
+    });
+  }
+
+  function isDisabledControl(el) {
+    if (!el) return true;
+    if (el.disabled) return true;
+    const cls = String(el.className || '');
+    if (/disabled|is-disabled|PGT_disabled/i.test(cls)) return true;
+    if (el.getAttribute('aria-disabled') === 'true') return true;
+    const li = el.closest('li');
+    if (li && /disabled/i.test(String(li.className || ''))) return true;
+    return false;
+  }
+
+  // 先采第一页
+  await scrollCollectCurrentPage('p1');
+  let pageTotal = readListedTotal();
+  log.push(`[Step7] 页脚统计共 ${pageTotal == null ? '未知' : pageTotal} 条，当前已抓 ${rowMap.size}`);
+
+  // 若页脚总数大于已抓数量，尝试翻页继续采（ERP 常见每页 20/50）
+  let pageIdx = 1;
+  const maxPages = 30;
+  while (
+    pageIdx < maxPages &&
+    pageTotal != null &&
+    rowMap.size < pageTotal
+  ) {
+    const nextBtn = findNextPageButton();
+    if (!nextBtn || isDisabledControl(nextBtn)) {
+      log.push(`[Step7] 无可用「下一页」（已抓 ${rowMap.size}/${pageTotal}）`);
+      break;
+    }
+    pageIdx += 1;
+    nextBtn.click();
+    await sleep(Math.max(1200, pauseMs * 2));
+    // 等新表体
+    const tPage = Date.now();
+    while (Date.now() - tPage < 8000) {
+      if (document.querySelector(ROW_SEL)) break;
+      await sleep(300);
+    }
+    await scrollCollectCurrentPage('p' + pageIdx);
+    const t2 = readListedTotal();
+    if (t2 != null) pageTotal = t2;
+    log.push(`[Step7] 翻页后累计 ${rowMap.size}/${pageTotal == null ? '?' : pageTotal}`);
+    if (pageTotal != null && rowMap.size >= pageTotal) break;
+  }
+
+  if (pageTotal != null && rowMap.size < pageTotal) {
+    log.push(`[Step7][警告] 已抓 ${rowMap.size} < 页脚 ${pageTotal}，可能仍有漏单`);
   }
 
   const rows = [...rowMap.values()];
-  log.push(`[汇总] 最终输出 ${rows.length} 条已发货订单`);
+  log.push(`[汇总] 最终输出 ${rows.length} 条已发货订单（页脚=${pageTotal == null ? '未知' : pageTotal}）`);
 
   /* goods 命中情况汇总 */
   const goodsStrategySummary = {};
@@ -654,5 +793,14 @@
     });
   }
 
-  return { ok: true, count: rows.length, rows, log, goodsDiag, goodsStrategyCount };
+  return {
+    ok: true,
+    count: rows.length,
+    pageTotal,
+    incomplete: pageTotal != null ? rows.length < pageTotal : false,
+    rows,
+    log,
+    goodsDiag,
+    goodsStrategyCount,
+  };
 })();

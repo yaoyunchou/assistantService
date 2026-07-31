@@ -715,8 +715,8 @@ def pinduoduo_erp_audit_submit():
 @bp.route('/erp-delivering/pending-list', methods=['POST'])
 @swag_from({
     'tags': ['拼多多'],
-    'summary': '待发货页：仅抓取当前列表（实时，不入库）',
-    'responses': {200: {'description': 'rows 为页面当前可见订单'}},
+    'summary': '待发货页：抓取列表（虚拟滚动去重，实时，不入库）',
+    'responses': {200: {'description': 'rows 为待发货订单（滚动合并后）'}},
 })
 def pinduoduo_erp_delivering_pending_list():
     try:
@@ -726,8 +726,20 @@ def pinduoduo_erp_delivering_pending_list():
 
         from spider.pinduoduo import erp_audit
 
+        body = request.get_json(silent=True) or {}
+        auto_scroll = body.get('autoScroll')
+        if auto_scroll is None:
+            auto_scroll = body.get('auto_scroll')
+        scroll_max_steps = body.get('scrollMaxSteps', body.get('scroll_max_steps'))
+        scroll_pause_ms = body.get('scrollPauseMs', body.get('scroll_pause_ms'))
+
         result = pool.execute(
-            lambda page: erp_audit.run_delivering_list_query(page),
+            lambda page: erp_audit.run_delivering_list_query(
+                page,
+                auto_scroll=None if auto_scroll is None else bool(auto_scroll),
+                scroll_max_steps=int(scroll_max_steps) if scroll_max_steps is not None else None,
+                scroll_pause_ms=int(scroll_pause_ms) if scroll_pause_ms is not None else None,
+            ),
             timeout=200,
         )
         return jsonify(result if isinstance(result, dict) else {'success': False, 'message': str(result)}), 200

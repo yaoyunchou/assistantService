@@ -127,6 +127,18 @@ def register_web_routes(app, tool_manager: ToolManager):
         tools_info = tool_manager.get_tools_info()
         return render_template('pinduoduo_erp_presell_seckill.html', tools=tools_info, config=Config)
 
+    @app.route('/antexiadan/presale-rush')
+    def antexiadan_presale_rush():
+        """安特 · 预售抢购控制台（提前加购 + 到点结算）"""
+        tools_info = tool_manager.get_tools_info()
+        return render_template('antexiadan_presale_rush.html', tools=tools_info, config=Config)
+
+    @app.route('/goofish/items')
+    def goofish_items():
+        """闲鱼 · 在线商品管理（上下架 / 编辑 / 删除）"""
+        tools_info = tool_manager.get_tools_info()
+        return render_template('goofish_items.html', tools=tools_info, config=Config)
+
     # ── 电商模块（父路径 /ecommerce/）────────────────────────────
     @app.route('/ecommerce/order')
     def ecommerce_order():

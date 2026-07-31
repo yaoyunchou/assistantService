@@ -441,8 +441,18 @@ async function doFetch() {
     box.style.background = '#f8f9fa';
     box.style.color = '#495057';
     box.textContent = useBrowser
-        ? '正在打开浏览器，拦截 seckill-list 请求，请稍候（约 10 秒）…'
+        ? '正在打开浏览器、自动登录并拦截 seckill-list（若遇滑块，单次 AI 识别约 1 分钟，全程最多约 10 分钟，请勿关闭页面）…'
         : '正在连接 pcapi，请稍候…';
+
+    const startedAt = Date.now();
+    const progressTimer = setInterval(() => {
+        const sec = Math.floor((Date.now() - startedAt) / 1000);
+        if (useBrowser) {
+            box.textContent =
+                `正在自动登录并采集… 已等待 ${sec} 秒\n` +
+                '（滑块识别较慢属正常；浏览器里已登录成功后后台仍可能在做剩余重试，请继续等待 API 返回）';
+        }
+    }, 1000);
 
     try {
         const r = await fetch(url, {
@@ -470,6 +480,7 @@ async function doFetch() {
         box.style.color = '#721c24';
         box.textContent = `❌ 请求错误：${e.message}`;
     } finally {
+        clearInterval(progressTimer);
         btn.disabled = false;
         btn.textContent = '采集并入库';
     }

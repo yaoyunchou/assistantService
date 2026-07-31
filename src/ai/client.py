@@ -1,12 +1,14 @@
 """
 AI 大脑 — LLM 客户端
-封装 OpenAI 兼容接口，供 ask() / ask_stream() 使用。
+封装 OpenAI 兼容接口，供 ask() / ask_stream() / ask_vision() 使用。
 其他模块通过 src/ai/__init__.py 的公共 API 调用，不直接使用本模块。
 """
 from __future__ import annotations
 
+import base64
 import logging
-from typing import Iterator, List, Optional
+from pathlib import Path
+from typing import Iterator, Optional, Union
 
 logger = logging.getLogger('ai.client')
 
@@ -19,10 +21,12 @@ class LLMClient:
         api_key: str = '',
         base_url: str = '',
         default_model: str = '',
+        vision_model: str = '',
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url
         self._default_model = default_model
+        self._vision_model = vision_model
         self._client = None  # 懒加载
 
     def _get_client(self):
@@ -64,6 +68,54 @@ class LLMClient:
             return (resp.choices[0].message.content or '').strip()
         except Exception as e:
             logger.error('LLM complete 调用失败: %s', e)
+            raise
+
+    def complete_vision(
+        self,
+        prompt: str,
+        image: Union[str, Path, bytes],
+        *,
+        system: str = '',
+        model: str = '',
+        max_tokens: int = 200,
+        temperature: float = 0.0,
+        mime_type: str = 'image/png',
+    ) -> str:
+        """多模态识图：把图片以 data URL 传给视觉模型，返回助手回复。"""
+        client = self._get_client()
+        if isinstance(image, (str, Path)):
+            raw = Path(image).read_bytes()
+        else:
+            raw = image
+        b64 = base64.b64encode(raw).decode()
+        data_url = f'data:{mime_type};base64,{b64}'
+
+        messages = []
+        if system:
+            messages.append({'role': 'system', 'content': system})
+        messages.append({
+            'role': 'user',
+            'content': [
+                {'type': 'text', 'text': prompt},
+                {'type': 'image_url', 'image_url': {'url': data_url}},
+            ],
+        })
+        use_model = (
+            model
+            or self._vision_model
+            or self._default_model
+            or 'gpt-4o-mini'
+        )
+        try:
+            resp = client.chat.completions.create(
+                model=use_model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            return (resp.choices[0].message.content or '').strip()
+        except Exception as e:
+            logger.error('LLM vision 调用失败 model=%s: %s', use_model, e)
             raise
 
     def complete_stream(
@@ -108,5 +160,6 @@ def get_default_client() -> LLMClient:
             api_key=Config.AI_API_KEY,
             base_url=Config.AI_BASE_URL,
             default_model=Config.AI_STOCK_LINK_MODEL,
+            vision_model=getattr(Config, 'AI_VISION_MODEL', '') or '',
         )
     return _default_client

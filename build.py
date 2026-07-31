@@ -57,7 +57,7 @@ def sync_setup_iss(app_name: str, version: str) -> bool:
     changed = text != original
     if changed:
         SETUP_ISS.write_text(text, encoding="utf-8")
-        print(f"  ✓ setup.iss 已同步: {app_name} v{version}")
+        print(f"  [OK] setup.iss 已同步: {app_name} v{version}")
     else:
         print(f"  - setup.iss 已是最新: {app_name} v{version}")
 
@@ -77,7 +77,7 @@ def run_pyinstaller():
         print("\nERROR: PyInstaller 打包失败")
         sys.exit(result.returncode)
 
-    print("\n✓ PyInstaller 打包完成")
+    print("\n[OK] PyInstaller 打包完成")
 
 
 def run_inno_setup(app_name: str, version: str):
@@ -110,7 +110,7 @@ def run_inno_setup(app_name: str, version: str):
         sys.exit(result.returncode)
 
     output_file = PROJECT_ROOT / f"{app_name}_Setup_v{version}.exe"
-    print(f"\n✓ 安装包编译完成: {output_file}")
+    print(f"\n[OK] 安装包编译完成: {output_file}")
 
 
 def main():
@@ -137,7 +137,7 @@ def main():
     sync_setup_iss(app_name, version)
 
     if args.sync_only:
-        print("\n✓ 同步完成 (--sync-only)")
+        print("\n[OK] 同步完成 (--sync-only)")
         return
 
     print("\n[2/3] PyInstaller 打包 ...")
@@ -150,7 +150,7 @@ def main():
         print("\n[3/3] 跳过安装包编译 (添加 --installer 参数以启用)")
 
     print("\n" + "=" * 60)
-    print(f"✓ 构建完成: {app_name} v{version}")
+    print(f"[OK] 构建完成: {app_name} v{version}")
     print("=" * 60)
 
 

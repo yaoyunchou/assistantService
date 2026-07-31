@@ -1,0 +1,349 @@
+{% extends "base.html" %}
+
+{% block title %}安特预售抢购 - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.status-card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08);
+    padding: 24px 28px;
+    margin-bottom: 20px;
+}
+.card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.card-title { font-size: 17px; font-weight: 600; color: #2c3e50; margin: 0; }
+.desc { color: #7f8c8d; font-size: 14px; line-height: 1.65; margin-bottom: 12px; }
+.btn {
+    padding: 8px 16px; border: none; border-radius: 6px; font-size: 14px;
+    cursor: pointer; font-weight: 500;
+}
+.btn-primary { background: #3498db; color: #fff; }
+.btn-primary:hover { background: #2980b9; }
+.btn-success { background: #27ae60; color: #fff; }
+.btn-success:hover { background: #219a52; }
+.btn-danger { background: #e74c3c; color: #fff; }
+.btn-secondary { background: #ecf0f1; color: #2c3e50; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+.group-block {
+    border: 1px solid #e9ecef; border-radius: 10px; margin-bottom: 14px; overflow: hidden;
+}
+.group-head {
+    background: #f8f9fa; padding: 10px 14px; display: flex; align-items: center;
+    justify-content: space-between; gap: 10px; flex-wrap: wrap;
+}
+.group-head strong { color: #2c3e50; }
+.group-meta { color: #7f8c8d; font-size: 13px; }
+table.rush-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.rush-table th, table.rush-table td {
+    padding: 8px 10px; border-bottom: 1px solid #eee; text-align: left; vertical-align: middle;
+}
+table.rush-table th { background: #fafbfc; color: #555; font-weight: 600; }
+table.rush-table img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; }
+.qty-input {
+    width: 64px; padding: 4px 6px; border: 1px solid #ced4da; border-radius: 4px; text-align: center;
+}
+.toast {
+    position: fixed; top: 20px; right: 20px; z-index: 9999; padding: 12px 18px;
+    border-radius: 8px; color: #fff; font-size: 14px; display: none; max-width: 420px;
+}
+.toast.ok { background: #27ae60; }
+.toast.err { background: #e74c3c; }
+.plan-card {
+    border: 1px solid #e9ecef; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px;
+}
+.plan-card .plan-title { font-weight: 600; color: #2c3e50; margin-bottom: 6px; }
+.plan-card .plan-tasks { font-size: 13px; color: #555; line-height: 1.7; }
+.badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; margin-left: 6px;
+}
+.badge-cart { background: #fff3cd; color: #856404; }
+.badge-checkout { background: #d4edda; color: #155724; }
+.empty { color: #95a5a6; padding: 20px; text-align: center; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="status-card">
+    <div class="card-header">
+        <h2 class="card-title">🛒 预售抢购控制台</h2>
+        <div>
+            <button class="btn btn-secondary" id="btnRefresh" onclick="loadAll()">刷新</button>
+            <button class="btn btn-success" id="btnCreate" onclick="createPlans()">创建抢购计划</button>
+        </div>
+    </div>
+    <p class="desc">
+        仅展示<strong>未标记</strong>（未采购）的预售单对照命中的秒杀商品（含颜色/规格）；已标记的不再出现。
+        同一开售时间合并为一个计划：<strong>开售前 <span id="advMin">20</span> 分钟</strong>自动加入购物车，
+        <strong>开售时刻</strong>自动结算/提交；进入支付页后飞书通知，需手动完成付款。
+    </p>
+</div>
+
+<div class="status-card">
+    <div class="card-header">
+        <h3 class="card-title">候选商品</h3>
+        <label style="font-size:13px;color:#555;">
+            <input type="checkbox" id="chkAll" onchange="toggleAll(this.checked)"> 全选当前列表
+        </label>
+    </div>
+    <div id="candidateBox"><div class="empty">加载中…</div></div>
+</div>
+
+<div class="status-card">
+    <div class="card-header">
+        <h3 class="card-title">已创建计划</h3>
+        <button class="btn btn-secondary btn-sm" onclick="loadPlans()">刷新计划</button>
+    </div>
+    <div id="planBox"><div class="empty">暂无计划</div></div>
+</div>
+
+<div class="toast" id="toast"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var candidates = [];
+var selected = {}; // seckillId -> {item, qty}
+
+function toast(msg, ok) {
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast ' + (ok ? 'ok' : 'err');
+    el.style.display = 'block';
+    setTimeout(function() { el.style.display = 'none'; }, 3200);
+}
+
+function esc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;');
+}
+
+function keyOf(it) {
+    // 同商品不同规格/订单拆成多行
+    return [it.seckillId || it.goodsId || '', it.presellOrderNo || '', it.spec || ''].join('|');
+}
+
+function qsel(attr, key) {
+    // 避免 CSS.escape 兼容问题：用属性选择器 + 遍历
+    var nodes = document.querySelectorAll(attr);
+    for (var i = 0; i < nodes.length; i++) {
+        if (nodes[i].getAttribute('data-key') === key) return nodes[i];
+    }
+    return null;
+}
+
+function toggleAll(on) {
+    candidates.forEach(function(it) {
+        var k = keyOf(it);
+        var cb = qsel('.cb-item', k);
+        if (cb) cb.checked = on;
+        if (on) {
+            var qEl = qsel('.qty-input', k);
+            selected[k] = { item: it, qty: Number((qEl && qEl.value) || it.suggestedQty || 1) };
+        } else {
+            delete selected[k];
+        }
+    });
+}
+
+function renderCandidates(data) {
+    document.getElementById('advMin').textContent = data.advanceMinutes || 20;
+    var groups = data.groups || [];
+    candidates = data.items || [];
+    if (!groups.length) {
+        document.getElementById('candidateBox').innerHTML = '<div class="empty">暂无待抢购商品（未标记预售单未命中秒杀，或请先在「限时秒杀」采集）</div>';
+        return;
+    }
+    var html = '';
+    groups.forEach(function(g) {
+        html += '<div class="group-block">';
+        html += '<div class="group-head"><div><strong>开售 ' + esc(g.startTime || '-') + '</strong>';
+        html += '<span class="group-meta"> · ' + esc(g.slotTime || '') + ' · ' + g.count + ' 件</span></div></div>';
+        html += '<table class="rush-table"><thead><tr>';
+        html += '<th style="width:36px;"></th><th style="width:56px;">图</th><th>标题</th><th>颜色/规格</th><th>价格</th><th>数量</th><th>链接</th>';
+        html += '</tr></thead><tbody>';
+        (g.items || []).forEach(function(it, idx) {
+            var k = keyOf(it);
+            var checked = selected[k] ? 'checked' : '';
+            var qty = selected[k] ? selected[k].qty : (it.suggestedQty || 1);
+            var spec = it.spec || '';
+            var specHint = '';
+            if (!spec && it.presellGoodsSpecText) specHint = it.presellGoodsSpecText;
+            if (!spec && !it.matchedPresell) spec = '—';
+            html += '<tr data-key="' + esc(k) + '">';
+            html += '<td><input type="checkbox" class="cb-item" data-key="' + esc(k) + '" ' + checked + '></td>';
+            html += '<td>' + (it.seckillImage ? '<img src="' + esc(it.seckillImage) + '" onerror="this.style.display=\'none\'">' : '-') + '</td>';
+            html += '<td>' + esc(it.title) + '<div style="color:#95a5a6;font-size:12px;">' + esc(it.goodsId) + '</div></td>';
+            html += '<td><span style="color:#c0392b;font-weight:600;">' + esc(spec || '未匹配预售规格') + '</span>';
+            if (it.presellOrderNo) html += '<div style="color:#95a5a6;font-size:12px;">单号 ' + esc(it.presellOrderNo) + '</div>';
+            if (specHint && !it.spec) html += '<div style="color:#95a5a6;font-size:12px;">' + esc(specHint) + '</div>';
+            html += '</td>';
+            html += '<td>' + esc(it.priceDisplay) + '</td>';
+            html += '<td><input class="qty-input" data-key="' + esc(k) + '" type="number" min="1" max="99" value="' + qty + '"></td>';
+            html += '<td>' + (it.goodsUrl ? '<a href="' + esc(it.goodsUrl) + '" target="_blank">打开</a>' : '-') + '</td>';
+            html += '</tr>';
+        });
+        html += '</tbody></table></div>';
+    });
+    document.getElementById('candidateBox').innerHTML = html;
+    document.querySelectorAll('.cb-item').forEach(function(el) {
+        el.addEventListener('change', function() {
+            var k = el.getAttribute('data-key');
+            var it = candidates.find(function(x) { return keyOf(x) === k; });
+            if (!it) return;
+            if (el.checked) {
+                var qEl = qsel('.qty-input', k);
+                selected[k] = { item: it, qty: Number((qEl && qEl.value) || it.suggestedQty || 1) };
+            } else {
+                delete selected[k];
+            }
+        });
+    });
+    document.querySelectorAll('.qty-input').forEach(function(el) {
+        el.addEventListener('change', function() {
+            var k = el.getAttribute('data-key');
+            var it = candidates.find(function(x) { return keyOf(x) === k; });
+            if (!it) return;
+            var q = Number(el.value || 1);
+            if (q < 1) q = 1;
+            if (selected[k]) selected[k].qty = q;
+            else {
+                var cb = qsel('.cb-item', k);
+                if (cb && cb.checked) selected[k] = { item: it, qty: q };
+            }
+        });
+    });
+}
+
+function loadCandidates() {
+    return fetch('/api/antexiadan/presale-rush/candidates?limit=500')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (!d.success && !d.ok) throw new Error(d.error || '加载失败');
+            renderCandidates(d);
+        })
+        .catch(function(e) {
+            document.getElementById('candidateBox').innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+            toast(e.message, false);
+        });
+}
+
+function createPlans() {
+    var items = Object.keys(selected).map(function(k) {
+        var s = selected[k];
+        var it = s.item;
+        return {
+            seckillId: it.seckillId,
+            goodsId: it.goodsId,
+            title: it.title,
+            goodsUrl: it.goodsUrl,
+            qty: s.qty || 1,
+            spec: it.spec || '',
+            presellOrderNo: it.presellOrderNo || '',
+            startUnix: it.startUnix,
+            startTime: it.startTime,
+            slotTime: it.slotTime
+        };
+    });
+    if (!items.length) {
+        toast('请先勾选商品', false);
+        return;
+    }
+    var btn = document.getElementById('btnCreate');
+    btn.disabled = true;
+    fetch('/api/antexiadan/presale-rush/plans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: items })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        if (!d.ok && !d.success) throw new Error(d.error || '创建失败');
+        toast('已创建 ' + ((d.plans || []).length) + ' 个计划', true);
+        selected = {};
+        loadPlans();
+        loadCandidates();
+    })
+    .catch(function(e) { toast(e.message, false); })
+    .finally(function() { btn.disabled = false; });
+}
+
+function renderPlans(d) {
+    var plans = d.plans || [];
+    if (!plans.length) {
+        document.getElementById('planBox').innerHTML = '<div class="empty">暂无计划</div>';
+        return;
+    }
+    var html = '';
+    plans.forEach(function(p) {
+        html += '<div class="plan-card">';
+        html += '<div class="plan-title">开售 ' + esc(p.startTime || '-') + ' · ' + ((p.items || []).length) + ' 件';
+        html += ' <button class="btn btn-danger btn-sm" onclick="cancelPlan(\'' + esc(p.planId) + '\')">取消计划</button></div>';
+        html += '<div class="plan-tasks">';
+        (p.tasks || []).forEach(function(t) {
+            var badge = t.type === 'antexiadan_presale_cart' ? 'badge-cart' : 'badge-checkout';
+            var label = t.type === 'antexiadan_presale_cart' ? '加购' : '结算';
+            html += '<div>';
+            html += '<span class="badge ' + badge + '">' + label + '</span> ';
+            html += esc(t.name || t.id);
+            html += ' · 下次: ' + esc(t.next_run_time || t.run_at || '-');
+            if (t.last_message) html += ' · 上次: ' + esc(t.last_message);
+            html += ' <button class="btn btn-primary btn-sm" onclick="runTask(\'' + esc(t.id) + '\')">立即执行</button>';
+            html += '</div>';
+        });
+        html += '</div></div>';
+    });
+    document.getElementById('planBox').innerHTML = html;
+}
+
+function loadPlans() {
+    return fetch('/api/antexiadan/presale-rush/plans')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (!d.success && !d.ok) throw new Error(d.error || '加载失败');
+            renderPlans(d);
+        })
+        .catch(function(e) {
+            document.getElementById('planBox').innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+        });
+}
+
+function cancelPlan(planId) {
+    if (!confirm('确定取消该计划（加购+结算）？')) return;
+    fetch('/api/antexiadan/presale-rush/plans/' + encodeURIComponent(planId), { method: 'DELETE' })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            toast('已取消 ' + (d.count || 0) + ' 个任务', true);
+            loadPlans();
+        })
+        .catch(function(e) { toast(e.message, false); });
+}
+
+function runTask(taskId) {
+    fetch('/api/antexiadan/presale-rush/tasks/' + encodeURIComponent(taskId) + '/run', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (!d.ok && !d.success) throw new Error(d.error || '触发失败');
+            toast('已触发执行', true);
+            setTimeout(loadPlans, 2000);
+        })
+        .catch(function(e) { toast(e.message, false); });
+}
+
+function loadAll() {
+    loadCandidates();
+    loadPlans();
+}
+
+loadAll();
+</script>
+{% endblock %}

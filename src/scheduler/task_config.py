@@ -174,17 +174,30 @@ def get_task(task_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def add_task(name: str, task_type: str, data: Optional[Dict[str, Any]] = None, cron: str = "0 * * * *") -> Dict[str, Any]:
+def add_task(
+    name: str,
+    task_type: str,
+    data: Optional[Dict[str, Any]] = None,
+    cron: str = "0 * * * *",
+    *,
+    run_at: Any = None,
+) -> Dict[str, Any]:
     """
     新增任务，id 为 UUID。返回完整任务项。
+    run_at: 可选，一次性触发时间（unix 秒 / ISO 字符串）；有则优先于 cron。
     """
     data = data if data is not None else {}
     task_id = str(uuid.uuid4())
     task = {"id": task_id, "name": name, "type": task_type, "data": data, "cron": cron.strip() or "0 * * * *"}
+    if run_at is not None and run_at != "":
+        task["run_at"] = run_at
     raw = _load_raw()
     raw.setdefault("tasks", []).append(task)
     _save_raw(raw)
-    logger.info("新增定时任务: id=%s name=%s type=%s cron=%s", task_id, name, task_type, task["cron"])
+    logger.info(
+        "新增定时任务: id=%s name=%s type=%s cron=%s run_at=%s",
+        task_id, name, task_type, task["cron"], task.get("run_at"),
+    )
     return task
 
 
