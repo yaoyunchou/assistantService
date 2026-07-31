@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "闲鱼商品列表 mtop 响应 fixture。",
+    "结构按 Alibaba mtop 通用外形构造（api / ret / data 三段），",
+    "并刻意混用字段命名（itemId vs id、price vs soldPrice、itemStatus vs status）",
+    "以验证 item_list.extract_items_from_payload 的宽松字段映射。",
+    "登录态探测拿到真实响应后，请用真实样本替换本文件（见 docs/goofish/闲鱼后台-探测记录.md 第 6 节）。"
+  ],
+  "api": "mtop.alibaba.idle.seller.pc.item.list.query",
+  "v": "1.0",
+  "ret": ["SUCCESS::调用成功"],
+  "data": {
+    "totalCount": 3,
+    "hasNextPage": false,
+    "module": {
+      "itemList": [
+        {
+          "itemId": "801000000001",
+          "title": "全新未拆封 机械键盘 87键",
+          "price": "299",
+          "itemStatus": "online",
+          "picUrl": "//img.alicdn.com/cover-a.jpg",
+          "gmtModified": "2026-07-28 09:12:00",
+          "browseCount": 128
+        },
+        {
+          "id": "801000000002",
+          "itemTitle": "二手 显示器 27寸 2K",
+          "soldPrice": "1088.50",
+          "status": "已下架",
+          "imageUrl": "https://img.alicdn.com/cover-b.jpg",
+          "modifyTime": "2026-07-27 18:40:00"
+        },
+        {
+          "auctionId": "801000000003",
+          "subject": "闲置 平板电脑 保护套",
+          "currentPrice": 45,
+          "bizStatus": "sold",
+          "cover": "//img.alicdn.com/cover-c.jpg",
+          "updateTime": "2026-07-26 11:05:00"
+        }
+      ]
+    }
+  }
+}

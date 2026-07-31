@@ -1,0 +1,354 @@
+{% extends "base.html" %}
+
+{% block title %}{{ tool.display_name }} - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.card { background:#fff; border-radius:12px; box-shadow:0 2px 10px rgba(0,0,0,.08); padding:24px; margin-bottom:20px; }
+.card-title { font-size:18px; font-weight:600; color:#2c3e50; margin:0 0 12px; }
+.card-desc { color:#7f8c8d; line-height:1.6; margin-bottom:16px; font-size:14px; }
+.toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:16px; }
+.btn { padding:10px 18px; border:none; border-radius:6px; font-size:14px; font-weight:500; cursor:pointer; transition:all .2s; }
+.btn-primary { background:#ffc300; color:#4a3600; }
+.btn-primary:hover { background:#e6b000; }
+.btn-secondary { background:#95a5a6; color:#fff; }
+.btn-secondary:hover { background:#7f8c8d; }
+.btn-success { background:#27ae60; color:#fff; }
+.btn-success:hover { background:#1e8449; }
+.btn-outline { background:#fff; color:#c79000; border:1px solid #ffc300; }
+.btn-outline:hover { background:#fffbe6; }
+.btn:disabled { opacity:.55; cursor:not-allowed; }
+.status-bar { display:flex; flex-wrap:wrap; gap:16px; padding:12px 16px; background:#f8f9fa; border-radius:8px; margin-bottom:16px; font-size:14px; }
+.status-item strong { color:#2c3e50; }
+.badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:600; }
+.badge-ok { background:#d4edda; color:#155724; }
+.badge-warn { background:#fff3cd; color:#856404; }
+.badge-err { background:#f8d7da; color:#721c24; }
+.form-row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:12px; }
+.form-row label { font-size:13px; color:#495057; min-width:72px; }
+.form-row input, .form-row select { padding:8px 12px; border:1px solid #ddd; border-radius:6px; font-size:14px; }
+.form-row input[type=text] { min-width:220px; }
+.hint { font-size:12px; color:#95a5a6; margin-top:4px; }
+.data-table { width:100%; border-collapse:collapse; font-size:13px; }
+.data-table th, .data-table td { padding:10px 12px; text-align:left; border-bottom:1px solid #eee; vertical-align:middle; }
+.data-table th { background:#f8f9fa; font-weight:600; color:#495057; position:sticky; top:0; }
+.data-table tr:hover { background:#fafafa; }
+.data-table .col-title { max-width:320px; }
+.data-table .col-title span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.table-wrap { max-height:420px; overflow:auto; border:1px solid #eee; border-radius:8px; }
+.log-box { background:#1e1e1e; color:#d4d4d4; border-radius:8px; padding:14px; font-family:Consolas,monospace; font-size:12px; line-height:1.5; max-height:280px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
+.log-box .ok { color:#4ec9b0; }
+.log-box .err { color:#f48771; }
+.log-box .info { color:#9cdcfe; }
+.alert-banner { padding:14px 16px; border-radius:8px; margin-bottom:16px; font-size:14px; line-height:1.6; }
+.alert-banner.warn { background:#fff3cd; border:1px solid #ffc107; color:#856404; }
+.alert-banner.ok { background:#d4edda; border:1px solid #28a745; color:#155724; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2 class="card-title">{{ tool.display_name }}</h2>
+    <p class="card-desc">
+        数据目录：<code>C:\Users\yao\Desktop\work\电商数据\闲鱼</code>（汇总表 <code>闲鱼商品汇总.xlsx</code>）。<br>
+        登录与发布在<strong>独立 Chromium 窗口</strong>中进行，与拼多多/淘宝共用同一浏览器进程，
+        点击操作后会<strong>自动跳转到闲鱼后台</strong>。<br>
+        <strong>重要</strong>：必须在如意助手弹出的 <strong>Chromium 窗口</strong>里登录，日常 Chrome 已登录不算数。
+    </p>
+
+    <div class="alert-banner warn" id="browserBanner">
+        <strong>首次使用步骤</strong><br>
+        1. 点 <strong>「打开发布页」</strong>，在弹出的 Chromium 窗口完成闲鱼卖家扫码登录<br>
+        2. 点 <strong>「检查登录」</strong>确认状态（用 mtop 探针判定，比看页面更准）<br>
+        3. 若没弹出窗口，按 <strong>Alt+Tab</strong> 切换，或看任务栏 <strong>Chromium</strong> 图标<br>
+        4. 侧边栏请保持 <strong>「显示窗口」</strong>（不要勾选后台运行）
+    </div>
+
+    <div class="status-bar" id="statusBar">
+        <div class="status-item">登录：<span id="loginBadge" class="badge badge-warn">未检测</span></div>
+        <div class="status-item">店铺：<strong id="shopName">-</strong></div>
+        <div class="status-item">待发布：<strong id="pendingCount">-</strong> 件</div>
+        <div class="status-item">最近操作：<span id="lastAction">-</span></div>
+    </div>
+
+    <div class="toolbar">
+        <button type="button" class="btn btn-secondary" id="btnRefresh">刷新列表</button>
+        <button type="button" class="btn btn-outline" id="btnCheckLogin">检查登录</button>
+        <button type="button" class="btn btn-outline" id="btnOpenPublish">打开发布页（弹出浏览器）</button>
+        <button type="button" class="btn btn-success" id="btnPublishNext">发布下一个</button>
+        <a class="btn btn-secondary" href="/goofish/items" style="text-decoration:none;line-height:1.4">在线商品管理 →</a>
+    </div>
+
+    <div class="form-row">
+        <label>停止于</label>
+        <select id="stopAfter">
+            <option value="">完整发布</option>
+            <option value="upload">仅上传图片</option>
+            <option value="fill">填表不发布</option>
+            <option value="submit">发布不解析ID</option>
+        </select>
+        <label>关键词</label>
+        <input type="text" id="keyword" placeholder="按标题关键词发布">
+        <button type="button" class="btn btn-primary" id="btnPublishKeyword">关键词发布</button>
+    </div>
+    <p class="hint">
+        单条发布耗时约 1–3 分钟，请勿重复点击。连续发布之间建议留 30 秒以上间隔以规避平台风控。
+        批量发布请逐条点击，避免长时间占用浏览器（会阻塞拼多多定时同步任务，建议避开 12:00 / 18:00）。
+    </p>
+</div>
+
+<div class="card">
+    <h2 class="card-title">待发布商品</h2>
+    <div class="table-wrap">
+        <table class="data-table" id="pendingTable">
+            <thead>
+                <tr>
+                    <th>商品标题</th>
+                    <th style="width:80px">想卖价</th>
+                    <th style="width:80px">成色</th>
+                    <th style="width:50px">图片</th>
+                    <th style="width:70px">包邮</th>
+                    <th style="width:100px">操作</th>
+                </tr>
+            </thead>
+            <tbody id="pendingBody">
+                <tr><td colspan="6" style="text-align:center;color:#999;padding:24px">加载中…</td></tr>
+            </tbody>
+        </table>
+    </div>
+    <p class="hint">待发布条件：汇总表中「上架链接」为空，且本地 <code>images/</code> 目录有图片。</p>
+</div>
+
+<div class="card">
+    <h2 class="card-title">执行日志</h2>
+    <div class="log-box" id="logBox">等待操作…</div>
+</div>
+
+<script>
+(function() {
+    var pending = [];
+    var busy = false;
+    var browserBanner = document.getElementById('browserBanner');
+    var logBox = document.getElementById('logBox');
+
+    function syncHeadlessUi(headless) {
+        var cb = document.getElementById('sidebar-headless-cb');
+        var label = document.getElementById('sidebar-headless-label');
+        if (cb) cb.checked = !!headless;
+        if (label) label.textContent = headless ? '后台运行' : '显示窗口';
+        if (browserBanner && headless) {
+            browserBanner.className = 'alert-banner warn';
+            browserBanner.innerHTML = '<strong>当前为后台运行模式，看不到浏览器！</strong><br>正在自动切换为显示窗口…';
+        }
+    }
+
+    function ensureVisibleMode() {
+        return fetch('/api/settings/headless', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ headless: false }),
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.success) syncHeadlessUi(false);
+            return d;
+        })
+        .catch(function() { return null; });
+    }
+
+    function appendLog(msg, kind) {
+        var time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        var cls = kind || 'info';
+        if (logBox.textContent === '等待操作…') logBox.innerHTML = '';
+        logBox.innerHTML += '<span class="' + cls + '">[' + time + '] ' + escapeHtml(msg) + '</span>\n';
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function setBusy(v) {
+        busy = v;
+        ['btnRefresh', 'btnCheckLogin', 'btnOpenPublish', 'btnPublishNext', 'btnPublishKeyword']
+            .forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) el.disabled = v;
+            });
+    }
+
+    function setLoginBadge(ok, text) {
+        var el = document.getElementById('loginBadge');
+        el.className = 'badge ' + (ok ? 'badge-ok' : 'badge-err');
+        el.textContent = text;
+    }
+
+    function setLastAction(text) {
+        document.getElementById('lastAction').textContent = text;
+    }
+
+    function renderPending() {
+        var body = document.getElementById('pendingBody');
+        document.getElementById('pendingCount').textContent = pending.length;
+        if (!pending.length) {
+            body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:24px">没有待发布商品</td></tr>';
+            return;
+        }
+        body.innerHTML = pending.map(function(p) {
+            return '<tr>'
+                + '<td class="col-title"><span title="' + escapeHtml(p.title) + '">' + escapeHtml(p.title) + '</span></td>'
+                + '<td>' + escapeHtml(p.price || '-') + '</td>'
+                + '<td>' + escapeHtml(p.condition || '-') + '</td>'
+                + '<td>' + (p.image_count || 0) + '</td>'
+                + '<td>' + (p.free_shipping ? '包邮' : '不包邮') + '</td>'
+                + '<td><button type="button" class="btn btn-primary" style="padding:5px 12px;font-size:12px" data-title="'
+                + escapeHtml(p.title) + '">发布</button></td>'
+                + '</tr>';
+        }).join('');
+
+        Array.prototype.forEach.call(body.querySelectorAll('button[data-title]'), function(btn) {
+            btn.addEventListener('click', function() {
+                publish({ title: btn.getAttribute('data-title') });
+            });
+        });
+    }
+
+    function loadPending() {
+        return fetch('/api/goofish/pending')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.ok) {
+                    pending = d.items || [];
+                    renderPending();
+                    appendLog('待发布 ' + pending.length + ' 件', 'info');
+                } else {
+                    pending = [];
+                    renderPending();
+                    appendLog('读取待发布列表失败: ' + (d.error || ''), 'err');
+                }
+            })
+            .catch(function(e) { appendLog('读取列表异常: ' + e.message, 'err'); });
+    }
+
+    function checkLogin() {
+        setBusy(true);
+        appendLog('检查登录状态…', 'info');
+        return ensureVisibleMode()
+            .then(function() { return fetch('/api/goofish/login-status'); })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var loggedIn = !!(d.logged_in || (d.browser && d.browser.logged_in));
+                setLoginBadge(loggedIn, loggedIn ? '已登录' : '未登录');
+                document.getElementById('shopName').textContent = d.shop_name || '-';
+                if (loggedIn) {
+                    browserBanner.className = 'alert-banner ok';
+                    browserBanner.innerHTML = '<strong>已登录闲鱼卖家后台</strong>，可以开始发布。';
+                    appendLog('已登录' + (d.shop_name ? '（店铺: ' + d.shop_name + '）' : ''), 'ok');
+                } else {
+                    appendLog(d.message || '未登录，请在 Chromium 窗口完成扫码登录', 'err');
+                }
+                setLastAction('检查登录');
+            })
+            .catch(function(e) { appendLog('检查登录异常: ' + e.message, 'err'); })
+            .finally(function() { setBusy(false); });
+    }
+
+    function openPublish() {
+        setBusy(true);
+        appendLog('打开闲鱼发布页…', 'info');
+        return ensureVisibleMode()
+            .then(function() { return fetch('/api/goofish/open-publish', { method: 'POST' }); })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (!d.ok) throw new Error(d.error || '打开失败');
+                syncHeadlessUi(false);
+                var loggedIn = !!d.logged_in;
+                setLoginBadge(loggedIn, loggedIn ? '已登录' : '未登录');
+                browserBanner.className = 'alert-banner ' + (loggedIn ? 'ok' : 'warn');
+                browserBanner.innerHTML = loggedIn
+                    ? '<strong>已进入闲鱼发布页</strong>，可以点商品行的「发布」或「发布下一个」。'
+                    : '<strong>需要登录</strong>：请在弹出的 Chromium 窗口完成闲鱼卖家扫码登录，然后点「检查登录」。';
+                appendLog(d.message || '已打开发布页', 'ok');
+                setLastAction('打开发布页');
+            })
+            .catch(function(e) { appendLog('打开发布页失败: ' + e.message, 'err'); })
+            .finally(function() { setBusy(false); });
+    }
+
+    function describeFailure(d) {
+        if (d.need_login) return '需要登录: ' + (d.message || '');
+        if (d.needs_manual_check) return '需人工确认: ' + (d.message || '');
+        if (d.step === 'selector') return '页面元素定位失败（闲鱼可能已改版）: ' + (d.error || '');
+        if (d.step === 'validate') return '数据校验未通过: ' + (d.message || '');
+        if (d.skipped) return '已跳过: ' + (d.message || '');
+        return '失败: ' + (d.message || d.error || '未知原因');
+    }
+
+    function publish(payload) {
+        if (busy) return;
+        setBusy(true);
+        var body = {
+            stop_after: document.getElementById('stopAfter').value || '',
+            wait_for_login: true,
+        };
+        if (payload.title) body.title = payload.title;
+        if (payload.keyword) body.keyword = payload.keyword;
+
+        appendLog('开始发布: ' + (payload.title || payload.keyword || '队列第一条'), 'info');
+        return ensureVisibleMode()
+            .then(function() {
+                return fetch(payload.next ? '/api/goofish/publish-next' : '/api/goofish/publish', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.ok && d.item_id) {
+                    appendLog('发布成功 id=' + d.item_id + ' url=' + (d.item_url || ''), 'ok');
+                    loadPending();
+                } else if (d.ok && d.step) {
+                    appendLog('已停在调试断点: ' + d.step, 'info');
+                } else {
+                    appendLog(describeFailure(d), 'err');
+                    if (d.needs_manual_check) {
+                        appendLog('提示：确认已发布成功后，可用 /api/goofish/mark-uploaded 回填链接，避免重复发布', 'info');
+                    }
+                }
+                if (d.log_dir) appendLog('日志目录: ' + d.log_dir, 'info');
+                setLastAction('发布');
+            })
+            .catch(function(e) { appendLog('发布异常: ' + e.message, 'err'); })
+            .finally(function() { setBusy(false); });
+    }
+
+    document.getElementById('btnRefresh').addEventListener('click', loadPending);
+    document.getElementById('btnCheckLogin').addEventListener('click', checkLogin);
+    document.getElementById('btnOpenPublish').addEventListener('click', openPublish);
+    document.getElementById('btnPublishNext').addEventListener('click', function() {
+        publish({ next: true });
+    });
+    document.getElementById('btnPublishKeyword').addEventListener('click', function() {
+        var kw = (document.getElementById('keyword').value || '').trim();
+        if (!kw) { appendLog('请先填写关键词', 'err'); return; }
+        publish({ keyword: kw });
+    });
+
+    setBusy(true);
+    fetch('/api/settings/headless')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.success) {
+                syncHeadlessUi(d.headless);
+                if (d.headless) return ensureVisibleMode();
+            }
+        })
+        .then(function() { return loadPending(); })
+        .catch(function(e) { appendLog('初始化: ' + e.message, 'err'); })
+        .finally(function() { setBusy(false); });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,406 @@
+{% extends "base.html" %}
+
+{% block title %}闲鱼商品管理 - {{ config.APP_NAME }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.card { background:#fff; border-radius:12px; box-shadow:0 2px 10px rgba(0,0,0,.08); padding:24px; margin-bottom:20px; }
+.card-title { font-size:18px; font-weight:600; color:#2c3e50; margin:0 0 12px; }
+.card-desc { color:#7f8c8d; line-height:1.6; margin-bottom:16px; font-size:14px; }
+.toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:16px; }
+.btn { padding:10px 18px; border:none; border-radius:6px; font-size:14px; font-weight:500; cursor:pointer; transition:all .2s; }
+.btn-primary { background:#ffc300; color:#4a3600; }
+.btn-primary:hover { background:#e6b000; }
+.btn-secondary { background:#95a5a6; color:#fff; }
+.btn-secondary:hover { background:#7f8c8d; }
+.btn-danger { background:#e74c3c; color:#fff; }
+.btn-danger:hover { background:#c0392b; }
+.btn-outline { background:#fff; color:#c79000; border:1px solid #ffc300; }
+.btn-outline:hover { background:#fffbe6; }
+.btn-mini { padding:4px 10px; font-size:12px; }
+.btn:disabled { opacity:.55; cursor:not-allowed; }
+.status-bar { display:flex; flex-wrap:wrap; gap:16px; padding:12px 16px; background:#f8f9fa; border-radius:8px; margin-bottom:16px; font-size:14px; }
+.badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:600; }
+.badge-ok { background:#d4edda; color:#155724; }
+.badge-warn { background:#fff3cd; color:#856404; }
+.badge-err { background:#f8d7da; color:#721c24; }
+.badge-info { background:#d1ecf1; color:#0c5460; }
+.data-table { width:100%; border-collapse:collapse; font-size:13px; }
+.data-table th, .data-table td { padding:10px 12px; text-align:left; border-bottom:1px solid #eee; vertical-align:middle; }
+.data-table th { background:#f8f9fa; font-weight:600; color:#495057; position:sticky; top:0; }
+.data-table tr:hover { background:#fafafa; }
+.data-table .col-title { max-width:300px; }
+.data-table .col-title span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.table-wrap { max-height:520px; overflow:auto; border:1px solid #eee; border-radius:8px; }
+.cover { width:40px; height:40px; object-fit:cover; border-radius:4px; background:#f1f1f1; }
+.log-box { background:#1e1e1e; color:#d4d4d4; border-radius:8px; padding:14px; font-family:Consolas,monospace; font-size:12px; line-height:1.5; max-height:260px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
+.log-box .ok { color:#4ec9b0; }
+.log-box .err { color:#f48771; }
+.log-box .info { color:#9cdcfe; }
+.alert-banner { padding:14px 16px; border-radius:8px; margin-bottom:16px; font-size:14px; line-height:1.6; }
+.alert-banner.warn { background:#fff3cd; border:1px solid #ffc107; color:#856404; }
+.alert-banner.ok { background:#d4edda; border:1px solid #28a745; color:#155724; }
+.alert-banner.info { background:#d1ecf1; border:1px solid #17a2b8; color:#0c5460; }
+.modal-mask { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; z-index:999; }
+.modal-mask.show { display:flex; }
+.modal { background:#fff; border-radius:12px; padding:24px; width:420px; max-width:92vw; }
+.modal h3 { margin:0 0 16px; font-size:16px; color:#2c3e50; }
+.modal .form-row { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
+.modal label { font-size:13px; color:#495057; }
+.modal input, .modal textarea { padding:8px 12px; border:1px solid #ddd; border-radius:6px; font-size:14px; font-family:inherit; }
+.modal textarea { min-height:90px; resize:vertical; }
+.modal-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:18px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2 class="card-title">闲鱼商品管理</h2>
+    <p class="card-desc">
+        管理闲鱼后台<strong>在线商品</strong>：拉取列表、上架/下架、编辑（改价与改描述）、删除。
+        本地待发布队列在 <a href="/tools/goofish">闲鱼商品发布</a> 页。
+    </p>
+
+    <div class="alert-banner info" id="sourceBanner">
+        列表取数优先<strong>直调 mtop 接口</strong>；未配置接口名时会自动识别，
+        都失败才回落 <strong>DOM 抓取</strong>。当前来源会显示在下方状态栏。
+        首次使用建议先点「探测接口」。
+    </div>
+
+    <div class="status-bar">
+        <div>登录：<span id="loginBadge" class="badge badge-warn">未检测</span></div>
+        <div>数据来源：<span id="sourceBadge" class="badge badge-info">-</span></div>
+        <div>商品数：<strong id="itemCount">-</strong></div>
+        <div>最近操作：<span id="lastAction">-</span></div>
+    </div>
+
+    <div class="toolbar">
+        <button type="button" class="btn btn-primary" id="btnLoad">刷新列表</button>
+        <button type="button" class="btn btn-outline" id="btnOpenBackend">打开闲鱼后台</button>
+        <button type="button" class="btn btn-secondary" id="btnProbe">探测接口</button>
+        <select id="statusFilter" style="padding:8px 12px;border:1px solid #ddd;border-radius:6px">
+            <option value="">全部状态</option>
+            <option value="online">在售</option>
+            <option value="offline">已下架</option>
+            <option value="sold">已售出</option>
+        </select>
+    </div>
+    <p style="font-size:12px;color:#95a5a6">
+        操作会独占浏览器，建议避开 12:00 / 18:00 的拼多多定时同步时段。删除不可逆，会二次确认。
+    </p>
+</div>
+
+<div class="card">
+    <h2 class="card-title">在线商品</h2>
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th style="width:52px">图</th>
+                    <th>标题</th>
+                    <th style="width:80px">价格</th>
+                    <th style="width:80px">状态</th>
+                    <th style="width:150px">更新时间</th>
+                    <th style="width:230px">操作</th>
+                </tr>
+            </thead>
+            <tbody id="itemsBody">
+                <tr><td colspan="6" style="text-align:center;color:#999;padding:24px">点「刷新列表」开始加载</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <h2 class="card-title">执行日志</h2>
+    <div class="log-box" id="logBox">等待操作…</div>
+</div>
+
+<div class="modal-mask" id="editMask">
+    <div class="modal">
+        <h3>编辑商品 <span id="editItemId" style="color:#95a5a6;font-weight:400"></span></h3>
+        <div class="form-row">
+            <label>价格（留空则不改）</label>
+            <input type="text" id="editPrice" placeholder="例如 199">
+        </div>
+        <div class="form-row">
+            <label>描述（留空则不改）</label>
+            <textarea id="editDescription" placeholder="新的商品描述"></textarea>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" id="btnEditCancel">取消</button>
+            <button type="button" class="btn btn-primary" id="btnEditSave">保存</button>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    var items = [];
+    var busy = false;
+    var editingId = '';
+    var logBox = document.getElementById('logBox');
+    var editMask = document.getElementById('editMask');
+
+    var STATUS_TEXT = { online: '在售', offline: '已下架', sold: '已售出', unknown: '未知' };
+    var STATUS_CLASS = { online: 'badge-ok', offline: 'badge-warn', sold: 'badge-info', unknown: 'badge-warn' };
+
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function appendLog(msg, kind) {
+        var time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        if (logBox.textContent === '等待操作…') logBox.innerHTML = '';
+        logBox.innerHTML += '<span class="' + (kind || 'info') + '">[' + time + '] ' + escapeHtml(msg) + '</span>\n';
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function setBusy(v) {
+        busy = v;
+        ['btnLoad', 'btnOpenBackend', 'btnProbe'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.disabled = v;
+        });
+        Array.prototype.forEach.call(document.querySelectorAll('#itemsBody button'), function(b) {
+            b.disabled = v;
+        });
+    }
+
+    function setLastAction(t) { document.getElementById('lastAction').textContent = t; }
+
+    function setLoginBadge(ok) {
+        var el = document.getElementById('loginBadge');
+        el.className = 'badge ' + (ok ? 'badge-ok' : 'badge-err');
+        el.textContent = ok ? '已登录' : '未登录';
+    }
+
+    function ensureVisibleMode() {
+        return fetch('/api/settings/headless', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ headless: false }),
+        }).then(function(r) { return r.json(); }).catch(function() { return null; });
+    }
+
+    function renderItems() {
+        var body = document.getElementById('itemsBody');
+        document.getElementById('itemCount').textContent = items.length;
+        if (!items.length) {
+            body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:24px">没有商品</td></tr>';
+            return;
+        }
+        body.innerHTML = items.map(function(it) {
+            var st = it.status || 'unknown';
+            return '<tr>'
+                + '<td>' + (it.coverUrl ? '<img class="cover" src="' + escapeHtml(it.coverUrl) + '" alt="">' : '<div class="cover"></div>') + '</td>'
+                + '<td class="col-title"><span title="' + escapeHtml(it.title) + '">'
+                    + (it.itemUrl ? '<a href="' + escapeHtml(it.itemUrl) + '" target="_blank" rel="noopener">' + escapeHtml(it.title || it.itemId) + '</a>' : escapeHtml(it.title || it.itemId))
+                    + '</span></td>'
+                + '<td>' + (it.price == null ? '-' : escapeHtml(String(it.price))) + '</td>'
+                + '<td><span class="badge ' + (STATUS_CLASS[st] || 'badge-warn') + '">' + (STATUS_TEXT[st] || escapeHtml(st)) + '</span></td>'
+                + '<td>' + escapeHtml(it.updatedAt || '-') + '</td>'
+                + '<td>'
+                    + '<button type="button" class="btn btn-outline btn-mini" data-act="online" data-id="' + escapeHtml(it.itemId) + '">上架</button> '
+                    + '<button type="button" class="btn btn-secondary btn-mini" data-act="offline" data-id="' + escapeHtml(it.itemId) + '">下架</button> '
+                    + '<button type="button" class="btn btn-primary btn-mini" data-act="edit" data-id="' + escapeHtml(it.itemId) + '">编辑</button> '
+                    + '<button type="button" class="btn btn-danger btn-mini" data-act="delete" data-id="' + escapeHtml(it.itemId) + '">删除</button>'
+                + '</td>'
+                + '</tr>';
+        }).join('');
+
+        Array.prototype.forEach.call(body.querySelectorAll('button[data-act]'), function(btn) {
+            btn.addEventListener('click', function() {
+                var act = btn.getAttribute('data-act');
+                var id = btn.getAttribute('data-id');
+                if (act === 'edit') { openEdit(id); return; }
+                if (act === 'delete') { confirmDelete(id); return; }
+                runAction(id, act);
+            });
+        });
+    }
+
+    function loadItems() {
+        if (busy) return;
+        setBusy(true);
+        var status = document.getElementById('statusFilter').value;
+        appendLog('拉取商品列表…', 'info');
+        return ensureVisibleMode()
+            .then(function() {
+                return fetch('/api/goofish/items?status=' + encodeURIComponent(status));
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                setLoginBadge(!!(d.browser && d.browser.logged_in));
+                var badge = document.getElementById('sourceBadge');
+                badge.textContent = d.source || '-';
+                badge.className = 'badge ' + (d.source === 'mtop' ? 'badge-ok' : (d.source === 'dom-fallback' ? 'badge-warn' : 'badge-info'));
+
+                if (d.ok) {
+                    items = d.items || [];
+                    renderItems();
+                    appendLog('取到 ' + items.length + ' 个商品（来源: ' + (d.source || '?') + '）', 'ok');
+                    if (d.hint) appendLog(d.hint, 'info');
+                    if (d.source === 'dom-fallback') {
+                        appendLog('注意：走的是 DOM 兜底，建议点「探测接口」后把接口名写入 config.ITEM_LIST_API', 'info');
+                    }
+                } else {
+                    items = [];
+                    renderItems();
+                    appendLog(d.need_login ? ('需要登录: ' + (d.message || '')) : ('拉取失败: ' + (d.message || d.error || '')), 'err');
+                }
+                setLastAction('刷新列表');
+            })
+            .catch(function(e) { appendLog('拉取异常: ' + e.message, 'err'); })
+            .finally(function() { setBusy(false); });
+    }
+
+    function runAction(itemId, action, extraBody) {
+        if (busy) return;
+        setBusy(true);
+        var labels = { online: '上架', offline: '下架', delete: '删除' };
+        appendLog(labels[action] + ' 商品 ' + itemId + '…', 'info');
+        return ensureVisibleMode()
+            .then(function() {
+                return fetch('/api/goofish/items/' + encodeURIComponent(itemId) + '/' + action, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(extraBody || {}),
+                });
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.ok) {
+                    appendLog(labels[action] + '成功: ' + (d.message || itemId), 'ok');
+                    loadItems();
+                } else if (d.needs_confirm) {
+                    appendLog('需要确认才能执行: ' + (d.error || ''), 'err');
+                } else {
+                    appendLog(labels[action] + '失败: ' + (d.error || d.message || ''), 'err');
+                }
+                setLastAction(labels[action]);
+            })
+            .catch(function(e) { appendLog('操作异常: ' + e.message, 'err'); })
+            .finally(function() { setBusy(false); });
+    }
+
+    function confirmDelete(itemId) {
+        var it = items.filter(function(x) { return x.itemId === itemId; })[0] || {};
+        var name = it.title || itemId;
+        if (!window.confirm('删除不可逆，确认删除该商品？\n\n' + name)) {
+            appendLog('已取消删除 ' + itemId, 'info');
+            return;
+        }
+        runAction(itemId, 'delete', { confirm: true });
+    }
+
+    function openEdit(itemId) {
+        editingId = itemId;
+        var it = items.filter(function(x) { return x.itemId === itemId; })[0] || {};
+        document.getElementById('editItemId').textContent = itemId;
+        document.getElementById('editPrice').value = it.price == null ? '' : it.price;
+        document.getElementById('editDescription').value = '';
+        editMask.classList.add('show');
+    }
+
+    function closeEdit() {
+        editMask.classList.remove('show');
+        editingId = '';
+    }
+
+    function saveEdit() {
+        var price = (document.getElementById('editPrice').value || '').trim();
+        var description = (document.getElementById('editDescription').value || '').trim();
+        if (!price && !description) {
+            appendLog('请至少填写价格或描述', 'err');
+            return;
+        }
+        var body = {};
+        if (price) body.price = price;
+        if (description) body.description = description;
+        var id = editingId;
+        closeEdit();
+
+        setBusy(true);
+        appendLog('编辑商品 ' + id + '…', 'info');
+        ensureVisibleMode()
+            .then(function() {
+                return fetch('/api/goofish/items/' + encodeURIComponent(id) + '/edit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.ok) {
+                    appendLog('编辑成功: ' + (d.message || ''), 'ok');
+                    if (d.warnings && d.warnings.length) appendLog('提醒: ' + d.warnings.join('；'), 'info');
+                    loadItems();
+                } else {
+                    appendLog('编辑失败: ' + (d.error || d.message || ''), 'err');
+                }
+                setLastAction('编辑');
+            })
+            .catch(function(e) { appendLog('编辑异常: ' + e.message, 'err'); })
+            .finally(function() { setBusy(false); });
+    }
+
+    function openBackend() {
+        setBusy(true);
+        return ensureVisibleMode()
+            .then(function() { return fetch('/api/goofish/open-items', { method: 'POST' }); })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                setLoginBadge(!!d.logged_in);
+                appendLog(d.message || '已打开闲鱼后台', d.ok ? 'ok' : 'err');
+                setLastAction('打开后台');
+            })
+            .catch(function(e) { appendLog('打开后台异常: ' + e.message, 'err'); })
+            .finally(function() { setBusy(false); });
+    }
+
+    function probe() {
+        setBusy(true);
+        appendLog('开始探测闲鱼后台接口（会打开列表页并滚动）…', 'info');
+        return ensureVisibleMode()
+            .then(function() {
+                return fetch('/api/goofish/probe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({}),
+                });
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.ok) {
+                    appendLog('探测完成，捕获 ' + (d.captured_count || 0) + ' 个接口', 'ok');
+                    appendLog('结果目录: ' + (d.out_dir || ''), 'info');
+                    if (d.candidates && d.candidates.length) {
+                        appendLog('商品相关候选接口: ' + d.candidates.join(', '), 'ok');
+                        appendLog('请把商品列表接口名填入 src/spider/goofish/config.py 的 ITEM_LIST_API', 'info');
+                    } else {
+                        appendLog('未识别到商品相关接口，请确认已进入商品列表页', 'err');
+                    }
+                } else {
+                    appendLog('探测失败: ' + (d.message || d.error || ''), 'err');
+                }
+                setLastAction('探测接口');
+            })
+            .catch(function(e) { appendLog('探测异常: ' + e.message, 'err'); })
+            .finally(function() { setBusy(false); });
+    }
+
+    document.getElementById('btnLoad').addEventListener('click', loadItems);
+    document.getElementById('btnOpenBackend').addEventListener('click', openBackend);
+    document.getElementById('btnProbe').addEventListener('click', probe);
+    document.getElementById('btnEditCancel').addEventListener('click', closeEdit);
+    document.getElementById('btnEditSave').addEventListener('click', saveEdit);
+    editMask.addEventListener('click', function(e) {
+        if (e.target === editMask) closeEdit();
+    });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,71 @@
+<!--
+  闲鱼商品列表 DOM 兜底脚本的离线 fixture。
+
+  刻意模拟真实后台的两个特征（见 docs/goofish/闲鱼后台-探测记录.md）：
+    1. class 名带 CSS Modules 构建哈希（itemCard--Xk8dQ2Lp 之类），
+       脚本若依赖 class 就会在这里失效
+    2. 商品链接形如 ...?id=<数字>，价格与状态混在卡片文本里
+
+  同时放入若干「干扰链接」（帮助中心、店铺主页等），用于验证脚本不会把它们当商品。
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <title>闲鱼卖家工作台 - 商品管理（fixture）</title>
+</head>
+<body>
+<div id="ice-container">
+    <div class="pageWrap--Ab3xY9Qm">
+        <nav class="topNav--Zz11Ppqq">
+            <a href="/help/center">帮助中心</a>
+            <a href="https://seller.goofish.com/#/shop/home">店铺主页</a>
+            <a href="#/seller-item/publish">发布商品</a>
+        </nav>
+
+        <div class="listBody--Kk44Mmnn">
+            <div class="itemCard--Xk8dQ2Lp">
+                <img src="https://img.alicdn.com/cover-a.jpg" alt="">
+                <a class="titleLink--Pp77Qq11" href="https://www.goofish.com/item?id=801000000001" title="全新未拆封 机械键盘 87键">全新未拆封 机械键盘 87键</a>
+                <div class="metaRow--Ll88Rr22">
+                    <span>¥ 299</span>
+                    <span>在售</span>
+                    <span>浏览 128</span>
+                </div>
+                <div class="opRow--Mm99Ss33">
+                    <span>编辑</span>
+                    <span>下架</span>
+                    <span>删除</span>
+                </div>
+            </div>
+
+            <div class="itemCard--Xk8dQ2Lp">
+                <img src="https://img.alicdn.com/cover-b.jpg" alt="">
+                <a class="titleLink--Pp77Qq11" href="https://www.goofish.com/item?id=801000000002" title="二手 显示器 27寸 2K">二手 显示器 27寸 2K</a>
+                <div class="metaRow--Ll88Rr22">
+                    <span>¥ 1088.50</span>
+                    <span>已下架</span>
+                </div>
+                <div class="opRow--Mm99Ss33">
+                    <span>编辑</span>
+                    <span>上架</span>
+                    <span>删除</span>
+                </div>
+            </div>
+
+            <div class="itemCard--Xk8dQ2Lp">
+                <img src="https://img.alicdn.com/cover-c.jpg" alt="">
+                <a class="titleLink--Pp77Qq11" href="https://www.goofish.com/item?id=801000000003" title="闲置 平板电脑 保护套">闲置 平板电脑 保护套</a>
+                <div class="metaRow--Ll88Rr22">
+                    <span>¥ 45</span>
+                    <span>已售出</span>
+                </div>
+                <div class="opRow--Mm99Ss33">
+                    <span>删除</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>
