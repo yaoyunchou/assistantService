@@ -1,10 +1,10 @@
 # 如意助手
 
-一个基于 Python 开发的 Windows 桌面私人助手应用，以 Flask 为后端、Playwright 为浏览器自动化引擎，内置 **AI 大脑模块**（Cursor SDK + OpenAI 兼容 LLM），支持模块化配置，资源占用低。
+一个基于 Python 开发的 Windows 桌面私人助手应用，以 Flask 为后端、Playwright 为浏览器自动化引擎，内置 **AI 模块**（统一调用 Nest CMS `/xcx/api/v1/ai/*`），支持模块化配置，资源占用低。
 
 ## 功能特性
 
-- 🤖 **AI 智能助手** — 独立 `src/ai/` 模块，统一封装 LLM 问答（OpenAI 兼容）和 Cursor SDK Agent（浏览器控制、爬虫接管）；其他模块通过 `from ai import ask / run_agent` 调用
+- 🤖 **AI 智能助手** — `src/ai/` 统一封装 Nest `/ai/chat` 等；业务通过 `from ai import ask / run_agent` 调用（需 `NEST_DEVICE_KEY` 等，见 `.env.example`）
 - 🖥️ **现代化 Web 界面** — 基于 Flask 的响应式 Web 界面，美观易用
 - 🐍 **Python 脚本执行** — 支持执行 Python 脚本，支持参数传递和结果返回
 - 🛒 **拼多多助手** — 拼多多商家后台自动化工具，支持登录管理和飞书通知
@@ -13,7 +13,8 @@
 - 📡 **途强助手** - 途强智能设备管理平台（iot.tqiot.com）自动化，支持自动登录与最近 30 天记录获取
 - 📦 **1688 订单提取** - 从 1688 待收货订单列表提取订单与收货信息，支持同步到飞书多维表格（Web 页与命令行脚本）
 - 🛍️ **淘宝商品上架** - Playwright 以图发品全链路（本地上传 → 主图审计/补救 → 类目确认 → 发布填表 → 提交 → Excel 回填）；数据目录 `C:\Users\yao\Desktop\work\电商数据\淘宝`；详见 `docs/淘宝商品上传/淘宝商品上传-Playwright开发文档.md`
-- ⚡ **安特限时秒杀采集** - 对接 `https://pc.antexiadan.com` pcapi，支持 Chrome 扩展页内注入（`antexiadan-seckill-list.js`，双运行时）和 Python 直连 CLI（`antexiadan-seckill-fetch.py`，无需浏览器）；采集结果 POST 入库（MySQL，三张表：批次 / 当前态 / 快照），提供 `GET /api/antexiadan/seckill-list/products` 查询与 `GET /api/antexiadan/seckill-list/batch/latest` 批次查询
+- 🐟 **闲鱼商品** - Playwright 自动化闲鱼卖家工作台：本地 Excel 队列发布（`/tools/goofish`）+ 在线商品管理（`/goofish/items`，上下架/改价改描述/删除）；取数以 `lib.mtop` 直调为主、DOM 抓取兜底；内置接口探测器 `POST /api/goofish/probe`；数据目录 `C:\Users\yao\Desktop\work\电商数据\闲鱼`；详见 `docs/goofish/闲鱼模块-Playwright开发文档.md`
+- ⚡ **安特限时秒杀采集** - 对接 `https://pc.antexiadan.com` pcapi；浏览器采集/搜索前自动登录门禁（`.env`：`ANTEXIADAN_USERNAME` / `ANTEXIADAN_PASSWORD`）；支持 Chrome 扩展页内注入与 Python 直连 CLI；采集结果 POST 入库（MySQL），提供 products / batch 查询；**预售抢购**页 `/antexiadan/presale-rush`：开售前 20 分钟加购、到点结算（支付页人工确认）
 - ⚙️ **模块化配置** - 支持通过配置控制功能模块的启用/禁用和启动时机
 - 🔧 **可扩展架构** - 工具管理器设计，方便添加新工具
 - 📊 **资源监控** - 实时监控内存和CPU使用情况
@@ -67,6 +68,7 @@ assistantService/
 │   │   │   ├── feishu_routes.py   #   飞书消息/Webhook
 │   │   │   ├── order_1688_routes.py #  1688 订单
 │   │   │   ├── taobao_routes.py   #   淘宝商品
+│   │   │   ├── goofish_routes.py  #   闲鱼商品（发布 + 在线管理）
 │   │   │   ├── antexiadan_routes.py # 安特限时秒杀
 │   │   │   ├── scheduler_routes.py# 定时任务
 │   │   │   ├── script_routes.py   #   脚本执行
@@ -114,7 +116,10 @@ assistantService/
 │   │   │   ├── feishutable.py     #   飞书表字段映射
 │   │   │   └── scripts/           #   JS 注入脚本（ERP 页面数据抓取）
 │   │   ├── antexiadan/
-│   │   │   └── seckill_store.py   #   安特限时秒杀 SQLite
+│   │   │   ├── login.py           #   Playwright 登录门禁（ensure_logged_in）
+│   │   │   ├── seckill_store.py   #   安特限时秒杀 MySQL
+│   │   │   ├── goods_search.py    #   商品搜索 search-goods-list
+│   │   │   └── goods_search_store.py # 商品搜索缓存
 │   │   ├── order_1688/
 │   │   │   └── order_extract.py   #   1688 订单提取
 │   │   ├── taobao/                #   淘宝以图发品自动上架（Playwright）
@@ -122,6 +127,16 @@ assistantService/
 │   │   │   ├── flows/publish_one.py
 │   │   │   ├── pages/             #   类目页 / 发布页 / 图片空间
 │   │   │   └── data/              #   Excel 加载与回填
+│   │   ├── goofish/               #   闲鱼卖家工作台（Playwright）
+│   │   │   ├── client.py          #   GoofishClient（对外唯一入口）
+│   │   │   ├── mtop_bridge.py     #   页面内直调 mtop（取数主路径）
+│   │   │   ├── login_gate.py      #   mtop 探针登录门禁
+│   │   │   ├── api_probe.py       #   运行时接口探测
+│   │   │   ├── item_list.py       #   在线列表（mtop → 自动识别 → DOM 兜底）
+│   │   │   ├── flows/             #   publish_one / manage_items
+│   │   │   ├── pages/             #   发布页 Page Object
+│   │   │   ├── data/              #   Excel 加载与回填
+│   │   │   └── scripts/           #   DOM 兜底 JS + 离线 fixture
 │   │   └── tu/
 │   │       └── client.py          #   途强平台 Playwright 客户端
 │   │
@@ -409,6 +424,57 @@ python -m spider.taobao.cli --next-pending
 
 开发文档：`docs/淘宝商品上传/淘宝商品上传-Playwright开发文档.md`。
 
+### 闲鱼商品
+
+基于 Playwright 的闲鱼卖家工作台自动化，覆盖**商品发布**与**在线商品管理**两块。
+数据来自 `C:\Users\yao\Desktop\work\电商数据\闲鱼`（总表 `闲鱼商品汇总.xlsx` + 单品目录 `商品信息.xlsx` + `images/`）。
+
+**前置**：首次需在弹出的 Chromium 窗口扫码登录闲鱼卖家账号（复用 BrowserPool 持久化 Profile，日常 Chrome 的登录不算）。
+
+**页面**：
+
+- 侧栏 **电商 → 闲鱼发布**（`/tools/goofish`）：本地待发布队列、单条发布、发布下一个
+- 侧栏 **电商 → 闲鱼商品管理**（`/goofish/items`）：在线商品列表、上下架、改价/改描述、删除（二次确认）
+
+**取数策略**（返回体 `source` 字段标明实际路径）：
+
+1. `mtop` — `config.ITEM_LIST_API` 已配置时用 `lib.mtop` 直调，分页可控，最可靠
+2. `capture` — 未配置时打开列表页拦截 mtop 响应自动识别接口
+3. `dom-fallback` — 前两者失败才回落 `goofish-item-list.js` 抓 DOM
+
+**接口探测**：商品列表等接口只在登录后的 iframe 业务应用里加载，未登录拿不到。
+登录后在管理页点「探测接口」（`POST /api/goofish/probe`），结果落在
+`logs/goofish-pw/probe/<时间戳>/`，把商品列表接口名填进 `src/spider/goofish/config.py`
+的 `ITEM_LIST_API` 即切到最可靠路径。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/goofish/login-status` | 登录态（mtop 探针判定） |
+| GET | `/api/goofish/pending` | 本地待发布队列 |
+| POST | `/api/goofish/publish` | 按 `keyword` / `title` 发布单条 |
+| POST | `/api/goofish/publish-next` | 发布队列第一条 |
+| POST | `/api/goofish/mark-uploaded` | 手动回填上架信息 |
+| POST | `/api/goofish/probe` | 探测真实 mtop 接口 |
+| GET | `/api/goofish/items` | 在线商品列表 |
+| POST | `/api/goofish/items/<id>/online` / `offline` | 上架 / 下架 |
+| POST | `/api/goofish/items/<id>/delete` | 删除（必须 `{"confirm": true}`） |
+| POST | `/api/goofish/items/<id>/edit` | 改价 / 改描述 |
+
+步骤日志与失败截图：`logs/goofish-pw/YYYY-MM-DD/{商品slug}/`。
+
+**注意**：BrowserPool 是单线程单 page，闲鱼长任务会独占浏览器并阻塞其它模块，
+批量操作请避开 12:00 / 18:00 的 ERP 定时同步。
+
+离线测试（12 个用例，不依赖登录与网络）：
+
+```bash
+set PYTHONPATH=src
+python -m unittest spider.goofish.test_item_list -v
+```
+
+开发文档：`docs/goofish/闲鱼模块-Playwright开发文档.md`；
+后台探测记录：`docs/goofish/闲鱼后台-探测记录.md`。
+
 ### 途强助手
 
 途强助手提供途强智能设备管理平台（https://iot.tqiot.com）的自动化功能，支持自动登录与最近 30 天记录获取。
@@ -470,6 +536,7 @@ pyinstaller main.spec
 - 打包后的exe需要与浏览器驱动在同一目录
 - **`.env`**：程序从 **exe 同目录** 读取 `.env`（含 `AI_BASE_URL`、`AI_API_KEY`、飞书等）。执行 `pyinstaller main.spec` 时若项目根已有 `.env`，会**自动复制**到 `dist/如意助手/`；若未复制，请手动把 `.env` 放到与 `如意助手.exe` 同一文件夹。
 - **`app_config.toml`**：运行时在 **`如意助手.exe` 同目录** 读写（见 `config_manager`）。打包完成后 **`main.spec` 会将项目根的 `app_config.production.toml` 复制为 `dist/如意助手/app_config.toml`**（生产 Nest：`https://nestapi.xfysj.top`、`erp-001` 等）。修改线上默认值请编辑 **`app_config.production.toml`** 后重新打包；仅在 `dist` 里改会被下次全量清理覆盖。也可用 exe 同目录 **`.env`** 覆盖：`WS_CLIENT_HOST`、`WS_CLIENT_ASSISTANT_KEY` 等。
+- **`cursor_sdk_bridge/`**：安特滑块 Agent 依赖的 Cursor SDK bridge（含 `node.exe`），打包后位于 **`dist/如意助手/cursor_sdk_bridge/`**（与 exe 同级）。构建前需 `.venv` 内已安装 `cursor-sdk`；打包版会自动设置 `CURSOR_SDK_BRIDGE_BIN`，也可在 `.env` 手动指定绝对路径。
 - **库存映射**：`config/inventory_product_mapping.json` 会打入 `dist/如意助手/_internal/config/`（PyInstaller 6 onedir 模式）；代码通过 `get_bundled_data_root()` 读取默认值，用户修改的映射写入可写路径并与默认合并。
 - **定时任务**：仓库根目录 `scheduler/tasks.toml` 会打入 `dist/如意助手/_internal/scheduler/`。重新打包前请在该文件中保存你的任务；若只改过 `dist` 里文件，`main.spec` 会清空 `dist` 后重建，未写回仓库的修改会丢失。
 - **JS 注入脚本**：`src/spider/pinduoduo/scripts/` 目录会打入 `_internal/spider/pinduoduo/scripts/`；新增脚本文件时务必检查 `main.spec` 的 `datas` 是否已包含。

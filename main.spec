@@ -82,10 +82,36 @@ def force_remove(path):
         print(f"  删除失败: {e}")
         return False
 
+def kill_dist_locking_processes():
+    """结束占用 dist/<APP_NAME> 的进程（如意助手.exe、cursor_sdk_bridge/node.exe 等）。"""
+    if sys.platform != 'win32':
+        return
+    import subprocess
+    import time
+
+    dist_app = project_root / 'dist' / APP_NAME
+    if not dist_app.exists():
+        return
+
+    prefix = str(dist_app.resolve()).replace("'", "''")
+    ps = (
+        "Get-CimInstance Win32_Process | "
+        f"Where-Object {{ $_.ExecutablePath -and $_.ExecutablePath.StartsWith('{prefix}') }} | "
+        "ForEach-Object { "
+        "  Write-Host ('结束占用进程: ' + $_.Name + ' PID=' + $_.ProcessId); "
+        "  Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue "
+        "}"
+    )
+    print('正在检查并结束占用 dist 的进程...')
+    subprocess.run(['powershell', '-NoProfile', '-Command', ps], check=False)
+    time.sleep(0.5)
+
+
 def clean_dist_folder():
     """清理 dist 文件夹（强制删除，包括被占用的文件）"""
     dist_dir = project_root / 'dist'
     if dist_dir.exists():
+        kill_dist_locking_processes()
         print("\n" + "="*60)
         print("正在清理 dist 文件夹...")
         print("="*60)
@@ -95,18 +121,18 @@ def clean_dist_folder():
         if logs_dir.exists():
             print(f"正在强制删除 logs 文件夹: {logs_dir}")
             if force_remove(logs_dir):
-                print(f"✓ 已删除 logs 文件夹")
+                print(f"[OK] 已删除 logs 文件夹")
             else:
-                print(f"✗ 删除 logs 文件夹失败，但继续清理其他文件")
+                print(f"[WARN] 删除 logs 文件夹失败，但继续清理其他文件")
         
         # 删除整个 dist 文件夹
         print(f"正在删除 dist 文件夹: {dist_dir}")
         if force_remove(dist_dir):
-            print(f"✓ 已删除 dist 文件夹: {dist_dir}")
+            print(f"[OK] 已删除 dist 文件夹: {dist_dir}")
             print("="*60 + "\n")
             return True
         else:
-            print(f"✗ 删除 dist 文件夹失败，但继续打包流程")
+            print(f"[WARN] 删除 dist 文件夹失败，但继续打包流程")
             print("="*60 + "\n")
             return False
     else:
@@ -118,28 +144,60 @@ def clean_dist_folder():
 # 执行清理
 clean_dist_folder()
 
+def _find_site_packages() -> Path | None:
+    """定位当前构建虚拟环境的 site-packages。"""
+    for venv_name in ('.venv', 'venv'):
+        sp = project_root / venv_name / 'Lib' / 'site-packages'
+        if sp.is_dir():
+            return sp
+    return None
+
+
+def _cursor_sdk_bridge_source() -> Path | None:
+    """cursor-sdk 自带的 bridge 目录（含 node.exe + cursor-sdk-bridge.cmd）。"""
+    sp = _find_site_packages()
+    if not sp:
+        return None
+    bridge = sp / 'cursor_sdk' / '_vendor' / 'bridge'
+    launcher = bridge / 'bin' / 'cursor-sdk-bridge.cmd'
+    if bridge.is_dir() and launcher.is_file():
+        return bridge
+    return None
+
+
+_site_packages = _find_site_packages()
+_playwright_stealth_js = (
+    _site_packages / 'playwright_stealth' / 'js'
+    if _site_packages
+    else project_root / '.venv' / 'Lib' / 'site-packages' / 'playwright_stealth' / 'js'
+)
+
+_pack_datas = [
+    # config 包通过路径动态加载同级 config.py，需显式打入包（否则打包后找不到）
+    (str(src_dir / 'config.py'), '.'),
+    # 模块开关（需浏览器）；缺省时用代码内 DEFAULT_MODULE_CONFIG，但打入文件便于用户修改
+    (str(project_root / 'module_config.toml'), '.'),
+    # 库存商品信息→商品名称映射（库存同步 / 映射页）；与 exe 同目录 config/ 可继续编辑
+    (str(project_root / 'config' / 'inventory_product_mapping.json'), 'config'),
+    # 定时任务默认列表（与仓库 scheduler/tasks.toml 一致；运行时可继续改 exe 旁 scheduler/tasks.toml）
+    (str(project_root / 'scheduler' / 'tasks.toml'), 'scheduler'),
+    # Playwright 注入脚本（erp_order_sync / order_address_sync 通过 __file__ 引用）
+    (str(src_dir / 'spider' / 'pinduoduo' / 'scripts'), 'spider/pinduoduo/scripts'),
+    # 闲鱼 DOM 兜底脚本（item_list / manage_items 通过 __file__ 引用）
+    (str(src_dir / 'spider' / 'goofish' / 'scripts'), 'spider/goofish/scripts'),
+    # playwright-stealth 运行时读取的 JS 资源文件（打包时必须包含，否则启动报 FileNotFoundError）
+    (str(_playwright_stealth_js), 'playwright_stealth/js'),
+    # Web模板文件
+    (str(src_dir / 'web' / 'templates'), 'web/templates'),
+    # 静态资源文件
+    (str(src_dir / 'static'), 'static'),
+]
+
 a = Analysis(
     [str(src_dir / 'main.py')],
     pathex=[str(src_dir)],
     binaries=[],
-    datas=[
-        # config 包通过路径动态加载同级 config.py，需显式打入包（否则打包后找不到）
-        (str(src_dir / 'config.py'), '.'),
-        # 模块开关（需浏览器）；缺省时用代码内 DEFAULT_MODULE_CONFIG，但打入文件便于用户修改
-        (str(project_root / 'module_config.toml'), '.'),
-        # 库存商品信息→商品名称映射（库存同步 / 映射页）；与 exe 同目录 config/ 可继续编辑
-        (str(project_root / 'config' / 'inventory_product_mapping.json'), 'config'),
-        # 定时任务默认列表（与仓库 scheduler/tasks.toml 一致；运行时可继续改 exe 旁 scheduler/tasks.toml）
-        (str(project_root / 'scheduler' / 'tasks.toml'), 'scheduler'),
-        # Playwright 注入脚本（erp_order_sync / order_address_sync 通过 __file__ 引用）
-        (str(src_dir / 'spider' / 'pinduoduo' / 'scripts'), 'spider/pinduoduo/scripts'),
-        # playwright-stealth 运行时读取的 JS 资源文件（打包时必须包含，否则启动报 FileNotFoundError）
-        (str(project_root / '.venv' / 'Lib' / 'site-packages' / 'playwright_stealth' / 'js'), 'playwright_stealth/js'),
-        # Web模板文件
-        (str(src_dir / 'web' / 'templates'), 'web/templates'),
-        # 静态资源文件
-        (str(src_dir / 'static'), 'static'),
-    ],
+    datas=_pack_datas,
     hiddenimports=[
         'pystray',
         'PIL',
@@ -166,6 +224,9 @@ a = Analysis(
         'webview.platforms',
         'webview.platforms.winforms',
         'webview.platforms.edgechromium',
+        'integrations',
+        'integrations.nest_client',
+        'httpx',
     ],
     hookspath=[],
     hooksconfig={},
@@ -367,8 +428,50 @@ def copy_playwright_drivers():
         print("="*60 + "\n")
         return False
 
+
+def copy_cursor_sdk_bridge():
+    """复制 cursor-sdk-bridge 到 exe 同目录（拼多多库存等 Cursor Agent 仍可能依赖；安特滑块默认走 Nest /ai/chat）。"""
+    print("\n" + "=" * 60)
+    print("正在复制 cursor-sdk-bridge...")
+    print("=" * 60)
+
+    dist_dir = project_root / 'dist' / APP_NAME
+    if not dist_dir.is_dir():
+        print(f"警告: 打包输出目录不存在，跳过复制 bridge: {dist_dir}")
+        print("=" * 60 + "\n")
+        return False
+
+    source_dir = _cursor_sdk_bridge_source()
+    if not source_dir:
+        print("未找到 cursor-sdk bridge 目录")
+        print("请先执行: .venv\\Scripts\\pip install cursor-sdk")
+        print("=" * 60 + "\n")
+        return False
+
+    target_dir = dist_dir / 'cursor_sdk_bridge'
+    launcher = target_dir / 'bin' / 'cursor-sdk-bridge.cmd'
+    try:
+        if target_dir.exists():
+            print(f"删除已存在的目录: {target_dir}")
+            shutil.rmtree(target_dir)
+        print(f"正在复制: {source_dir} -> {target_dir}")
+        shutil.copytree(source_dir, target_dir)
+        if not launcher.is_file():
+            print(f"警告: 复制后未找到 launcher: {launcher}")
+            print("=" * 60 + "\n")
+            return False
+        print(f"cursor-sdk-bridge 复制成功: {launcher}")
+        print("=" * 60 + "\n")
+        return True
+    except Exception as e:
+        print(f"复制 cursor-sdk-bridge 失败: {e}")
+        print("=" * 60 + "\n")
+        return False
+
+
 # 执行后处理
 copy_app_config_production_to_dist()
 copy_dotenv_to_dist()
 if not copy_playwright_drivers():
         print(f"警告: 浏览器驱动未复制，请手动复制到 dist/{APP_NAME}/playwright_drivers/ 目录")
+# AI 已统一走 Nest API，不再打包 cursor-sdk-bridge

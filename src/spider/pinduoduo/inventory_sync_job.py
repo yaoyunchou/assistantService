@@ -11,7 +11,7 @@
 - 扣减日志表：默认仅当「快递单号」非空时新增/更新出库相关列。
 - 提醒列命中退货关键词时，若已有日志行则更新退货时间/数量（与已有值相同则跳过 API）。
 - 「库存关联」列（扣减日志表）：无手工映射时，从库存信息表「商品名称」候选中经类型预筛后，
-  调用 **Cursor SDK Agent**（`CURSOR_API_KEY` / `CURSOR_MODEL`）做 AI 匹配；命中则写入名称，
+  调用 **Nest CMS AI**（`POST /xcx/api/v1/ai/chat`）做 AI 匹配；命中则写入名称，
   否则写未匹配说明（含商品信息、店铺、失败原因）。
 - **平台订单号**：三表比对时统一规范化（NFKC、全角横线→-、去空白），避免字符差异导致误判重复。
 """
@@ -195,11 +195,13 @@ def _ai_match_product_name(
     system_prompt: str = _SYSTEM_PROMPT_NORMAL,
 ) -> str:
     """
-    通过 Cursor SDK Agent 从候选商品名称中找出最匹配的一条。
+    通过 Nest /ai/chat 从候选商品名称中找出最匹配的一条。
     返回候选中的原文名称；无匹配或调用失败返回空字符串。
     """
-    if not Config.CURSOR_API_KEY:
-        logger.warning('CURSOR_API_KEY 未配置，无法进行 AI 匹配')
+    from integrations.nest_client import nest_auth_configured
+
+    if not nest_auth_configured():
+        logger.warning('Nest AI 未配置（NEST_DEVICE_KEY 等），无法进行 AI 匹配')
         return ''
 
     candidates_text = '\n'.join(f'- {name}' for name in candidates)
@@ -214,19 +216,18 @@ def _ai_match_product_name(
         from ai import run_agent  # noqa: PLC0415
 
         logger.info(
-            '[Cursor AI匹配] 调用 model=%s 候选数=%d',
-            Config.CURSOR_MODEL,
+            '[Nest AI匹配] 候选数=%d',
             len(candidates),
         )
         result = run_agent(instruction, tools=[])
         matched = _parse_ai_match_result(result, candidates)
         if matched:
-            logger.info('[Cursor AI匹配] 命中 → %s', matched[:80])
+            logger.info('[Nest AI匹配] 命中 → %s', matched[:80])
         else:
-            logger.info('[Cursor AI匹配] 未命中 raw=%.120s', (result or '').strip())
+            logger.info('[Nest AI匹配] 未命中 raw=%.120s', (result or '').strip())
         return matched
     except Exception as e:
-        logger.warning('Cursor AI 匹配调用失败: %s', e)
+        logger.warning('Nest AI 匹配调用失败: %s', e)
         return ''
 
 
@@ -385,11 +386,13 @@ def _find_best_stock_link(
             reason_lines=['按商品类型筛选后无匹配候选（充电头/数据线/套装类型不符）'],
         )
 
-    if not Config.CURSOR_API_KEY:
+    from integrations.nest_client import nest_auth_configured
+
+    if not nest_auth_configured():
         return _stock_link_unmatched_text(
             info_raw=info_raw,
             shop=shop,
-            reason_lines=['未配置 CURSOR_API_KEY，无法进行 Cursor AI 匹配'],
+            reason_lines=['未配置 Nest AI（NEST_DEVICE_KEY 等），无法进行 AI 匹配'],
         )
 
     # 同一商品信息在本次任务内直接复用缓存结果
@@ -438,11 +441,13 @@ def _find_stock_link_for_kind(
             shop=shop,
             reason_lines=[f'库存表中无{kind_label}类候选商品名称'],
         )
-    if not Config.CURSOR_API_KEY:
+    from integrations.nest_client import nest_auth_configured
+
+    if not nest_auth_configured():
         return _stock_link_unmatched_text(
             info_raw=info_raw,
             shop=shop,
-            reason_lines=['未配置 CURSOR_API_KEY，无法进行 Cursor AI 匹配'],
+            reason_lines=['未配置 Nest AI（NEST_DEVICE_KEY 等），无法进行 AI 匹配'],
         )
 
     cache_key = f'{info_raw}\x00{kind_label}'

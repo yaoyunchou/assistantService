@@ -1,13 +1,13 @@
 """
 AI 助手 API 路由
-提供 LLM 问答与 Cursor SDK Agent 的 HTTP 接口。
+提供 Nest CMS AI 的 HTTP 封装（内部 `from ai import ask / run_agent` → nestapi /xcx/api/v1/ai/*）。
 
 端点：
-  POST /api/ai/ask            简单 LLM 问答（同步）
-  POST /api/ai/run            启动 Agent 任务（同步，返回结果）
-  POST /api/ai/run-stream     启动 Agent 任务（SSE 流式输出）
-  GET  /api/ai/sessions       列出所有持久化会话
-  DELETE /api/ai/sessions/<name>  删除指定会话
+  POST /api/ai/ask            简单问答（Nest /ai/chat）
+  POST /api/ai/run            任务描述（Nest /ai/chat，可带截图）
+  POST /api/ai/run-stream     SSE（整段返回后推送）
+  GET  /api/ai/sessions       兼容空列表
+  DELETE /api/ai/sessions/<name>  兼容无操作
 """
 import json
 import threading
@@ -31,12 +31,12 @@ _SENTINEL = object()  # 流式输出结束哨兵
 @bp.route('/ask', methods=['POST'])
 def ask():
     """
-    简单 LLM 问答（使用 AI_API_KEY / OpenAI 兼容接口）。
+    简单问答（Nest POST /ai/chat，需 NEST_DEVICE_KEY 等）。
 
     请求体（JSON）：
       prompt   str  必填，用户问题
       system   str  可选，系统提示词
-      model    str  可选，模型名称
+      model    str  可选，由 Nest 侧路由（本接口忽略或仅记录）
       max_tokens int 可选，默认 500
     """
     body = request.get_json(silent=True) or {}
@@ -67,20 +67,19 @@ def ask():
 @bp.route('/run', methods=['POST'])
 def run():
     """
-    同步运行 Cursor SDK Agent，等待完成后返回结果。
+    同步 Nest /ai/chat，等待完成后返回结果。
 
     请求体（JSON）：
       instruction     str        必填，任务描述
-      tools           list[str]  可选，如 ["playwright"]
-      session_name    str        可选，会话名称（支持 resume）
-      browser_context dict       可选，爬虫移交协议 {url, cookies, screenshot_b64}
+      tools           list[str]  可选，仅兼容；不会在本地执行 Playwright
+      session_name    str        可选，兼容字段
+      browser_context dict       可选 {url, cookies, screenshot / screenshot_b64}
     """
     body = request.get_json(silent=True) or {}
     instruction = (body.get('instruction') or '').strip()
     if not instruction:
         return jsonify({'success': False, 'error': 'instruction 不能为空'}), 400
 
-    # browser_context 的 screenshot 字段可能是 base64 字符串
     browser_context = body.get('browser_context') or None
 
     try:
@@ -106,16 +105,9 @@ def run():
 @bp.route('/run-stream', methods=['POST'])
 def run_stream():
     """
-    流式运行 Cursor SDK Agent，使用 Server-Sent Events 实时推送事件。
+    流式运行（Nest 无原生 SSE，完成后推送 text + done）。
 
     请求体（JSON）：同 /run
-
-    SSE 事件格式（data 字段为 JSON 字符串）：
-      {"type": "text", "content": "..."}          助手文本片段
-      {"type": "thinking", "content": "..."}       思考过程
-      {"type": "tool_call", "name": "...", "status": "..."} 工具调用
-      {"type": "done", "result": "..."}            完成
-      {"type": "error", "message": "..."}          错误
     """
     body = request.get_json(silent=True) or {}
     instruction = (body.get('instruction') or '').strip()
@@ -171,25 +163,17 @@ def run_stream():
     )
 
 
-# ─────────────────────────────────────────────────────────────
-# GET /api/ai/sessions  —  列出会话
-# ─────────────────────────────────────────────────────────────
-
 @bp.route('/sessions', methods=['GET'])
 def list_sessions():
-    """列出所有持久化的 Agent 会话"""
+    """Nest 模式无本地会话，返回空对象。"""
     from ai import list_sessions as ai_list_sessions
     sessions = ai_list_sessions()
     return jsonify({'success': True, 'sessions': sessions})
 
 
-# ─────────────────────────────────────────────────────────────
-# DELETE /api/ai/sessions/<name>  —  删除会话
-# ─────────────────────────────────────────────────────────────
-
 @bp.route('/sessions/<session_name>', methods=['DELETE'])
 def delete_session(session_name: str):
-    """删除指定名称的 Agent 会话"""
+    """兼容删除会话（无操作）。"""
     from ai import delete_session as ai_delete_session
     ai_delete_session(session_name)
     return jsonify({'success': True, 'message': f'会话 {session_name} 已删除'})

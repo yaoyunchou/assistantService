@@ -201,6 +201,21 @@ class Config:
     # 安特 pcapi key（从 Chrome Network seckill-list 请求复制 key 参数；定期更新）
     ANTEXI_API_KEY         = (os.getenv('ANTEXI_API_KEY') or '').strip()
     ANTEXI_API_VERSION     = (os.getenv('ANTEXI_API_VERSION') or '20251218').strip()
+    # 安特 PC 商城登录（Playwright 自动登录门禁；仅从 .env 读取，勿写死默认值）
+    ANTEXIADAN_USERNAME    = (os.getenv('ANTEXIADAN_USERNAME') or '').strip()
+    ANTEXIADAN_PASSWORD    = (os.getenv('ANTEXIADAN_PASSWORD') or '').strip()
+    # 登录后「安全验证」滑块：Cursor Agent 最多尝试次数（默认 5），失败发 Webhook
+    ANTEXIADAN_CAPTCHA_MAX_ATTEMPTS = int(
+        (os.getenv('ANTEXIADAN_CAPTCHA_MAX_ATTEMPTS') or '5').strip() or '5'
+    )
+    # 兼容旧配置（人工等待秒数，现已改为 Agent 自动尝试）
+    ANTEXIADAN_CAPTCHA_TIMEOUT_SEC = int(
+        (os.getenv('ANTEXIADAN_CAPTCHA_TIMEOUT_SEC') or '120').strip() or '120'
+    )
+    # 预售抢购：开售前多少分钟加入购物车（默认 20）
+    ANTEXIADAN_PRESALE_CART_ADVANCE_MIN = int(
+        (os.getenv('ANTEXIADAN_PRESALE_CART_ADVANCE_MIN') or '20').strip() or '20'
+    )
     # 库存同步：ERP 全部店铺表 → 库存信息表 + 扣减日志表（定时任务 inventory_sync_job）
     # 库存信息表 / 扣减日志表均有默认 table_id，可用环境变量覆盖（与你们飞书实际表不一致时请改 .env）
     PINDUODUO_FEISHU_INVENTORY_INFO_TABLE_ID = os.getenv(
@@ -295,11 +310,19 @@ class Config:
     AI_API_KEY = os.getenv('AI_API_KEY', '').strip()
     # 库存关联匹配模型（推荐高性价比国产模型：deepseek-v3 / qwen3-flash 等）
     AI_STOCK_LINK_MODEL = os.getenv('AI_STOCK_LINK_MODEL', 'qwen-flash-2025-07-28').strip()
+    # 视觉识图模型（安特滑块等）；DMXAPI 可用 gpt-4o-mini / gemini-2.0-flash 等
+    AI_VISION_MODEL = os.getenv('AI_VISION_MODEL', 'gpt-4o-mini').strip()
 
-    # Cursor SDK Agent 配置（AI 大脑核心引擎，用于浏览器控制等复杂任务）
-    # 获取方式：https://cursor.com/dashboard/api
+    # Cursor SDK（已弃用，保留配置项避免旧 .env 报错；AI 统一走 Nest）
     CURSOR_API_KEY = os.getenv('CURSOR_API_KEY', '').strip()
     CURSOR_MODEL = os.getenv('CURSOR_MODEL', 'composer-2.5').strip()
+
+    # Nest CMS REST（全项目 AI：/ai/chat、/ai/generate 等）
+    NEST_API_BASE = os.getenv('NEST_API_BASE', '').strip().rstrip('/')
+    NEST_DEVICE_KEY = os.getenv('NEST_DEVICE_KEY', '').strip()
+    NEST_USERNAME = os.getenv('NEST_USERNAME', '').strip()
+    NEST_PASSWORD = os.getenv('NEST_PASSWORD', '').strip()
+    NEST_JWT = os.getenv('NEST_JWT', '').strip()
 
 
 # 在Config类定义后，尝试从配置文件加载配置

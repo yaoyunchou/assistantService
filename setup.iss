@@ -58,6 +58,7 @@ Source: "dist\如意助手\如意助手.exe"; DestDir: "{app}"; Flags: ignorever
 Source: "dist\如意助手\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; 浏览器驱动目录
 Source: "dist\如意助手\playwright_drivers\*"; DestDir: "{app}\playwright_drivers"; Flags: ignoreversion recursesubdirs createallsubdirs
+; AI 走 Nest 远程接口，不再打包 cursor_sdk_bridge
 ; 注意：logs 目录不需要打包，会在运行时自动创建
 
 [Icons]

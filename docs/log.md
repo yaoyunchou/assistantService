@@ -1,5 +1,262 @@
 # 变更日志
 
+- **本地 `.env`**：已移除 `CURSOR_API_KEY` / `CURSOR_MODEL`；Nest 使用 `NEST_DEVICE_KEY`（非 JWT）。`nest_client` 接受登录/聊天 **HTTP 201**，并兼容误写在 `NEST_JWT` 的设备密钥。
+- **Nest 鉴权**：原误写在 `NEST_JWT` 的 device key 已迁至 `NEST_DEVICE_KEY`；`nest_client._login_fresh` 兼容误标 JWT 并提示改名。
+
+## 2026-07-31 - 全项目 AI 统一走 Nest API（移除本地 Cursor Agent）
+
+### 变更说明
+
+- **`src/ai/__init__.py`**：`ask` / `ask_vision` / `run_agent` / `run_agent_stream` 全部转发 **Nest** `POST /xcx/api/v1/ai/chat`（`integrations.nest_client`）；`tools=playwright` 仅打日志，不在本机执行。
+- **`src/ai/agent.py`**：瘦身为兼容层，不再依赖 `cursor-sdk`。
+- **安特滑块**、**拼多多库存 AI 匹配**：仅认 `NEST_DEVICE_KEY`（或账号密码 / JWT）。
+- **打包**：`main.spec` / `setup.iss` 不再复制 `cursor_sdk_bridge`；`requirements.txt` 注释 `cursor-sdk`。
+- **配置**：`.env.example` 以 `NEST_*` 为主；`CURSOR_API_KEY` 保留读取但已弃用。
+
+## 2026-07-31 - 安特滑块识图改为 Nest `/ai/chat`（默认）
+
+### 变更说明
+
+- **背景**：打包版本地 Cursor SDK Agent（`cursor_sdk_bridge`）识图不稳定；Nest 小程序/CMS 侧 `/ai/chat` 多模态效果更好。
+- **实现**：
+  - 新增 [`src/integrations/nest_client.py`](../src/integrations/nest_client.py)：`device-key`/账号登录、`/ai/chat`（截图 base64 + OpenAI 风格 `image_url`）、`extract_chat_text` 解析响应。
+  - [`captcha_solver.py`](../src/spider/antexiadan/captcha_solver.py) 默认 `ANTEXIADAN_CAPTCHA_AI_BACKEND=nest`；可降级 `cursor` / `vision`。
+  - `config.py` / `.env.example` 增加 `NEST_*` 与 backend 开关；[`main.spec`](../main.spec) 说明 bridge 非滑块必需。
+- **配置（打包推荐）**：`NEST_DEVICE_KEY=keyId.secret`，`NEST_API_BASE=https://nestapi.xfysj.top/xcx/api/v1`（可省略，由 `WS_CLIENT_HOST` 推导）。
+- **联调**：`scripts/_spike_nest_ai_chat.py` 可本地验证多模态 body（需有效 `NEST_JWT` 或 `NEST_DEVICE_KEY`）。
+
+## 2026-07-28 - 新增闲鱼（Goofish）模块：商品发布 + 在线商品管理
+
+### 概述
+
+新增 `src/spider/goofish/`，对接[闲鱼卖家工作台](https://seller.goofish.com/)，交付两块能力：
+本地 Excel 队列**商品发布**（`/tools/goofish`）与**在线商品管理**（`/goofish/items`，上下架 / 改价改描述 / 删除）。
+
+### Phase 0 探测的三个关键发现（决定了实现方式）
+
+对未登录态站点与前端 bundle（`idle-pc/seller-workbench/0.1.56`）做了静态分析，产出
+`docs/goofish/闲鱼后台-探测记录.md`。三个发现直接改变了原定方案：
+
+1. **`lib.mtop` 全局可用且可直调** —— 实测 `window.lib.mtop.request({api, v, data})` 可用，
+   未登录时返回 `ret: ["FAIL_SYS_SESSION_EXPIRED::Session过期"]`。
+   因此取数改为**直调 mtop 为主**（分页可控、不受 DOM 改版影响、复用页面签名），
+   而不是原计划的「拦截 XHR 为主」；登录判定也改用 **mtop 探针**，比 URL/DOM 可靠得多。
+2. **业务页在 iframe 内** —— shell 路由表只有 `login / iframe / im / ...`，**没有** `seller-item/publish`。
+   发布页与列表页都由 `iframe` 路由承载，所以 DOM 操作必须先 `find_business_frame(page)`，
+   在主 frame 上 `evaluate` 找不到表单。登录页主 frame 的 `innerText` 实测为**空**。
+3. **class 名带 CSS Modules 构建哈希**（如 `loginPage--ScuLfa2N`），每次前端发版都变。
+   已在 `config.py` 与 `pages/__init__.py` 立为硬性约束：禁止哈希 class 选择器，
+   只用稳定 ID / 语义属性 / 文本匹配。
+
+商品列表、发布、上下架接口**不在** shell bundle 里（只在登录后的 iframe 应用中加载），
+未登录态确实拿不到 —— 这部分交由下述探测器自助补全。
+
+### 主要文件
+
+- **`src/spider/goofish/`**
+  - `config.py` — URL / 选择器 / mtop 接口名 / 缺省值集中配置，改版单点修正
+  - `mtop_bridge.py` — 页面内直调 mtop，识别 `SUCCESS` 与 `SESSION_EXPIRED`
+  - `page_guard.py` — mtop 探针登录判定、业务 iframe 定位、窗口最大化
+  - `login_gate.py` — `ensure_logged_in`，支持轮询等待扫码
+  - `api_probe.py` — 运行时接口探测，把「登录后才可见的接口」变成一键自助采集
+  - `item_list.py` — 三级取数：`mtop` 直调 → `capture` 自动识别 → `dom-fallback`
+  - `flows/publish_one.py`、`flows/manage_items.py`、`pages/publish_page.py`
+  - `data/loader.py`、`data/backfill.py` — Excel 队列与回填（openpyxl 只写目标单元格）
+  - `scripts/goofish-item-list.js`、`scripts/goofish-item-action.js`（上下架/删除合并为一个脚本 + `action` 参数）
+  - `test_item_list.py` + `scripts/fixtures/` — 12 个离线用例
+- **`src/api/routes/goofish_routes.py`** — 13 个端点，业务失败统一 `200 + {ok:false}`
+- **`src/tools/goofish_tool.py`**、**`src/web/templates/tools/goofish.html`**、**`src/web/templates/goofish_items.html`**
+- **文档** — `docs/goofish/闲鱼模块-Playwright开发文档.md`、`docs/goofish/闲鱼后台-探测记录.md`
+
+### 集成改动
+
+| 文件 | 改动 |
+|------|------|
+| `main.spec` | `_pack_datas` 加 `spider/goofish/scripts`（否则打包后 JS 丢失，运行时 `FileNotFoundError`） |
+| `src/web/templates/base.html` | 三处工具名元组加 `'goofish'`、`_ec_endpoints` 加 `'goofish_items'`（否则闲鱼会同时出现在「电商」和「工具」两个分组）；电商分组加两个入口 |
+| `src/notify/__init__.py` | `_SOURCE_DISPLAY` 加 `"goofish": "闲鱼助手"` |
+| `src/api/routes/__init__.py` | 注册 `goofish_bp` + Swagger tag「闲鱼」 |
+| `src/app.py` | `init_tools()` 注册 `GoofishTool` |
+| `src/web/routes.py` | 新增 `/goofish/items` 路由 |
+| `README.md` | 功能列表、目录树、模块说明 |
+
+`src/config/modules.py` **未**加 `goofish` 条目 —— 与 `taobao` 保持一致（浏览器池已因
+`pinduoduo.requires_browser=True` 必然启动，加了还需同步 exe 旁的 `module_config.toml`）。
+
+### 几个刻意的设计选择
+
+- **发布点了但解析不到商品 ID** → 返回 `needs_manual_check: True` 而非失败，
+  提示用人工确认 + `mark-uploaded` 回填。若报成失败，用户重试会造成**重复铺货**。
+- **价格不做「分转元」猜测**（`item_list._norm_price`）—— 接口价格单位未经登录态确认，
+  而该值会回显到编辑弹窗，猜错就是直接改错价。单位确认后再统一换算。
+- **选择器定位不到就抛错**，错误信息里直接写「怎么补全」（跑探测 + 改 config），
+  不静默点就近元素。非致命属性（成色/分类/包邮）未命中只记 warning，不中断整单。
+- **删除强制 `confirm: true`**，前端另有二次确认弹窗；JS 脚本在 `confirm=false` 时只做定位演练。
+
+### 验证
+
+- `python -m unittest spider.goofish.test_item_list -v` → **12 passed**
+  - 该测试抓到一个真实 bug：DOM 脚本把标题「机械键盘 **87**键」里的 87 当成了价格。
+    已改为价格必须带货币符号，无符号时先剔除标题再找裸数字。
+- Flask 集成自检：13 个闲鱼路由全部注册；`/tools/goofish` 与 `/goofish/items` 均渲染 200；
+  侧边栏两个入口就位且未在「工具」分组重复；无汇总表时 `/api/goofish/pending` 返回 200 + `ok:false`（不是 500）。
+
+### 待办（需登录态校准）
+
+发布表单精确选择器、`ITEM_LIST_API`、价格单位、`ITEM_URL_TEMPLATE` 详情域名、成色/分类枚举文案。
+登录后在管理页点一次「探测接口」即可采集，详见开发文档第 6 节。
+
+## 2026-07-27 - 安特采集页卡住：登录已成功但前端仍「采集中」
+
+- **现象**：浏览器已登录成功，功能页一直显示「打开浏览器采集中」无响应。
+- **根因**：后端滑块第 1 次拖动失败后仍在循环（最多 5 次 × 每次 Agent ~50s）；`has_captcha` 对隐藏 iframe 误判；未检测「已离开登录页」导致手动/自动登录成功后仍继续调 Agent。
+- **修复**：`login.has_captcha` 仅在登录页且元素可见时判真；`captcha_solver` / `do_login` 在每次重试前检测已登录则立即通过；前端提示改为「最多约 10 分钟」并显示已等待秒数。
+
+## 2026-07-24 - Cursor Bridge 黑窗：关闭后 AI 失效
+
+- **现象**：运行助手时弹出黑色控制台；窗口开着时 AI/滑块识别正常，关掉后报 `WinError 10061`。
+- **根因**：Cursor SDK 通过 `cursor-sdk-bridge.cmd` 启动 `node.exe`，Windows 会附带控制台；用户关闭该窗口等于终止 Bridge 进程。
+- **修复**：`src/ai/agent.py` 对 `Bridge.launch` 打 `CREATE_NO_WINDOW` 补丁，Bridge 后台启动不再弹黑窗；`.env.example` 补充可选 `CURSOR_SDK_BRIDGE_BIN` 说明（打包版默认自动设置，不必写进 `.env`）。
+
+## 2026-07-16 - 打包版安特滑块：打入 cursor-sdk-bridge（方案 B）
+
+- **现象**：`dist/如意助手` 跑安特登录滑块时 Agent 报错 `Unable to locate cursor-sdk-bridge`，滑块从不拖动（日志只有「Agent 未返回有效 distancePx」+ 点刷新）。
+- **根因**：PyInstaller 只打了 `cursor_sdk` Python 包，未包含 wheel 自带的 `_vendor/bridge/`（含 `node.exe` + `cursor-sdk-bridge.cmd`，约 126MB）。
+- **修复**：
+  - **`main.spec`**：打包后复制 `cursor_sdk/_vendor/bridge` → `dist/如意助手/cursor_sdk_bridge/`（与 `playwright_drivers` 同级）；`hiddenimports` 补充 `cursor_sdk` 相关模块。
+  - **`src/ai/agent.py`**：打包版（`sys.frozen`）启动 Agent 前自动设置 `CURSOR_SDK_BRIDGE_BIN` 指向 `exe同目录/cursor_sdk_bridge/bin/cursor-sdk-bridge.cmd`。
+  - **`setup.iss`**：安装包一并打入 `cursor_sdk_bridge/`。
+- **验证**：重新 `build.bat` 后，日志应出现 `已设置 CURSOR_SDK_BRIDGE_BIN=...` 和 `第 X/Y 次拖动滑块 distancePx=...`。
+
+## 2026-07-16 - 新增「已发货数据补录」操作手册（复盘为什么这次弄了很久）
+
+- **背景**：补录 2026-07-15 数据这件「本应很常见」的小事，实际排查链路很长（虚拟滚动漏单、助手跑的是旧打包 EXE、Nest base path 少了 `/xcx` 前缀等好几个独立坑叠在一起）。用户要求把经验总结成文档，避免下次重复排查。
+- **新文档**：`docs/pinduoduo-erp-delivered-backfill-runbook.md`
+  - TL;DR：以后补任意一天数据，只需 `run_delivered_sync_standalone.py`（抓）+ `push_erp_delivered_to_nest.py`（写库）两条命令。
+  - 复盘表格：列出这次 6 个卡点、现象、根因。
+  - 「关键事实」清单：抓数据/写库解耦、Nest 真实网关前缀 `/xcx/api/v1`、三种鉴权方式、默认筛选「已打印」的坑、助手可能跑的是旧 EXE 而非 `src/` 源码等——都是一次性排查出来、以后不该再重复验证的事实。
+
+## 2026-07-16 - 直连 Nest 补录 2026-07-15 已发货数据（跳过助手转发链路）
+
+- **背景**：`backfill_erp_delivered.py` / 独立脚本走「助手浏览器打开 ERP 页」这条链路时反复 `Page.goto` 超时（登录态/浏览器实例卡死等环境问题），且走 Nest 的 `today-printed-query` 也要先经 Socket 转发给在线助手，等于同一条脆弱链路。
+- **改法**：Nest 侧文档（`https://nestapi.xfysj.top/xcx/api-json`）里其实还有一个**直接写库、不用助手**的接口：`POST /xcx/api/v1/assistant/pinduoduo/erp-delivered/today-printed-records`（`ErpDeliveredTodayPrintedRecordController_create`，按 `orderNo` upsert）。已用 `scripts/run_delivered_sync_standalone.py` 独立抓到的 2026-07-15 全量 50 条真实数据（`data/erp_delivered_2026-07-15.json`），直接映射字段后逐条 POST 进这个接口，不再依赖助手浏览器。
+- **新脚本**：`scripts/push_erp_delivered_to_nest.py`
+  - 字段映射：本地抓取行 → `CreateErpDeliveredTodayPrintedRecordDto`（`orderNo/actualAmount/erpOrderNo/express/goods[imgSrc,qty,spec,title]/imgUrl/orderStatus/printStatus/shippingTime/shopName`），字段名几乎一一对应。
+  - 鉴权：支持 `--jwt` / `--device-key`（`/auth/login-with-device-key`，推荐用于自动化）/ `--username`+`--password`（`/auth/login`）三种换取 Nest `access_token` 的方式；也可用 `.env` 里的 `NEST_JWT` / `NEST_DEVICE_KEY` / `NEST_USERNAME`+`NEST_PASSWORD`。
+  - **易错点**：Nest 真实网关路径带 `/xcx` 前缀——`https://nestapi.xfysj.top/xcx/api/v1/...`；Swagger JSON 里的 `paths` 键（`/api/v1/...`）不含这个前缀，直接拼会全部 404。
+  - `--dry-run` 只打印第一条 DTO 不发请求；失败的行会落盘到 `<file>_push_failed.json` 方便重试。
+- **验证**：50/50 推送成功（HTTP 201），随后用 `GET .../today-printed-records?shippingDateStart=2026-07-15&shippingDateEnd=2026-07-15` 查询 `total=50`，确认库里数据已从 35 条修复为完整 50 条。
+
+## 2026-07-16 - 已发货同步：35/50 漏单根因与补抓
+
+- **澄清**：库里的发货数据来自 `POST /api/pinduoduo/erp-delivered/today-printed-query`（`pdd-erp-order-delivered-query.js`），不是待发货 `pending-list`（不入库）。
+- **漏数原因**：
+  1. 默认筛「已打印快递单」——未打印单不会进库（50 发货可能只有 35 已打印）；
+  2. 旧滚动只改 `scrollTop`、连续 3 步无新增就停，虚拟列表易提前结束。
+- **修复**：`delivered-query` 改为 `scrollTop+wheel`、连续 5 步才停；读页脚「共 N 条」；不足则翻「下一页」继续采；返回 `pageTotal`/`incomplete`。
+- **补数脚本**：`python scripts/backfill_erp_delivered.py --date-shortcut 昨天`（或双击 `scripts/backfill_erp_delivered_2026-07-15.bat`）；Nest 落库加 `--via-nest`。须助手浏览器能打开 ERP。
+
+## 2026-07-16 - 待发货列表：虚拟滚动漏单修复
+
+- **现象**：`pdd-erp-order-delivering-list-query.js` 只采当前视口 DOM；以 2026-07-15 共 50 单为例，视口约 12 行时旧逻辑只能拿到约 12 条。
+- **复现**：`node src/spider/pinduoduo/scripts/_test_delivering_scroll_logic.js`（旧 12 / 新 50）。
+- **单元测试**：仓库根目录执行：
+  ```bat
+  set PYTHONPATH=src
+  python -m unittest spider.pinduoduo.test_delivering_list_query -v
+  ```
+  或 `python src/spider/pinduoduo/test_delivering_list_query.py`（Playwright + `fixtures/delivering-virtual-list.html`，断言静态 &lt;50、滚动=50）。
+- **修复**：默认 `scrollTop + wheel` 滚动采集，按 `orderNo` 去重；连续 3 步无新数据触底停止；测试可覆盖 `MIN/MAX_WAIT_MS`。
+- **入口**：`run_delivering_list_query` / `POST /api/pinduoduo/erp-delivering/pending-list` 支持 `autoScroll`、`scrollMaxSteps`、`scrollPauseMs`；响应增加 `count`、`scroll`。
+- **文档**：`docs/pinduoduo-erp-remote-api.md` §3.5。
+
+## 2026-07-10 - 预售抢购候选：仅未标记预售单
+
+- **问题**：候选列表混入了「正在预售·未下架」秒杀池，已标记（已采购）的预售单对应商品会以无单号行再次出现。
+- **规则**：只展示 `purchased=0` 且对照命中的条目；跳过 `purchased=1`；不再补充无预售单关联的秒杀商品。
+- **文件**：`presale_rush.py`、`antexiadan_presale_rush.html`、API 摘要文案。
+
+## 2026-07-10 - 预售×秒杀匹配：性别 + 品类硬约束
+
+- **问题**：`title_overlap` 仅靠「国内一线代工女士无痕」等营销前缀，把文胸误配成内裤。
+- **数据依据**：当前 online 未标记预售 9 条、秒杀中约 30 条；原对照命中 2 条均为文胸↔内裤误配；货号命中 0；秒杀大量无性别/无品类（美妆）。
+- **规则**：双方都能识别到性别且不一致 → 否决；双方都抽到互斥叶子品类（文胸/内裤/上衣/裤子/鞋子/拖鞋）且无交集 → 否决；**货号命中同样受此约束**。任一侧未知则不拦截。「内衣」作为父类可与文胸/内裤兼容。
+- **其它**：归一化去掉「国内一线代工」等噪声；`title_overlap` 最短公共子串由 10 提到 12。
+- **文件**：`src/spider/pinduoduo/presell_seckill_match.py`；返回增加 `matchGender` / `matchCategories` / `seckillGender` / `seckillCategories`。
+
+## 2026-07-09 - 预售抢购：结算成功后标记预售单已采购
+
+- **逻辑**：`checkout_cart` 成功（提交结算 / 进入支付页）后，按任务 `items[].presellOrderNo` 写 `erp_order_presell.purchased=1`。
+- **存储**：`presell_store.mark_purchased(order_nos)`。
+- **补标**：`POST /api/antexiadan/presale-rush/mark-presell`；创建计划时前端会带上 `presellOrderNo`。
+
+## 2026-07-09 - 预售抢购：展示并带上颜色/规格
+
+- **来源**：拼多多预售单 `goods[].spec`（如「肤透色,34码BC杯」）；对照命中后挂到候选商品。
+- **页面**：候选表新增「颜色/规格」列；创建计划时写入任务 `items[].spec`。
+- **加购**：详情页按规格片段尝试点选 SKU，再设数量并加入购物车。
+
+## 2026-07-09 - 预售抢购：开售时间显示改为中文本地格式
+
+- **现象**：分组标题出现 `Thu, 09 Jul 2026 21:20:00 GMT`（MySQL datetime 被 jsonify 成英文）。
+- **修复**：`presale_rush.list_candidates` 用 `start_unix` 格式化为 `YYYY-MM-DD HH:mm`。
+
+## 2026-07-09 - 安特预售抢购控制台（提前加购 + 到点结算）
+
+- **页面**：`/antexiadan/presale-rush`，侧边栏「安特 → 预售抢购」。
+- **流程**：选「正在预售」商品 → 按开售时间合并计划 → **开售前 20 分钟加购** → **开售时刻结算/提交**；支付页停住并发飞书通知。
+- **数量**：能对上拼多多预售单则用规格里的 qty，否则 1；页面可改。
+- **调度**：新任务类型 `antexiadan_presale_cart` / `antexiadan_presale_checkout`；Scheduler 支持一次性 `run_at`（DateTrigger）。
+- **模块**：`src/spider/antexiadan/presale_rush.py`；设计见 `docs/superpowers/specs/2026-07-09-antexiadan-presale-rush-design.md`。
+- **配置**：`ANTEXIADAN_PRESALE_CART_ADVANCE_MIN`（默认 20）。
+
+## 2026-07-09 - 安特滑块：只截验证码弹框/iframe，仍用 Cursor Agent
+
+- **保留**：识别仍走 Cursor Agent（实测准），不改方案。
+- **优化**：截图优先 `#t_dialog` / `.tcaptcha-transform`，再 `#tcaptcha_iframe(_dy)`；元素截失败用 `page.screenshot(clip=...)`；**不再全页截图**。
+- **效果**：Agent 读图更小更快，距离估算更聚焦弹框内容。
+
+## 2026-07-09 - 安特滑块选择器：#tcOperation > div.tc-fg-item.tc-slider-normal
+
+- **实测**：iframe 内滑块为 `#tcOperation > div.tc-fg-item.tc-slider-normal`，已作为首选选择器。
+
+## 2026-07-09 - 安特滑块：进入腾讯 iframe 定位 #tcaptcha_drag_thumb
+
+- **现象**：Agent 已返回 `distancePx`，但报「未找到滑块按钮」——验证整体在 `#tcaptcha_iframe` 内。
+- **修复**：`captcha_solver` 优先 `frame_locator('#tcaptcha_iframe')` / `#tcaptcha_iframe_dy`，再找滑块；刷新也只点 iframe 内按钮；日志打印 frames 便于排查。
+- **注意**：`bounding_box()` 已含 iframe 页面偏移，拖动仍用 `page.mouse`。
+
+## 2026-07-09 - 安特滑块：Cursor Agent 最多尝试 5 次，失败发 Webhook
+
+- **策略**：本页截图 → Cursor Agent 估算 `distancePx` → 本页拟人拖动；最多 5 次；仍失败发飞书 Webhook。
+- **原因**：Agent 自带 Playwright MCP 是另一浏览器，不能直接操作登录页，故「识别归 Agent、拖动归本页」。
+- **新增**：`src/spider/antexiadan/captcha_solver.py`；`login.handle_captcha` 替换人工等待。
+- **配置**：
+  - `ANTEXIADAN_CAPTCHA_MAX_ATTEMPTS`（默认 5）
+  - `FEISHU_WEBHOOK_ANTEXIADAN`（可选，不配回退通用 Webhook）
+  - 需 `CURSOR_API_KEY`
+- **渠道**：`qudao_notify.CHANNEL_ANTEXIADAN`；关键词默认「安特」。
+
+## 2026-07-09 - 安特登录后「安全验证」滑块：人工拖完再继续
+
+- **现象**：点击登录后出现 `#t_mask` /「拖动下方滑块完成拼图」。
+- **处理**：`login.py` 检测滑块后 `bring_to_front`，轮询等待遮罩消失（默认 120 秒），不自动破解。
+- **配置**：可选 `ANTEXIADAN_CAPTCHA_TIMEOUT_SEC`（默认 120）；浏览器 `pool.execute` 超时提到 180s。
+- **使用**：采集时请保持 Playwright 窗口可见，出现验证后手动拖完即可继续。
+- **后续**：已升级为 Agent 自动尝试（见上条）。
+
+## 2026-07-09 - 安特 Playwright 登录门禁（自动密码登录）
+
+- **目标**：浏览器相关安特逻辑开始前先检查登录；未登录则自动密码登录，成功后再执行采集/搜索。
+- **新增**：`src/spider/antexiadan/login.py`（`ensure_logged_in` / `do_login` / `is_logged_in`）。
+- **挂接**：`seckill-list/fetch-browser`、`goods_search.capture_pcapi_credentials`（含预售对照批量搜索）。
+- **配置**（`.env`）：
+  - `ANTEXIADAN_USERNAME` — 手机号/账号
+  - `ANTEXIADAN_PASSWORD` — 密码
+- **登录页**：未登录访问 homepage 会跳到 `https://pc.antexiadan.com/login`；自动切「密码登录」后填表提交。
+- **设计文档**：`docs/superpowers/specs/2026-07-09-antexiadan-login-gate-design.md`
+- **注意**：修改后需重启服务；请在本地 `.env` 填入真实账号密码（勿提交 git）。
+
 - **上传入口**：`https://item.upload.taobao.com/sell/ai/category.htm`（以图发品）；「打开以图发品」直达该页，已登录则无需再走 login.taobao.com。
 
 ## 2026-06-16 - 拼多多库存 AI 匹配改用 Cursor Agent
