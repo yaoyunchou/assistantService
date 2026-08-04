@@ -212,6 +212,13 @@ class Config:
     ANTEXIADAN_CAPTCHA_TIMEOUT_SEC = int(
         (os.getenv('ANTEXIADAN_CAPTCHA_TIMEOUT_SEC') or '120').strip() or '120'
     )
+    # Nest 识图距离修正（像素，负值略往回拖；默认 -5）
+    ANTEXIADAN_CAPTCHA_DRAG_OFFSET_PX = int(
+        (os.getenv('ANTEXIADAN_CAPTCHA_DRAG_OFFSET_PX') or '-5').strip() or '-5'
+    )
+    # Nest 识图后是否删除本地截图（默认删；联调可设 0/false 保留）
+    _cap_del = (os.getenv('ANTEXIADAN_CAPTCHA_DELETE_SCREENSHOTS') or '1').strip().lower()
+    ANTEXIADAN_CAPTCHA_DELETE_SCREENSHOTS = _cap_del not in ('0', 'false', 'no', 'off')
     # 预售抢购：开售前多少分钟加入购物车（默认 20）
     ANTEXIADAN_PRESALE_CART_ADVANCE_MIN = int(
         (os.getenv('ANTEXIADAN_PRESALE_CART_ADVANCE_MIN') or '20').strip() or '20'
@@ -323,6 +330,10 @@ class Config:
     NEST_USERNAME = os.getenv('NEST_USERNAME', '').strip()
     NEST_PASSWORD = os.getenv('NEST_PASSWORD', '').strip()
     NEST_JWT = os.getenv('NEST_JWT', '').strip()
+    # 可选：传给 Nest /ai/chat 的模型（与 Cursor 客户端里选的 Composer 无关，须 Nest 后端支持该字段）
+    NEST_CHAT_MODEL = os.getenv('NEST_CHAT_MODEL', '').strip()
+    NEST_CHAT_TIMEOUT = int((os.getenv('NEST_CHAT_TIMEOUT') or '120').strip() or '120')
+    NEST_CHAT_TIMEOUT_MULTIMODAL = int((os.getenv('NEST_CHAT_TIMEOUT_MULTIMODAL') or '360').strip() or '360')
 
 
 # 在Config类定义后，尝试从配置文件加载配置
@@ -399,12 +410,7 @@ def _apply_ws_assistant_key_for_app_env() -> None:
         Config.WS_CLIENT_ASSISTANT_KEY = Config.WS_CLIENT_ASSISTANT_KEY_DEVELOPMENT_DEFAULT
 
 
-# 延迟加载，避免循环导入
-try:
-    _load_config_from_file()
-except Exception as _outer_cfg_err:
-    import traceback as _tb2
-    print(f"[Config] 外层配置加载异常: {_outer_cfg_err}\n{_tb2.format_exc()}")
+# 文件配置加载改由 config/__init__.py 在导出完成后再调用，避免循环导入。
 
 
 _MODULE_CONFIG_HEADER = """\

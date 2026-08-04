@@ -114,6 +114,11 @@ def main():
 
         logger.info("="*60)
         logger.info(f"服务地址: http://{Config.HOST}:{Config.PORT}")
+        try:
+            from integrations.nest_client import resolve_nest_api_base
+            logger.info('Nest REST: %s', resolve_nest_api_base())
+        except Exception:
+            pass
         logger.info("按 Ctrl+C 停止服务")
         logger.info("="*60)
         

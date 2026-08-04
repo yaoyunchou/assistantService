@@ -1,5 +1,30 @@
 # 变更日志
 
+## 2026-08-03 - 安特滑块截图识图后自动删除
+
+- 每轮 attempt 在 Nest 识图/拖动流程结束后（`finally`）调用 `_remove_captcha_shot`，默认删除 `captcha_*.png`，避免 `antexiadan/captcha` 堆积。
+- 配置 `ANTEXIADAN_CAPTCHA_DELETE_SCREENSHOTS`（默认开启）；联调保留样本可 `.env` 设 `0`/`false`。
+- `.gitignore` 忽略 `antexiadan/captcha/*.png`、`nest_ai_chat_body.json`。
+
+## 2026-08-03 - 安特滑块 Nest 切回线上 API
+
+- 本地 `localhost:8080/api/v1` 多模态联调完成；`.env` / 打包 `.env` 改回 `NEST_API_BASE=https://nestapi.xfysj.top/xcx/api/v1`。
+- 移除 `APP_ENV=development` 时强制本机 Nest 默认；未配置时由 `nest_client.resolve_nest_api_base()` 走线上默认。
+
+## 2026-08-03 - 安特滑块拖动距离默认 -5px 修正
+
+- `ANTEXIADAN_CAPTCHA_DRAG_OFFSET_PX` 默认 **-5**（Nest 识图后、随机抖动前叠加）；可 `.env` 改为 `0` 或其它值。
+
+## 2026-07-31 - 安特滑块截图：iframe 优先 + 有效性校验
+
+- **认知**：安特登录页上 `#tcaptcha_iframe` 即腾讯验证框本体；此前「先截外层 `#t_dialog`」易在 iframe 未就绪时用 clip 裁到主站侧栏（约 5KB 废图）。
+- **实现**：[`captcha_solver.py`](../src/spider/antexiadan/captcha_solver.py) 等待 iframe/滑块就绪后**优先截 iframe**；外层弹框仅作含「安全验证」文案的兜底；截图后校验体积（≥12KB）与尺寸；修复误删的 `_clip_from_box`。
+- **提示词**：明确 `distancePx = 缺口中心 x − 拼图块中心 x`（360 截图坐标、与拖动 1:1）；`test_nest_captcha_image.py` 与线上一致。样图 `captcha_1785491027_1.png` 本地 Nest 复测约 **195**（旧 prompt 曾 **160**，目测约 **224~227**）。
+- **提示词 v2**：写入 5 步测距（x₁/x₂）；JSON 增加 `pieceCenterX`/`gapCenterX`。注意：**长 prompt 不等于更准**，且与 Nest 客户端 Cursor Agent 不是同一路径。
+- **Nest 传参**：`nest_ai_chat` 仅传 `message`（text+image_url detail=high）、`systemPrompt`；可选 `NEST_CHAT_MODEL` → body `model`。
+- **本地 Nest**：`NEST_API_BASE=http://localhost:8080/api/v1`；多模态 `/ai/chat` 经 Cursor Agent **单次约 4～5 分钟**属正常；默认 `NEST_CHAT_TIMEOUT_MULTIMODAL=360`。
+- **config 循环导入**：`config.py` 不再在 exec 时加载 toml，改由 `config/__init__.py` 导出后再 `_load_config_from_file()`。
+
 - **本地 `.env`**：已移除 `CURSOR_API_KEY` / `CURSOR_MODEL`；Nest 使用 `NEST_DEVICE_KEY`（非 JWT）。`nest_client` 接受登录/聊天 **HTTP 201**，并兼容误写在 `NEST_JWT` 的设备密钥。
 - **Nest 鉴权**：原误写在 `NEST_JWT` 的 device key 已迁至 `NEST_DEVICE_KEY`；`nest_client._login_fresh` 兼容误标 JWT 并提示改名。
 

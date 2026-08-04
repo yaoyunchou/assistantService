@@ -5,11 +5,11 @@ import base64
 import json
 import logging
 import threading
-import urllib.error
-import urllib.request
 from typing import Any, Dict, Optional, Tuple, Union
 
-logger = logging.getLogger('integrations.nest_client')
+from utils.logger import get_logger
+
+logger = get_logger('integrations.nest_client')
 
 _token_lock = threading.Lock()
 _cached_access_token: Optional[str] = None
@@ -24,6 +24,7 @@ def resolve_nest_api_base() -> str:
 
     explicit = (getattr(Config, 'NEST_API_BASE', None) or '').strip().rstrip('/')
     if explicit:
+        logger.debug('Nest API base (NEST_API_BASE): %s', explicit)
         return explicit
 
     host = (getattr(Config, 'WS_CLIENT_HOST', None) or '').strip().rstrip('/')
@@ -68,33 +69,64 @@ def _http_json(
     headers: Optional[dict] = None,
     timeout: int = 90,
 ) -> Tuple[int, Any]:
+    import http.client
+    from urllib.parse import urlparse
+
     data = json.dumps(body, ensure_ascii=False).encode('utf-8') if body is not None else None
-    req = urllib.request.Request(
-        url,
-        data=data,
-        method=method,
-        headers={
-            'Content-Type': 'application/json; charset=utf-8',
-            'Accept': 'application/json',
-            **(headers or {}),
-        },
+    body_len = len(data) if data else 0
+    parsed = urlparse(url)
+    host = parsed.hostname or 'localhost'
+    port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+    path = parsed.path or '/'
+    if parsed.query:
+        path = f'{path}?{parsed.query}'
+
+    hdrs = {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Accept': 'application/json',
+        **(headers or {}),
+    }
+    logger.info(
+        'Nest HTTP %s %s (request_body=%s bytes, timeout=%ss)',
+        method, url, body_len, timeout,
     )
+
+    if parsed.scheme == 'https':
+        conn = http.client.HTTPSConnection(host, port, timeout=timeout)
+    else:
+        conn = http.client.HTTPConnection(host, port, timeout=timeout)
+
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode('utf-8', errors='replace')
-            if not raw:
-                return resp.status, {}
-            try:
-                return resp.status, json.loads(raw)
-            except json.JSONDecodeError:
-                return resp.status, {'raw': raw}
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode('utf-8', errors='replace')
+        logger.info('Nest 连接 %s:%s …', host, port)
+        conn.request(method, path, body=data, headers=hdrs)
+        logger.info(
+            'Nest 已发送 %s %s（%s bytes），等待服务端响应头；'
+            '若 Nest 无 HTTP 访问日志，请开 access log 或看 /ai/chat 控制器而非 Agent 任务列表',
+            method, path, body_len,
+        )
+        resp = conn.getresponse()
+        raw = resp.read().decode('utf-8', errors='replace')
+        logger.info(
+            'Nest HTTP %s %s -> HTTP %s (%s bytes response)',
+            method, url, resp.status, len(raw),
+        )
+        if not raw:
+            return resp.status, {}
         try:
-            parsed = json.loads(raw) if raw else {}
+            return resp.status, json.loads(raw)
         except json.JSONDecodeError:
-            parsed = {'raw': raw}
-        return e.code, parsed
+            return resp.status, {'raw': raw}
+    except http.client.HTTPException as e:
+        logger.error('Nest HTTP %s %s 协议错误: %s', method, url, e)
+        raise
+    except OSError as e:
+        logger.error('Nest HTTP %s %s 网络错误: %s', method, url, e)
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _extract_token(payload: Any) -> Optional[str]:
@@ -229,7 +261,7 @@ def extract_chat_text(payload: Any) -> str:
     if isinstance(data, str):
         return data.strip()
     if isinstance(data, dict):
-        for key in ('content', 'message', 'reply', 'text', 'answer', 'result', 'output'):
+        for key in ('message', 'content', 'reply', 'text', 'answer', 'result', 'output'):
             val = data.get(key)
             if val is None:
                 continue
@@ -265,6 +297,7 @@ def nest_ai_chat(
     image_bytes: Optional[bytes] = None,
     image_mime: str = 'image/png',
     timeout: int = 120,
+    model: str = '',
 ) -> str:
     """
     调用 POST /ai/chat，返回助手回复纯文本。
@@ -279,6 +312,26 @@ def nest_ai_chat(
     }
     if system_prompt:
         body['systemPrompt'] = system_prompt
+
+    from config import Config
+
+    use_model = (model or getattr(Config, 'NEST_CHAT_MODEL', '') or '').strip()
+    if use_model:
+        body['model'] = use_model
+
+    if image_bytes:
+        mm = int(getattr(Config, 'NEST_CHAT_TIMEOUT_MULTIMODAL', 360) or 360)
+        timeout = max(int(timeout), mm)
+        logger.info(
+            'Nest /ai/chat 多模态: image_bytes=%s mime=%s model=%s user_chars=%s system_chars=%s',
+            len(image_bytes),
+            image_mime,
+            use_model or '(Nest 默认，未传 model)',
+            len(user_text or ''),
+            len(system_prompt or ''),
+        )
+    elif use_model:
+        logger.debug('Nest /ai/chat model=%s', use_model)
 
     token = get_access_token()
     headers = {'Authorization': f'Bearer {token}'}
@@ -309,6 +362,12 @@ def nest_ai_chat(
     text = extract_chat_text(resp)
     if not text:
         raise RuntimeError(f'Nest /ai/chat 响应无文本内容: {resp}')
+    if isinstance(resp, dict) and logger.isEnabledFor(logging.DEBUG):
+        data = resp.get('data')
+        if isinstance(data, dict):
+            for k in ('model', 'modelId', 'model_id', 'agentModel', 'usage'):
+                if k in data:
+                    logger.debug('Nest /ai/chat 响应.%s=%s', k, data.get(k))
     return text
 
 

@@ -62,3 +62,8 @@ module_config.json
 *.exe
 browser_data
 playwright_drivers
+
+# 安特滑块临时截图 / 本地 Nest 调试 body
+antexiadan/captcha/*.png
+**/antexiadan/captcha/*.png
+nest_ai_chat_body.json

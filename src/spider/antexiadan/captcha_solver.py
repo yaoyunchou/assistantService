@@ -1,7 +1,7 @@
 """安特登录滑块：远程 AI 识别缺口距离（默认 Nest /ai/chat），在当前 Playwright 页拖动。
 
-验证码整体在腾讯 iframe 内（#tcaptcha_iframe / #tcaptcha_iframe_dy），
-截图只截验证码弹框/iframe，不截全页；拖动仍在本页完成。
+验证码在腾讯 #tcaptcha_iframe 内；截图优先该 iframe（须等滑块渲染），
+失败再试外层含「安全验证」的弹框；截完校验文件大小，避免误截登录页侧栏。
 """
 from __future__ import annotations
 
@@ -17,13 +17,7 @@ from utils.logger import get_logger
 
 logger = get_logger('AntexiadanCaptcha')
 
-# 外层弹框 / iframe（优先截弹框，再截 iframe）
-_DIALOG_SELECTORS = (
-    '#t_dialog',
-    '.tcaptcha-transform',
-    '#tcaptcha_transform',
-    'div.tcaptcha-transform',
-)
+# 腾讯验证码 iframe（安特登录页上即验证框本体，截图优先）
 _IFRAME_SELECTORS = (
     '#tcaptcha_iframe',
     '#tcaptcha_iframe_dy',
@@ -33,6 +27,15 @@ _IFRAME_SELECTORS = (
     'iframe[src*="turing.captcha"]',
     'iframe[src*="cap_union"]',
 )
+
+# 外层壳（部分站点标题在 iframe 外；仅作 iframe 截屏失败时的兜底）
+_DIALOG_SELECTORS = (
+    '.tcaptcha-transform',
+    '#tcaptcha_transform',
+    'div.tcaptcha-transform',
+    '#t_dialog',
+)
+
 
 # iframe 内滑块按钮（安特实测：#tcOperation > div.tc-fg-item.tc-slider-normal）
 _SLIDER_SELECTORS = (
@@ -63,6 +66,26 @@ _REFRESH_SELECTORS = (
 def _max_attempts() -> int:
     n = int(getattr(Config, 'ANTEXIADAN_CAPTCHA_MAX_ATTEMPTS', 5) or 5)
     return max(1, min(n, 10))
+
+
+def _captcha_drag_offset_px() -> int:
+    return int(getattr(Config, 'ANTEXIADAN_CAPTCHA_DRAG_OFFSET_PX', -5) or -5)
+
+
+def _captcha_delete_screenshots_enabled() -> bool:
+    return bool(getattr(Config, 'ANTEXIADAN_CAPTCHA_DELETE_SCREENSHOTS', True))
+
+
+def _remove_captcha_shot(shot_path: Optional[Path]) -> None:
+    """Nest 已读图后删除本地 PNG，避免 antexiadan/captcha 堆积。"""
+    if not shot_path or not _captcha_delete_screenshots_enabled():
+        return
+    try:
+        if shot_path.is_file():
+            shot_path.unlink()
+            logger.info('已删除验证码截图: %s', shot_path.name)
+    except OSError as e:
+        logger.warning('删除验证码截图失败 %s: %s', shot_path, e)
 
 
 def _screenshot_dir() -> Path:
@@ -107,25 +130,54 @@ def _captcha_ai_missing_message() -> str:
 
 
 def _captcha_user_prompt(attempt: int) -> str:
+    retry_note = ''
+    if attempt > 1:
+        retry_note = (
+            f'（第 {attempt} 次识别：若已刷新或滑块曾拖动，拼图块位置可能变化，仅按当前画面重算。）\n'
+        )
     return (
-        '这是安特登录页的「安全验证」滑块拼图截图（腾讯验证码弹框区域）。'
-        '画面上方有背景图与缺口，下方有蓝色滑块按钮。\n'
-        '请估算：需要把底部蓝色滑块按钮向右拖动多少像素，才能让拼图块对齐缺口。\n'
-        f'这是第 {attempt} 次尝试；若图中拼图块已偏右，请按当前画面重新估算。\n'
-        '只回复一行 JSON，不要其它文字，格式严格为：\n'
-        '{"distancePx": 整数, "confidence": 0到1的小数}\n'
-        'distancePx 一般在 80~280 之间。'
+        '这是腾讯滑块验证码整框 PNG（常见 360×360，含顶栏「安全验证」与底部滑条）。\n'
+        'distancePx 与 Playwright 水平拖动滑块的 CSS 像素 1:1。\n\n'
+        '请严格按下列步骤在**整张截图**坐标系中测量（原点=左上角，x 向右，单位像素）：\n'
+        '1）忽略顶栏文案与底部滑条，只在中间正方形「拼图背景图」内找目标。\n'
+        '2）x₁ = 左侧**可移动拼图小块**的水平几何中心（带凹凸切口、叠在背景上的那块，不是粉色/黄色大背景本身）。\n'
+        '3）x₂ = 右侧**深色半透明缺口阴影**的水平几何中心（目标槽位，通常在画面右 1/3）。\n'
+        '4）distancePx = round(x₂ − x₁)，只算水平差，不要用「缺口在右侧百分之几」估算。\n'
+        '5）自检：块在左、缺口在右时，x₁ 多在 40~120，x₂ 多在 250~310，故 distancePx 多在 190~270；'
+        '若你算出的 distancePx < 180，请重新标定 x₁、x₂ 后再给最终值。\n'
+        '不要凑整十（如 100/120/160/200），尽量给到个位。\n'
+        f'{retry_note}'
+        '只回复一行 JSON，不要其它文字：\n'
+        '{"distancePx": 整数, "pieceCenterX": 整数, "gapCenterX": 整数, "confidence": 0到1的小数}\n'
+        '（pieceCenterX、gapCenterX 即上面的 x₁、x₂，便于核对；distancePx 必须等于 gapCenterX − pieceCenterX。）'
     )
 
 
 _CAPTCHA_SYSTEM_JSON = (
-    '你是滑块验证码识图助手。只输出一行 JSON，格式 {"distancePx": 整数, "confidence": 0到1}，不要其它文字。'
+    '你是滑块验证码测距助手。必须按用户给出的 5 步流程先定位 pieceCenterX 与 gapCenterX，再算 distancePx。'
+    '只输出一行 JSON：'
+    '{"distancePx":整数,"pieceCenterX":整数,"gapCenterX":整数,"confidence":0到1}。'
+    '禁止跳过 x₁/x₂ 直接猜 distancePx；禁止无依据的整十默认值。'
 )
 
 
 def _estimate_distance_with_agent(screenshot_path: Path, attempt: int) -> Optional[int]:
-    from integrations.nest_client import nest_ai_chat
+    from integrations.nest_client import nest_ai_chat, resolve_nest_api_base
 
+    try:
+        from config import Config
+
+        mm_to = int(getattr(Config, 'NEST_CHAT_TIMEOUT_MULTIMODAL', 300) or 300)
+    except Exception:
+        mm_to = 300
+    logger.info(
+        '开始 Nest /ai/chat 识图 attempt=%s base=%s 图=%s（多模态约需 %ss，与 test_nest_chat_local 的 print 不同，请看本行及 integrations.nest_client 日志）',
+        attempt,
+        resolve_nest_api_base(),
+        screenshot_path.name,
+        mm_to,
+    )
+    t0 = time.time()
     try:
         image_bytes = screenshot_path.read_bytes()
         result = nest_ai_chat(
@@ -135,14 +187,92 @@ def _estimate_distance_with_agent(screenshot_path: Path, attempt: int) -> Option
             image_mime='image/png',
             timeout=120,
         )
-        logger.info('Nest AI 滑块识别回复(attempt=%s): %s', attempt, (result or '')[:300])
+        logger.info(
+            'Nest /ai/chat 识图完成 attempt=%s 耗时=%.1fs 回复: %s',
+            attempt,
+            time.time() - t0,
+            (result or '')[:300],
+        )
         return _parse_distance(result or '')
     except Exception as e:
-        logger.error('Nest AI 识别滑块失败: %s', e, exc_info=True)
+        logger.error(
+            'Nest /ai/chat 识图失败 attempt=%s 耗时=%.1fs: %s',
+            attempt,
+            time.time() - t0,
+            e,
+            exc_info=True,
+        )
         return None
 
 
-def _clip_from_box(box: Dict[str, float]) -> Optional[Dict[str, float]]:
+_MIN_CAPTCHA_SHOT_BYTES = 12_000
+_MIN_CAPTCHA_BOX = 260.0
+
+
+def _validate_captcha_screenshot(shot_path: Path) -> bool:
+    """拒绝误截到侧栏/空白 iframe（典型 <8KB，无拼图 UI）。"""
+    try:
+        size = shot_path.stat().st_size
+    except OSError:
+        return False
+    if size < _MIN_CAPTCHA_SHOT_BYTES:
+        logger.warning('验证码截图过小(%s bytes)，视为无效: %s', size, shot_path.name)
+        return False
+    try:
+        from PIL import Image
+
+        with Image.open(shot_path) as im:
+            w, h = im.size
+            if w < 300 or h < 300:
+                logger.warning('验证码截图尺寸过小 %sx%s: %s', w, h, shot_path.name)
+                return False
+    except Exception as e:
+        logger.debug('验证码截图无法打开为图片: %s', e)
+        return False
+    return True
+
+
+def _locator_is_captcha_dialog(locator) -> bool:
+    """弹层须可见且像腾讯滑块弹框（含安全验证/拖动滑块文案）。"""
+    try:
+        if locator.count() == 0:
+            return False
+        first = locator.first
+        if not first.is_visible():
+            return False
+        box = first.bounding_box(timeout=1500)
+        if not box or box.get('width', 0) < _MIN_CAPTCHA_BOX or box.get('height', 0) < _MIN_CAPTCHA_BOX:
+            return False
+        text = (first.inner_text(timeout=1200) or '').replace('\u00a0', ' ')
+        if '安全验证' in text and ('滑块' in text or '拼图' in text or '拖动' in text):
+            return True
+        if '拖动下方滑块' in text or '完成拼图' in text:
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _dialog_locator_candidates(page):
+    """优先：带文案过滤的完整弹框。"""
+    yield page.locator('#t_dialog').filter(has_text='安全验证')
+    yield page.locator('div.tcaptcha-transform').filter(has_text='安全验证')
+    yield page.locator('.tcaptcha-transform').filter(has_text='拖动')
+    for sel in _DIALOG_SELECTORS:
+        yield page.locator(sel).first
+
+
+def _captcha_frame_ready(page) -> bool:
+    """iframe 内滑块区域已渲染再截图。"""
+    if find_slider(page):
+        return True
+    frame = _wait_captcha_iframe(page, timeout_ms=3000)
+    if not frame:
+        return False
+    return _find_in_frame_object(frame, _SLIDER_SELECTORS) is not None
+
+
+def _clip_from_box(box: dict) -> Optional[dict]:
     try:
         x = max(0.0, float(box['x']))
         y = max(0.0, float(box['y']))
@@ -172,6 +302,8 @@ def _screenshot_element(page, locator, shot_path: Path, *, label: str) -> bool:
             '已截验证码区域(%s) css=%.0fx%.0f @ (%.0f,%.0f)',
             label, clip['width'], clip['height'], clip['x'], clip['y'],
         )
+        if not _validate_captcha_screenshot(shot_path):
+            return False
         return True
     except Exception as e:
         logger.debug('元素 screenshot 失败(%s): %s，改用 clip', label, e)
@@ -181,6 +313,8 @@ def _screenshot_element(page, locator, shot_path: Path, *, label: str) -> bool:
             '已 clip 截验证码区域(%s) css=%.0fx%.0f @ (%.0f,%.0f)',
             label, clip['width'], clip['height'], clip['x'], clip['y'],
         )
+        if not _validate_captcha_screenshot(shot_path):
+            return False
         return True
     except Exception as e:
         logger.debug('clip 截图失败(%s): %s', label, e)
@@ -188,24 +322,23 @@ def _screenshot_element(page, locator, shot_path: Path, *, label: str) -> bool:
 
 
 def _screenshot_captcha(page, shot_path: Path) -> bool:
-    """只截验证码弹框/iframe，不截全页。"""
-    for sel in _DIALOG_SELECTORS:
-        try:
-            loc = page.locator(sel).first
-            if _screenshot_element(page, loc, shot_path, label=f'dialog:{sel}'):
-                return True
-        except Exception:
-            continue
+    """优先截 #tcaptcha_iframe（验证框本体），再扫 frame / 外层弹框；拒绝无效小图。"""
+    _wait_captcha_iframe(page, timeout_ms=10_000)
+    try:
+        page.wait_for_timeout(400)
+    except Exception:
+        pass
+    if not _captcha_frame_ready(page):
+        logger.warning('验证码 iframe 内滑块尚未就绪，仍尝试截图')
 
     for sel in _IFRAME_SELECTORS:
         try:
             loc = page.locator(sel).first
-            if _screenshot_element(page, loc, shot_path, label=f'iframe:{sel}'):
+            if loc.is_visible() and _screenshot_element(page, loc, shot_path, label=f'iframe:{sel}'):
                 return True
         except Exception:
             continue
 
-    # 再扫 page.frames，用 owner iframe 元素截图
     try:
         for fr in page.frames:
             url = (fr.url or '').lower()
@@ -222,7 +355,16 @@ def _screenshot_captcha(page, shot_path: Path) -> bool:
     except Exception as e:
         logger.debug('扫 frames 截图失败: %s', e)
 
-    logger.warning('未定位到验证码弹框/iframe，截图失败（拒绝全页截图）')
+    for loc in _dialog_locator_candidates(page):
+        try:
+            if not _locator_is_captcha_dialog(loc):
+                continue
+            if _screenshot_element(page, loc, shot_path, label='dialog:filtered'):
+                return True
+        except Exception:
+            continue
+
+    logger.warning('未定位到有效验证码 iframe/弹框，截图失败（拒绝全页截图）')
     return False
 
 
@@ -513,58 +655,68 @@ def solve_captcha_with_agent(page, *, has_captcha_fn, max_attempts: int = 0) -> 
                 return _captcha_passed_result(solved_by='skip_after_login', attempts=i)
             continue
         try:
-            import base64
-            last_shot_b64 = base64.b64encode(shot_path.read_bytes()).decode()
-        except Exception:
-            last_shot_b64 = None
+            try:
+                import base64
+                last_shot_b64 = base64.b64encode(shot_path.read_bytes()).decode()
+            except Exception:
+                last_shot_b64 = None
 
-        if _login_gate_passed(page, has_captcha_fn):
-            return _captcha_passed_result(solved_by='skip_after_login', attempts=i)
+            if _login_gate_passed(page, has_captcha_fn):
+                return _captcha_passed_result(solved_by='skip_after_login', attempts=i)
 
-        distance = _estimate_distance_with_agent(shot_path, i)
-        if not distance:
-            last_error = f'第 {i} 次：Agent 未返回有效 distancePx'
-            logger.warning(last_error)
-            _click_refresh(page)
-            continue
-
-        distance = int(distance + random.randint(-3, 3))
-        slider = find_slider(page)
-        if not slider:
-            last_error = f'第 {i} 次：iframe 内未找到滑块按钮'
-            logger.warning(last_error)
-            _log_frames(page)
-            page.wait_for_timeout(1000)
-            slider = find_slider(page)
-            if not slider:
+            distance = _estimate_distance_with_agent(shot_path, i)
+            if not distance:
+                last_error = f'第 {i} 次：Agent 未返回有效 distancePx'
+                logger.warning(last_error)
                 _click_refresh(page)
                 continue
 
-        logger.info('第 %s/%s 次拖动滑块 distancePx=%s', i, attempts, distance)
-        try:
-            ok_drag = _human_drag(page, slider, distance)
-        except Exception as e:
-            ok_drag = False
-            last_error = f'第 {i} 次拖动异常: {e}'
+            raw_distance = distance
+            offset = _captcha_drag_offset_px()
+            distance = int(raw_distance + offset + random.randint(-3, 3))
+            if offset:
+                logger.info(
+                    'distancePx 修正: nest=%s offset=%s jitter后=%s',
+                    raw_distance, offset, distance,
+                )
+            slider = find_slider(page)
+            if not slider:
+                last_error = f'第 {i} 次：iframe 内未找到滑块按钮'
+                logger.warning(last_error)
+                _log_frames(page)
+                page.wait_for_timeout(1000)
+                slider = find_slider(page)
+                if not slider:
+                    _click_refresh(page)
+                    continue
+
+            logger.info('第 %s/%s 次拖动滑块 distancePx=%s', i, attempts, distance)
+            try:
+                ok_drag = _human_drag(page, slider, distance)
+            except Exception as e:
+                ok_drag = False
+                last_error = f'第 {i} 次拖动异常: {e}'
+                logger.warning(last_error)
+
+            if not ok_drag:
+                _click_refresh(page)
+                continue
+
+            page.wait_for_timeout(2000)
+            if _login_gate_passed(page, has_captcha_fn):
+                logger.info('滑块验证已通过（第 %s 次后）', i)
+                return _captcha_passed_result(
+                    solved_by='nest',
+                    attempts=i,
+                    distance_px=distance if distance else None,
+                )
+
+            last_error = f'第 {i} 次拖动后验证仍在'
             logger.warning(last_error)
-
-        if not ok_drag:
             _click_refresh(page)
-            continue
-
-        page.wait_for_timeout(2000)
-        if _login_gate_passed(page, has_captcha_fn):
-            logger.info('滑块验证已通过（第 %s 次后）', i)
-            return _captcha_passed_result(
-                solved_by='nest',
-                attempts=i,
-                distance_px=distance if distance else None,
-            )
-
-        last_error = f'第 {i} 次拖动后验证仍在'
-        logger.warning(last_error)
-        _click_refresh(page)
-        page.wait_for_timeout(800)
+            page.wait_for_timeout(800)
+        finally:
+            _remove_captcha_shot(shot_path)
 
     _notify_captcha_failed(
         attempts=attempts,

@@ -30,7 +30,15 @@ if _config_py_path.exists():
     get_module_config_file_path = _config_py_module.get_module_config_file_path
     load_module_config = _config_py_module.load_module_config
     save_module_config = _config_py_module.save_module_config
-    
+
     __all__ = ['Config', 'get_module_config_file_path', 'load_module_config', 'save_module_config']
+
+    if hasattr(_config_py_module, '_load_config_from_file'):
+        try:
+            _config_py_module._load_config_from_file()
+        except Exception as _cfg_err:
+            import traceback as _tb
+
+            print(f'[Config] 加载配置文件失败，使用默认配置: {_cfg_err}\n{_tb.format_exc()}')
 else:
     raise ImportError(f"config.py not found at {_config_py_path}")
