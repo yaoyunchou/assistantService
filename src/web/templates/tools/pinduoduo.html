@@ -335,6 +335,7 @@
     <h3 style="margin-bottom:12px;">请使用拼多多 APP 扫码登录</h3>
     <img id="qrcode-image-audit" class="qrcode-image-audit" src="" alt="二维码">
     <div id="qrcode-status-audit" class="qrcode-status-audit waiting"><span class="loading"></span> 等待扫码...</div>
+    <p style="margin-top:10px;font-size:12px;color:#7f8c8d;">二维码来自助手内置浏览器登录页截图，请用 APP 扫描本图（与弹出 Chromium 窗口为同一会话）。</p>
 </div>
 
 <!-- ERP 待审核 -->
@@ -687,23 +688,40 @@ function showError(message) {
     refreshBtn.addEventListener('click', loadPending);
 
     loginBtn.addEventListener('click', async () => {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = null;
+        document.getElementById('qrcode-container-audit').classList.add('show');
+        document.getElementById('qrcode-status-audit').className = 'qrcode-status-audit waiting';
+        document.getElementById('qrcode-status-audit').innerHTML =
+            '<span class="loading"></span> 正在打开登录页并截取二维码（约 10～60 秒，请勿同时点刷新列表）…';
         loginBtn.disabled = true;
+        const loginLabel = loginBtn.textContent;
+        loginBtn.textContent = '登录中…';
         try {
-            const r = await fetch('/api/pinduoduo/login', { method: 'POST' });
+            const r = await fetch('/api/pinduoduo/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ force: true }),
+            });
             const d = await r.json();
             if (d.success && d.qrcode) {
                 showQR(d.qrcode);
                 startLoginPoll();
             } else if (d.already_logged_in) {
-                alert(d.message || '已登录');
+                document.getElementById('qrcode-status-audit').textContent = d.message || '已登录';
                 loadPending();
             } else {
-                alert(d.message || d.error || '获取二维码失败');
+                document.getElementById('qrcode-status-audit').className = 'qrcode-status-audit waiting';
+                document.getElementById('qrcode-status-audit').style.background = '#f8d7da';
+                document.getElementById('qrcode-status-audit').style.color = '#721c24';
+                document.getElementById('qrcode-status-audit').textContent = d.error || d.message || '获取二维码失败';
+                showError(d.error || d.message || '获取二维码失败');
             }
         } catch (e) {
             showError(e.message);
         } finally {
             loginBtn.disabled = false;
+            loginBtn.textContent = loginLabel;
         }
     });
 

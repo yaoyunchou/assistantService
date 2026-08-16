@@ -204,14 +204,21 @@ function startLoginPoll() {
 }
 
 document.getElementById('btn-login').addEventListener('click', async function() {
-    this.disabled = true;
+    const btn = this;
+    document.getElementById('qrcode-container').classList.add('show');
+    document.getElementById('qrcode-status').innerHTML = '<span class="loading"></span> 正在打开登录页…';
+    btn.disabled = true;
     try {
-        const d = await (await fetch('/api/pinduoduo/login', {method:'POST'})).json();
+        const d = await (await fetch('/api/pinduoduo/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force: true }),
+        })).json();
         if (d.success && d.qrcode) { showQRCode(d.qrcode); startLoginPoll(); }
         else if (d.already_logged_in) alert(d.message || '已登录');
-        else alert(d.message || d.error || '获取二维码失败');
+        else alert(d.error || d.message || '获取二维码失败');
     } catch(e) { alert('请求失败: ' + e.message); }
-    finally { this.disabled = false; }
+    finally { btn.disabled = false; }
 });
 
 // ── 渲染表格 ──────────────────────────────────────

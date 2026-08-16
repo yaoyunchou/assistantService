@@ -48,16 +48,36 @@ def pinduoduo_start_login():
         if not pool:
             routes_logger.error("[PinduoduoLogin] 浏览器池未初始化")
             return jsonify({'success': False, 'error': '浏览器池未初始化'}), 500
+        body = request.get_json(silent=True) or {}
+        force = body.get('force', True)
+        if force is False or force == 0 or force == '0':
+            force = False
+        else:
+            force = bool(force)
+
+        try:
+            pool.ensure_visible(timeout=25.0)
+        except Exception as e:
+            routes_logger.warning("[PinduoduoLogin] ensure_visible: %s", e)
+
         from spider.pinduoduo.client import PinduoduoClient
-        routes_logger.info("[PinduoduoLogin] 获取浏览器页面...")
-        qrcode_data = pool.execute(
-            lambda page: PinduoduoClient(page=page).show_login_qrcode(),
-            timeout=60
-        )
+        routes_logger.info("[PinduoduoLogin] 获取浏览器页面 force=%s", force)
+
+        def _run(page):
+            return PinduoduoClient(page=page).show_login_qrcode(force_relogin=force)
+
+        qrcode_data = pool.execute(_run, timeout=120)
         if qrcode_data == "ALREADY_LOGGED_IN":
-            return jsonify({'success': True, 'already_logged_in': True, 'message': '已经登录，无需扫码'}), 200
+            return jsonify({
+                'success': True,
+                'already_logged_in': True,
+                'message': '浏览器里已是登录态；若业务仍提示未登录，可关闭无头模式在弹出窗口确认，或清理 browser_data 后重试',
+            }), 200
         if not qrcode_data:
-            return jsonify({'success': False, 'error': '获取二维码失败，请检查网络连接或页面加载'}), 500
+            return jsonify({
+                'success': False,
+                'error': '未能打开登录页或截取二维码；请查看助手弹出的 Chromium 窗口，或稍后重试（勿与「刷新列表」同时点）',
+            }), 500
         return jsonify({
             'success': True,
             'already_logged_in': False,
@@ -84,9 +104,10 @@ def pinduoduo_check_login():
         if not pool:
             return jsonify({'success': False, 'error': '浏览器池未初始化'}), 500
         from spider.pinduoduo.client import PinduoduoClient
+        # 单次内最多等约 12s（含「已扫码待确认」等待）；前端约 2s 一轮轮询
         logged_in = pool.execute(
-            lambda page: PinduoduoClient(page=page).check_login_complete(timeout=0),
-            timeout=30
+            lambda page: PinduoduoClient(page=page).check_login_complete(timeout=12),
+            timeout=50
         )
         routes_logger.info(f"[PinduoduoCheckLogin] 登录状态检查结果: {logged_in}")
         return jsonify({

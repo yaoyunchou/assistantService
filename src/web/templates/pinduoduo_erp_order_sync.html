@@ -225,17 +225,29 @@ function startLoginPolling() {
 
 document.getElementById('erp-login-btn').addEventListener('click', async function () {
     const btn = this;
+    const container = document.getElementById('qrcode-container');
+    const status = document.getElementById('qrcode-status');
+    container.classList.add('show');
+    status.className = 'qrcode-status waiting';
+    status.innerHTML = '<span class="loading"></span> 正在打开登录页…';
     btn.disabled = true;
     try {
-        const response = await fetch('/api/pinduoduo/login', { method: 'POST' });
+        const response = await fetch('/api/pinduoduo/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force: true }),
+        });
         const data = await response.json();
         if (data.success && data.qrcode) {
             showQRCode(data.qrcode);
             startLoginPolling();
         } else if (data.already_logged_in) {
-            alert(data.message || '已登录');
+            status.className = 'qrcode-status success';
+            status.textContent = data.message || '已登录';
         } else {
-            alert(data.message || data.error || '获取二维码失败');
+            status.className = 'qrcode-status error';
+            status.textContent = data.error || data.message || '获取二维码失败';
+            alert(data.error || data.message || '获取二维码失败');
         }
     } catch (e) {
         alert('请求失败: ' + e.message);

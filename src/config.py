@@ -115,6 +115,18 @@ class Config:
     # 状态文件将保存在用户数据目录，避免权限问题
     PINDUODUO_STATUS_PATH = None  # None表示使用默认的用户数据目录
     PINDUODUO_TARGET_URL = 'https://mms.pinduoduo.com/home'
+    # 复用拼多多桌面客户端（PddWebWorkbench / 内嵌 Chromium）的登录态 Cookie
+    # 桌面端登录 ERP 后，助手会自动把对应 profile 的会话 cookie 注入 Playwright，
+    # 从而跳过扫码。需在与桌面端相同的 Windows 用户下运行（DPAPI 解密）。
+    # 注：实测桌面端 webview 无 PASS_ID（原生宿主注入鉴权），仅复制 cookie 无法免扫码，
+    # 故默认关闭；保留代码以便后续走「共享 profile」方案或再启用。
+    _pdd_ck_imp = (os.getenv('PDD_DESKTOP_COOKIE_IMPORT') or '0').strip().lower()
+    PDD_DESKTOP_COOKIE_IMPORT = _pdd_ck_imp not in ('0', 'false', 'no', 'off')
+    # PddBrowser User Data 目录（默认公共文档）
+    PDD_DESKTOP_USER_DATA_DIR = (os.getenv('PDD_DESKTOP_USER_DATA_DIR') or '').strip() or None
+    # 指定 profile；留空则自动挑「最近活跃且含 ERP 登录 cookie」的 cs_XXX
+    PDD_DESKTOP_PROFILE = (os.getenv('PDD_DESKTOP_PROFILE') or '').strip() or None
+
     # 商家订单列表（同步地址、前端脚本场景与浏览器一致，使用 tab=0）
     PINDUODUO_ORDERS_LIST_URL = os.getenv(
         'PINDUODUO_ORDERS_LIST_URL',

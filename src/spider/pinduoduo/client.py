@@ -8,6 +8,7 @@ import base64
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 from playwright.sync_api import Page, Browser, BrowserContext, TimeoutError
 from config import Config
 from utils.logger import get_logger
@@ -16,6 +17,52 @@ from notify import login_alert as _notify_login_alert
 from .feishutable import sync_orders_to_feishu
 
 logger = get_logger('PinduoduoClient')
+
+# 复用拼多多桌面客户端登录态（可选，按 Config.PDD_DESKTOP_COOKIE_IMPORT 开关）
+try:
+    from . import pdd_desktop_cookies as _pdd_desktop_cookies
+except Exception as _e:  # 缺少 win32crypt / cryptography 时降级
+    _pdd_desktop_cookies = None
+    logger.debug("pdd_desktop_cookies 未启用: %s", _e)
+
+# 仅看 path，避免 redirectUrl=...home 误判；扫码成功后 URL 可能仍停在 /login 数秒
+_PDD_LOGIN_PATH_MARKERS = ('/login', '/passport')
+_PDD_LOGGED_IN_PATH_MARKERS = ('/home', '/erp/', '/orders', '/mms/', '/goods/')
+# 「扫码成功」多半只是手机已扫、还要点确认；不能据此立刻 goto home（会撞回 login）
+_PDD_SCANNED_WAITING_TEXT = (
+    '扫码成功', '扫描成功', '请在手机上确认', '请在手机确认', '请确认登录',
+)
+_PDD_LOGIN_DONE_TEXT = (
+    '登录成功', '正在跳转', '正在进入', '验证成功', '登录中',
+)
+
+
+def _pdd_url_path(url: str) -> str:
+    try:
+        return (urlparse(url or '').path or '').lower()
+    except Exception:
+        return ''
+
+
+def _pdd_url_path_is_login(url: str) -> bool:
+    path = _pdd_url_path(url)
+    if path:
+        if any(m in path for m in _PDD_LOGIN_PATH_MARKERS):
+            return True
+        return path.rstrip('/').endswith('login')
+    return 'login' in (url or '').lower()
+
+
+def _pdd_url_path_suggests_logged_in(url: str) -> bool:
+    host = (urlparse(url or '').netloc or '').lower()
+    if 'pinduoduo.com' not in host:
+        return False
+    if _pdd_url_path_is_login(url):
+        return False
+    path = _pdd_url_path(url)
+    if any(m in path for m in _PDD_LOGGED_IN_PATH_MARKERS):
+        return True
+    return bool(path and path not in ('/', ''))
 
 
 class PinduoduoClient:
@@ -533,14 +580,163 @@ class PinduoduoClient:
                 "message": f"读取状态失败: {str(e)}"
             }
     
-    def show_login_qrcode(self, skip_initial_navigation: bool = False) -> Optional[str]:
+    def _screenshot_login_qrcode(self) -> Optional[str]:
+        """从当前登录页截取二维码（Playwright 后台浏览器画面，非用户桌面截图）。"""
+        logger.info("等待登录页二维码元素…")
+        qr_selectors = [
+            '.qr-code canvas',
+            'div.qr-code canvas',
+            'canvas[class*="qr"]',
+            '[class*="qr-code"] canvas',
+            'img[alt*="二维码"]',
+            'img[src*="qr"]',
+            '.qrcode img',
+            '#qrcode img',
+            '[class*="qrcode"] img',
+            'img[class*="qr"]',
+            'canvas',
+        ]
+        qr_element = None
+        qr_selector = None
+        for selector in qr_selectors:
+            try:
+                element = self.page.wait_for_selector(selector, timeout=5000, state='visible')
+                if element:
+                    logger.info("找到二维码元素: %s", selector)
+                    qr_element = element
+                    qr_selector = selector
+                    break
+            except TimeoutError:
+                continue
+            except Exception as e:
+                logger.debug("选择器 %s 查找失败: %s", selector, e)
+                continue
+
+        if qr_element and qr_selector and 'canvas' in qr_selector:
+            time.sleep(0.5)
+
+        if not qr_element:
+            logger.warning("未找到二维码元素，截取登录页视口作为二维码")
+            try:
+                screenshot_bytes = self.page.screenshot(full_page=False)
+                return f"data:image/png;base64,{base64.b64encode(screenshot_bytes).decode('utf-8')}"
+            except Exception as e:
+                logger.error("登录页截图失败: %s", e, exc_info=True)
+                return None
+
+        try:
+            qr_element.wait_for_element_state('visible', timeout=2000)
+            screenshot_bytes = qr_element.screenshot()
+            logger.info("二维码元素截图成功 (%s)", qr_selector)
+            return f"data:image/png;base64,{base64.b64encode(screenshot_bytes).decode('utf-8')}"
+        except Exception as e:
+            logger.warning("二维码元素截图失败: %s，改截整页", e)
+            try:
+                screenshot_bytes = self.page.screenshot(full_page=False)
+                return f"data:image/png;base64,{base64.b64encode(screenshot_bytes).decode('utf-8')}"
+            except Exception as e2:
+                logger.error("整页截图失败: %s", e2, exc_info=True)
+                return None
+
+    def _navigate_for_login_qrcode(
+        self,
+        *,
+        skip_initial_navigation: bool,
+        force_relogin: bool,
+    ) -> None:
+        if skip_initial_navigation:
+            logger.info("show_login_qrcode: 使用当前页判断登录/二维码")
+            try:
+                self.page.wait_for_load_state('domcontentloaded', timeout=5000)
+            except Exception:
+                pass
+            return
+
+        if force_relogin:
+            target = (
+                getattr(Config, 'PINDUODUO_ERP_ORDER_AUDIT_URL', None)
+                or 'https://mms.pinduoduo.com/erp/order/audit'
+            )
+            logger.info("重新登录：打开 ERP 页触发登录: %s", target)
+        else:
+            target = self.target_url
+            logger.info("正在访问首页: %s", target)
+
+        self.page.goto(target, wait_until='domcontentloaded', timeout=120000)
+        try:
+            self.page.bring_to_front()
+        except Exception as e:
+            logger.debug("bring_to_front: %s", e)
+        try:
+            self.page.wait_for_load_state('domcontentloaded', timeout=8000)
+            self.page.wait_for_load_state('networkidle', timeout=12000)
+        except Exception:
+            pass
+
+        if force_relogin and not _pdd_url_path_is_login(self.page.url or ''):
+            for login_url in (
+                'https://mms.pinduoduo.com/login',
+                'https://mms.pinduoduo.com/passport/login',
+            ):
+                if _pdd_url_path_is_login(self.page.url or ''):
+                    break
+                logger.info("仍未到登录页，尝试: %s", login_url)
+                try:
+                    self.page.goto(login_url, wait_until='domcontentloaded', timeout=60000)
+                    self.page.wait_for_load_state('domcontentloaded', timeout=8000)
+                except Exception as e:
+                    logger.warning("打开登录 URL 失败 %s: %s", login_url, e)
+
+    def _import_desktop_cookies(self) -> int:
+        """
+        把拼多多桌面客户端的会话 cookie 注入当前 Playwright context。
+        仅在 Config.PDD_DESKTOP_COOKIE_IMPORT 开启、且依赖可用时执行。
+        返回注入条数（0 表示未注入或失败）。
+        """
+        if not getattr(Config, 'PDD_DESKTOP_COOKIE_IMPORT', False):
+            return 0
+        if _pdd_desktop_cookies is None:
+            logger.debug("桌面端 cookie 模块未加载，跳过注入")
+            return 0
+        if not self.page:
+            return 0
+        try:
+            ctx = self.page.context
+        except Exception as e:
+            logger.debug("获取 context 失败: %s", e)
+            return 0
+        user_data_dir = getattr(Config, 'PDD_DESKTOP_USER_DATA_DIR', None)
+        profile = getattr(Config, 'PDD_DESKTOP_PROFILE', None)
+        ud = None
+        if user_data_dir:
+            from pathlib import Path
+            ud = Path(user_data_dir)
+        try:
+            cookies = _pdd_desktop_cookies.get_playwright_cookies(
+                user_data_dir=ud, profile=profile
+            )
+        except Exception as e:
+            logger.warning("读取拼多多桌面端 cookie 失败: %s", e)
+            return 0
+        if not cookies:
+            logger.info("桌面端无可复用 cookie（可能未登录 ERP）")
+            return 0
+        n = _pdd_desktop_cookies.import_cookies_to_context(ctx, cookies)
+        logger.info("已从拼多多桌面端注入 %d 条 cookie 到 Playwright context", n)
+        return n
+
+    def show_login_qrcode(
+        self,
+        skip_initial_navigation: bool = False,
+        force_relogin: bool = False,
+    ) -> Optional[str]:
         """
         显示登录二维码（如果需要）
         
         逻辑：
-        1. 默认先访问首页（target_url）；若 skip_initial_navigation=True 则使用当前页（适合已从订单页被重定向到登录的情况）
-        2. 如果被拦截到登录页面，显示登录二维码
-        3. 如果没有被拦截，直接返回成功（不需要二维码）
+        1. 默认先访问首页；force_relogin=True 时打开 ERP 审核页（易触发登录）
+        2. skip_initial_navigation=True 则用当前页（订单/ERP 被重定向到登录时）
+        3. 二维码来自 **Playwright 后台浏览器** 内登录页 canvas/区域截图，经 base64 给前端展示
         
         Returns:
             二维码图片的Base64编码，如果已登录或失败返回None
@@ -551,119 +747,55 @@ class PinduoduoClient:
             return None
         
         try:
-            if not skip_initial_navigation:
-                # 访问首页（由于使用了持久化上下文，Cookie会自动由浏览器加载）
-                target = self.target_url
-                logger.info(f"正在访问首页: {target}")
-                self.page.goto(target, wait_until='domcontentloaded', timeout=30000)
-                
-                # 等待页面加载和导航完成
+            # 非强制重登时，优先复用拼多多桌面客户端的登录态 cookie，能跳过扫码
+            injected = 0
+            if not force_relogin:
+                injected = self._import_desktop_cookies()
+
+            self._navigate_for_login_qrcode(
+                skip_initial_navigation=skip_initial_navigation,
+                force_relogin=force_relogin,
+            )
+
+            current_url = self.page.url or ''
+            logger.info("当前URL: %s", current_url)
+
+            # 已注入桌面 cookie 且当前在登录页时，再尝试直接跳 ERP 目标页，
+            # 若桌面会话仍有效即可免扫码；失效则回到登录页截二维码
+            if (
+                injected
+                and not force_relogin
+                and _pdd_url_path_is_login(current_url)
+                and not skip_initial_navigation
+            ):
+                logger.info("已注入桌面 cookie 但仍在登录页，尝试直接跳 ERP 验证会话")
                 try:
-                    self.page.wait_for_load_state('domcontentloaded', timeout=5000)
-                    self.page.wait_for_load_state('networkidle', timeout=10000)
-                except:
-                    # 如果超时，继续执行，至少 DOM 应该已经加载
-                    pass
-            else:
-                logger.info("show_login_qrcode: 跳过初始导航，根据当前页面判断登录/二维码")
-                try:
-                    self.page.wait_for_load_state('domcontentloaded', timeout=5000)
-                except:
-                    pass
-            
-            # 检测当前URL是否包含login（被拦截）
-            current_url = self.page.url
-            logger.info(f"当前URL: {current_url}")
-            
-            if 'login' in current_url.lower():
-                # 被拦截到登录页面，需要显示二维码
-                logger.info("检测到被拦截到登录页面，需要显示登录二维码")
-                
-                # 等待二维码元素出现
-                logger.info("等待二维码元素出现...")
-                
-                # 尝试多个可能的二维码选择器
-                qr_selectors = [
-                    '.qr-code canvas',  # 拼多多登录页面的二维码（div.qr-code > canvas）
-                    'div.qr-code canvas',  # 更明确的选择器
-                    'canvas[class*="qr"]',  # 包含 qr 的 canvas
-                    '[class*="qr-code"] canvas',  # 包含 qr-code 的元素下的 canvas
-                    'img[alt*="二维码"]',  # 图片形式的二维码
-                    'img[src*="qr"]',  # src 包含 qr 的图片
-                    '.qrcode img',  # 通用二维码容器下的图片
-                    '#qrcode img',  # ID 为 qrcode 的元素下的图片
-                    '[class*="qrcode"] img',  # 包含 qrcode 的元素下的图片
-                    'img[class*="qr"]',  # class 包含 qr 的图片
-                    'canvas'  # 最后的备用选择器（可能匹配到其他 canvas）
-                ]
-                
-                qr_element = None
-                qr_selector = None
-                for selector in qr_selectors:
-                    try:
-                        element = self.page.wait_for_selector(selector, timeout=5000, state='visible')
-                        if element:
-                            logger.info(f"找到二维码元素: {selector}")
-                            qr_element = element
-                            qr_selector = selector
-                            break
-                    except TimeoutError:
-                        continue
-                    except Exception as e:
-                        logger.debug(f"选择器 {selector} 查找失败: {e}")
-                        continue
-                
-                # 如果是 canvas 元素，等待一小段时间确保绘制完成
-                if qr_element and qr_selector and 'canvas' in qr_selector:
-                    logger.info("检测到 canvas 二维码，等待绘制完成...")
-                    time.sleep(0.5)  # 等待 canvas 绘制完成
-                
-                if not qr_element:
-                    # 如果找不到二维码元素，截取整个页面
-                    logger.warning("未找到二维码元素，截取整个页面作为二维码")
-                    try:
-                        screenshot_bytes = self.page.screenshot(full_page=False)
-                        qrcode_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
-                        logger.info("页面截图成功")
-                        return f"data:image/png;base64,{qrcode_base64}"
-                    except Exception as e:
-                        logger.error(f"页面截图失败: {e}", exc_info=True)
-                        return None
-                
-                # 截取二维码元素
-                try:
-                    # 确保元素可见
-                    qr_element.wait_for_element_state('visible', timeout=2000)
-                    screenshot_bytes = qr_element.screenshot()
-                    qrcode_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
-                    logger.info(f"二维码元素截图成功 (选择器: {qr_selector})")
-                    return f"data:image/png;base64,{qrcode_base64}"
+                    target = (
+                        getattr(Config, 'PINDUODUO_ERP_ORDER_AUDIT_URL', None)
+                        or self.target_url
+                    )
+                    self.page.goto(target, wait_until='domcontentloaded', timeout=60000)
+                    self.page.wait_for_load_state('domcontentloaded', timeout=8000)
                 except Exception as e:
-                    logger.warning(f"二维码元素截图失败: {e}，尝试截取整个页面")
-                    # 如果元素截图失败，截取整个页面
-                    try:
-                        screenshot_bytes = self.page.screenshot(full_page=False)
-                        qrcode_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
-                        logger.info("页面截图成功（备用方案）")
-                        return f"data:image/png;base64,{qrcode_base64}"
-                    except Exception as e2:
-                        logger.error(f"页面截图也失败: {e2}", exc_info=True)
-                        return None
-            else:
-                # 没有被拦截，说明已经登录成功
-                logger.info("未被拦截，已经登录成功")
-                
-                # 等待页面完全加载
-                try:
-                    self.page.wait_for_load_state('networkidle', timeout=5000)
-                except:
-                    pass
-                
-                # 更新执行状态（持久化上下文中Cookie已自动保存）
-                self._save_execution_status(success=True, message="登录成功（无需扫码）")
-                
-                # 返回特殊值，表示已经登录，不需要二维码
-                return "ALREADY_LOGGED_IN"
+                    logger.warning("尝试跳 ERP 失败: %s", e)
+                current_url = self.page.url or ''
+                logger.info("跳转后 URL: %s", current_url)
+
+            if _pdd_url_path_is_login(current_url):
+                logger.info("检测到登录页，截取二维码")
+                return self._screenshot_login_qrcode()
+
+            if force_relogin:
+                logger.warning("重新登录：未能进入登录页，URL=%s", current_url)
+                return None
+
+            logger.info("未被拦截，已经登录成功")
+            try:
+                self.page.wait_for_load_state('networkidle', timeout=5000)
+            except Exception:
+                pass
+            self._save_execution_status(success=True, message="登录成功（无需扫码）")
+            return "ALREADY_LOGGED_IN"
         
         except TimeoutError:
             logger.error("页面加载超时")
@@ -709,77 +841,181 @@ class PinduoduoClient:
             logger.error(f"检查登录状态失败: {e}", exc_info=True)
             return False
     
-    def _check_login_status_once(self) -> bool:
+    def _login_page_text_compact(self) -> str:
+        snippets = []
+        try:
+            snippets.append(
+                self.page.evaluate(
+                    "() => (document.body && document.body.innerText) ? document.body.innerText : ''"
+                )
+                or ''
+            )
+        except Exception:
+            pass
+        for frame in self.page.frames:
+            if frame is self.page.main_frame:
+                continue
+            try:
+                snippets.append(
+                    frame.evaluate(
+                        "() => (document.body && document.body.innerText) ? document.body.innerText : ''"
+                    )
+                    or ''
+                )
+            except Exception:
+                continue
+        return ''.join(''.join(s.split()) for s in snippets)
+
+    def _log_all_tab_urls(self) -> None:
+        try:
+            urls = []
+            for i, p in enumerate(self.page.context.pages):
+                try:
+                    urls.append(f'[{i}]{(p.url or "")[:120]}')
+                except Exception:
+                    urls.append(f'[{i}]?')
+            logger.info('当前标签页: %s', ' | '.join(urls))
+        except Exception as e:
+            logger.debug('列举标签页失败: %s', e)
+
+    def _find_logged_in_tab_url(self) -> Optional[str]:
+        """其它标签若已进商家后台，返回其 URL（同 context Cookie 可复用）。"""
+        try:
+            for p in self.page.context.pages:
+                try:
+                    url = p.url or ''
+                    if not _pdd_url_path_is_login(url) and _pdd_url_path_suggests_logged_in(url):
+                        return url
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
+
+    def _wait_leave_login_or_done_text(self, wait_sec: float = 12.0) -> bool:
+        """扫码确认后优先等页面自己跳转，不要过早 goto home。"""
+        deadline = time.time() + wait_sec
+        while time.time() < deadline:
+            url = self.page.url or ''
+            if not _pdd_url_path_is_login(url) and _pdd_url_path_suggests_logged_in(url):
+                return True
+            other = self._find_logged_in_tab_url()
+            if other:
+                logger.info('其它标签已登录: %s，主标签跳转首页', other[:120])
+                self._try_finish_login_navigation()
+                return not _pdd_url_path_is_login(self.page.url or '')
+            compact = self._login_page_text_compact()
+            if any(t in compact for t in _PDD_LOGIN_DONE_TEXT):
+                logger.info('登录页出现「登录成功/正在跳转」类文案，稍等自动跳转')
+                time.sleep(1.5)
+                if not _pdd_url_path_is_login(self.page.url or ''):
+                    return True
+                self._try_finish_login_navigation()
+                return not _pdd_url_path_is_login(self.page.url or '')
+            if any(t in compact for t in _PDD_SCANNED_WAITING_TEXT):
+                logger.info('已扫码，等待手机确认登录… URL=%s', (self.page.url or '')[:120])
+            time.sleep(1.0)
+        return False
+
+    def _try_finish_login_navigation(self) -> None:
+        target = self.target_url or 'https://mms.pinduoduo.com/home'
+        logger.info('尝试跳转商家后台: %s', target)
+        try:
+            self.page.goto(target, wait_until='domcontentloaded', timeout=45000)
+        except Exception as e:
+            logger.warning('登录后跳转失败: %s', e)
+        try:
+            self.page.wait_for_load_state('domcontentloaded', timeout=8000)
+        except Exception:
+            pass
+        after = self.page.url or ''
+        if _pdd_url_path_is_login(after):
+            logger.warning(
+                '跳转后仍被拦回登录页（会话未建立）: %s — 请重新点「重新登录」扫最新二维码，并在手机上点确认',
+                after[:160],
+            )
+
+    def _mark_logged_in_success(self, current_url: str) -> bool:
+        logger.info('检测到已登录 - URL: %s', current_url)
+        try:
+            self.page.wait_for_load_state('networkidle', timeout=5000)
+        except Exception:
+            pass
+        self._save_execution_status(success=True, message='登录成功')
+        return True
+
+    def _page_looks_logged_in(self, url: str, page: Optional[Page] = None) -> bool:
+        page = page or self.page
+        if _pdd_url_path_is_login(url):
+            return False
+        if _pdd_url_path_suggests_logged_in(url) or '/home' in _pdd_url_path(url):
+            return True
+        indicators = [
+            '[data-testid="beast-core-table-middle-thead"]',
+            '[data-testid="beast-core-table"]',
+            '.mms-header',
+            '[class*="MmsHeader"]',
+        ]
+        for indicator in indicators:
+            try:
+                if page.query_selector(indicator):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _check_login_status_once(self, *, _finalize_attempted: bool = False) -> bool:
         """
         检查一次登录状态（不等待）
         
         Returns:
             是否已登录
         """
+        if not self.page:
+            return False
         try:
-            # 先等待页面稳定，确保 URL 已经更新
             try:
                 self.page.wait_for_load_state('domcontentloaded', timeout=2000)
-            except:
-                # 如果超时，继续执行，使用当前 URL
+            except Exception:
                 pass
-            
-            # 等待页面稳定后，page.url 应该已经更新到实际 URL
-            current_url = self.page.url
-            logger.debug(f"当前URL: {current_url}")
-            
-            # 方法1: 检查URL是否跳转到首页（不包含login）
-            url_contains_login = 'login' in current_url.lower()
-            
-            # 方法2: 检查URL是否包含home（登录成功通常会跳转到home）
-            url_contains_home = 'home' in current_url.lower() or 'mms.pinduoduo.com/home' in current_url.lower()
-            
-            # 方法3: 检查页面内容，查找登录后的特征元素
-            page_has_logged_in_content = False
-            try:
-                self.page.wait_for_load_state('domcontentloaded', timeout=2000)
-                
-                logged_in_indicators = [
-                    'header',
-                    '.user-info',
-                    '.nav-menu',
-                    '[class*="header"]',
-                ]
-                
-                for indicator in logged_in_indicators:
-                    try:
-                        element = self.page.query_selector(indicator)
-                        if element:
-                            page_has_logged_in_content = True
-                            logger.debug(f"找到登录后特征元素: {indicator}")
-                            break
-                    except:
-                        continue
-            except Exception as e:
-                logger.debug(f"检查页面内容时出错: {e}")
-            
-            # 判断是否登录成功
-            # 必须不包含 login 关键字，且必须包含 home 关键字或有特征元素
-            # 这样可以避免 redirectUrl=...home 导致的误判
-            is_logged_in = (not url_contains_login) and (url_contains_home or page_has_logged_in_content)
-            
-            if is_logged_in:
-                logger.info(f"检测到已登录 - URL: {current_url}")
-                
-                # 等待页面完全加载
-                try:
-                    self.page.wait_for_load_state('networkidle', timeout=5000)
-                except:
-                    pass
-                
-                # 更新执行状态（持久化上下文中Cookie已自动保存）
-                self._save_execution_status(success=True, message="登录成功")
-                
-                return True
-            else:
-                logger.debug(f"尚未登录 - URL: {current_url}")
-                return False
-        
+
+            current_url = self.page.url or ''
+            logger.debug('当前URL: %s', current_url)
+
+            other = self._find_logged_in_tab_url()
+            if other and _pdd_url_path_is_login(current_url):
+                self._log_all_tab_urls()
+                logger.info('主标签仍在登录页，但其它标签已登录，同步跳转')
+                if not _finalize_attempted:
+                    self._try_finish_login_navigation()
+                    return self._check_login_status_once(_finalize_attempted=True)
+
+            on_login_path = _pdd_url_path_is_login(current_url)
+            if on_login_path:
+                compact = self._login_page_text_compact()
+                if any(t in compact for t in _PDD_LOGIN_DONE_TEXT):
+                    logger.info('登录页出现登录完成文案，等待跳转')
+                    if not _finalize_attempted:
+                        if self._wait_leave_login_or_done_text(wait_sec=10):
+                            return self._check_login_status_once(_finalize_attempted=True)
+                        self._try_finish_login_navigation()
+                        return self._check_login_status_once(_finalize_attempted=True)
+                elif any(t in compact for t in _PDD_SCANNED_WAITING_TEXT):
+                    # 只扫了码、未确认时不要 goto home（日志里曾因此撞回 login）
+                    logger.info(
+                        '登录页提示已扫码/待手机确认（尚未判定登录成功）URL=%s',
+                        current_url[:140],
+                    )
+                    if not _finalize_attempted and self._wait_leave_login_or_done_text(wait_sec=6):
+                        return self._check_login_status_once(_finalize_attempted=True)
+                    return False
+
+            if self._page_looks_logged_in(current_url):
+                return self._mark_logged_in_success(current_url)
+
+            logger.debug('尚未登录 - URL: %s', current_url)
+            return False
+
         except Exception as e:
             logger.error(f"检查登录状态时出错: {e}", exc_info=True)
             return False

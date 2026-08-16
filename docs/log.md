@@ -1,5 +1,41 @@
 # 变更日志
 
+## 2026-08-06 - 拼多多桌面端 Cookie 复用调研（结论：不可行，保留代码默认关闭）
+
+- **背景**：用户希望复用拼多多桌面客户端（`C:\Program Files (x86)\pinduoduo\PddWorkbench.exe`，内嵌 Chromium）的登录态，让助手每次进 ERP 时免扫码。
+- **调研过程**：
+  - 确认桌面端是 Chromium 104 内核（`pddbrowser104\chrome.dll`），通过运行进程命令行定位到 User Data 目录：`C:\Users\Public\Documents\PDD\PddBrowser104\User Data`，主 profile `StaticPddBrowser` 为空，登录态分散在多个 `cs_XXXXXXXX` profile（按店铺区分）
+  - Cookie 用 AES-256-GCM 加密，主密钥用 Windows DPAPI 保护（`Local State` 的 `os_crypt.encrypted_key`）。本机已具备 `win32crypt` + `cryptography`，可成功解密
+  - 写了通用模块 [`src/spider/pinduoduo/pdd_desktop_cookies.py`](../src/spider/pinduoduo/pdd_desktop_cookies.py)：读 `Local State` → DPAPI 解主密钥 → 复制 SQLite（避开浏览器锁）→ 解密 v10/v11 cookie → 转成 Playwright `add_cookies` 格式；自动挑「最近活跃且含 ERP 登录 cookie」的 profile
+  - 端到端验证（`scripts/test_import_cookies_e2e.py`）：把桌面端 cookie 注入全新 Playwright context 后访问 `mms.pinduoduo.com/erp/order/audit`，**仍被重定向回登录页**；换 PddBrowser 风格 User-Agent 同样失败
+- **结论**：桌面端 webview **没有 `PASS_ID` cookie**（MMS ERP 真正鉴权靠它），只有 `JSESSIONID` / `mms_b84d1838`（实为「授权店铺 ID 列表」非会话令牌）等。`PddWorkbench.exe` 是 C++ 外壳，通过**原生宿主注入 token/header** 鉴权 webview，这些 token 不落 Cookie 库，**无法被外部进程复制**。仅复制 Cookie 不能免扫码。
+- **改动**：
+  - 新增 [`src/spider/pinduoduo/pdd_desktop_cookies.py`](../src/spider/pinduoduo/pdd_desktop_cookies.py)：桌面端 Cookie 读取/解密/转换模块（含 `get_playwright_cookies` / `pick_best_profile` / `import_cookies_to_context`）
+  - [`src/spider/pinduoduo/client.py`](../src/spider/pinduoduo/client.py)：`PinduoduoClient` 新增 `_import_desktop_cookies()`，并在 `show_login_qrcode`（非 `force_relogin`）前调用；注入后若仍在登录页会再尝试跳 ERP 验证会话
+  - [`src/config.py`](../src/config.py)：新增 `PDD_DESKTOP_COOKIE_IMPORT`（**默认 0/关**）、`PDD_DESKTOP_USER_DATA_DIR`、`PDD_DESKTOP_PROFILE`
+  - [`.env.example`](../.env.example)：新增「拼多多桌面客户端 Cookie 复用（实验性，默认关）」配置段
+  - 新增脚本 `scripts/read_pdd_cookies.py` / `scan_pdd_profiles.py` / `test_pdd_cookies.py` / `test_import_cookies_e2e.py` / `dump_pdd_cookies.py` / `dump_all_domains.py` / `find_pdd_ua.py`（调研用，可留作运维诊断）
+- **保留原因**：模块本身（DPAPI 解密 + Cookie 转换）是可复用基础设施；后续若走「共享 profile」方案（让 Playwright 直接用桌面端 User Data 目录，需关闭桌面端避免锁）仍可复用，故保留代码但默认关闭，不影响现有扫码流程
+- **后续可选方向**：① 共享桌面端 profile（需关桌面端，有状态冲突风险）；② 继续优化扫码登录稳定性；③ 用桌面端原生协议（需逆向，成本高）
+
+## 2026-08-04 - 拼多多扫码：出现「扫码成功」仍跳回登录页
+
+- **日志证据**：曾打出「登录页已出现扫码成功提示」并 `goto /home`，随后 URL 变成 `login/?redirectUrl=.../home`，说明会话未真正建立就被拦回。
+- **原因**：「扫码成功」多半只表示手机已扫、还需在 APP **确认登录**；此前把该文案当成已登录并立刻跳首页，会冲掉登录流程。
+- **修复**：区分「已扫码待确认」与「登录成功/正在跳转」；前者只等待页面/其它标签自然跳转，不急着 `goto home`；跳转后若仍在 login 打明确 warning。二维码确认为页面 `.qr-code canvas` 截图。
+
+## 2026-08-04 - 拼多多「重新登录」与二维码来源说明
+
+- **二维码来源**：`show_login_qrcode` 对 **Playwright 内置 Chromium** 登录页截图（优先 `.qr-code canvas`），base64 给 Web 展示；与 APP 扫码会话绑定的是该后台窗口，不是用户桌面上的别的浏览器。
+- **重新登录无效**：原逻辑只 `goto` 首页，Cookie 有效时直接 `ALREADY_LOGGED_IN`、不展示二维码；且与「刷新列表」共用单线程浏览器池，请求排队时按钮像没反应。
+- **修复**：`POST /api/pinduoduo/login` 默认 `force: true`，打开 ERP 审核页/登录 URL 拉登录页；`ensure_visible`；超时 120s；前端点击即显示「正在打开登录页…」并提示勿与刷新并发。
+
+## 2026-08-04 - 拼多多扫码登录：确认后前端无反应
+
+- **现象**：APP 扫码并确认后，助手页仍显示「等待扫码」。
+- **原因**：登录判定用整段 URL 含 `login` 即视为未登录；扫码成功后页面常短暂停在 `/login`，或只出现「扫码成功」文案未立刻跳转，轮询 `check_login_complete` 一直返回 `logged_in: false`。
+- **修复**：`client.py` 改为按 **pathname** 判断是否登录页；识别登录页「扫码成功」等文案后 **主动 `goto` 商家首页**；放宽已登录路径（`/erp/`、`/orders` 等）；`GET /check_login_complete` 单次请求内 **最多轮询约 8s** 等待跳转。
+
 ## 2026-08-03 - 安特滑块截图识图后自动删除
 
 - 每轮 attempt 在 Nest 识图/拖动流程结束后（`finally`）调用 `_remove_captcha_shot`，默认删除 `captcha_*.png`，避免 `antexiadan/captcha` 堆积。
