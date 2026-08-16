@@ -162,33 +162,30 @@ _CAPTCHA_SYSTEM_JSON = (
 
 
 def _estimate_distance_with_agent(screenshot_path: Path, attempt: int) -> Optional[int]:
-    from integrations.nest_client import nest_ai_chat, resolve_nest_api_base
+    from ai import ask_vision
 
     try:
         from config import Config
 
-        mm_to = int(getattr(Config, 'NEST_CHAT_TIMEOUT_MULTIMODAL', 300) or 300)
+        mm_to = int(getattr(Config, 'BANANA_AI_TIMEOUT_MULTIMODAL', 300) or 300)
     except Exception:
         mm_to = 300
     logger.info(
-        '开始 Nest /ai/chat 识图 attempt=%s base=%s 图=%s（多模态约需 %ss，与 test_nest_chat_local 的 print 不同，请看本行及 integrations.nest_client 日志）',
+        '开始 Banana Agent 识图 attempt=%s 图=%s（多模态约需 %ss）',
         attempt,
-        resolve_nest_api_base(),
         screenshot_path.name,
         mm_to,
     )
     t0 = time.time()
     try:
-        image_bytes = screenshot_path.read_bytes()
-        result = nest_ai_chat(
-            user_text=_captcha_user_prompt(attempt),
-            system_prompt=_CAPTCHA_SYSTEM_JSON,
-            image_bytes=image_bytes,
-            image_mime='image/png',
-            timeout=120,
+        result = ask_vision(
+            _captcha_user_prompt(attempt),
+            screenshot_path,
+            system=_CAPTCHA_SYSTEM_JSON,
+            max_tokens=200,
         )
         logger.info(
-            'Nest /ai/chat 识图完成 attempt=%s 耗时=%.1fs 回复: %s',
+            'Banana Agent 识图完成 attempt=%s 耗时=%.1fs 回复: %s',
             attempt,
             time.time() - t0,
             (result or '')[:300],
@@ -196,7 +193,7 @@ def _estimate_distance_with_agent(screenshot_path: Path, attempt: int) -> Option
         return _parse_distance(result or '')
     except Exception as e:
         logger.error(
-            'Nest /ai/chat 识图失败 attempt=%s 耗时=%.1fs: %s',
+            'Banana Agent 识图失败 attempt=%s 耗时=%.1fs: %s',
             attempt,
             time.time() - t0,
             e,

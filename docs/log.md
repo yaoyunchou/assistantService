@@ -18,6 +18,48 @@
 - **保留原因**：模块本身（DPAPI 解密 + Cookie 转换）是可复用基础设施；后续若走「共享 profile」方案（让 Playwright 直接用桌面端 User Data 目录，需关闭桌面端避免锁）仍可复用，故保留代码但默认关闭，不影响现有扫码流程
 - **后续可选方向**：① 共享桌面端 profile（需关桌面端，有状态冲突风险）；② 继续优化扫码登录稳定性；③ 用桌面端原生协议（需逆向，成本高）
 
+## 2026-08-04 - AI 接口切换为 Banana Agent（/agent/ask/）
+
+- **背景**：原 AI 调用统一走 Nest `/ai/chat`，鉴权需登录换取 access_token（设备密钥/账号密码/JWT + refresh_token 刷新），链路较重。用户提供新的 Banana Agent 接口，一次问答模式、鉴权简单（`Authorization: Bearer <AK>`），要求全量替换。
+- **新接口**：`POST https://test-sso.bananain.cn/ali-oss/api/v1/agent/ask/`
+  - 纯文本请求体：`{ prompt, system }`
+  - 多模态请求体：`{ prompt, system, images: [{url|dataUrl|base64}] }`
+    - `images[].url`：远程 http(s) URL（**只接受 http(s)，不接受 data URL**）
+    - `images[].dataUrl`：`data:{mime};base64,...`（本地图片转 data URL，带 mime，**推荐**）
+    - `images[].base64`：纯 base64（无前缀）
+  - 响应：`{ "success": true, "result": "..." }`
+  - 鉴权：`Authorization: Bearer <BANANA_AI_AK>`，AK 放 `.env`
+- **改动文件**：
+  - 新增 [`src/ai/banana_client.py`](../src/ai/banana_client.py)：封装 `/agent/ask/`，含 `banana_ask` / `banana_ask_stream` / `_resolve_ak` / `_resolve_api_base` / `_extract_text` / `_image_to_data_url`；多模态按图片来源自动选择 `url`（远程）或 `dataUrl`（本地 base64）字段
+  - 重写 [`src/ai/__init__.py`](../src/ai/__init__.py)：`ask` / `ask_vision` / `ask_stream` / `run_agent` / `run_agent_stream` 全部改走 `banana_client`，移除对 `nest_client.nest_ai_complete` 的依赖
+  - [`src/spider/antexiadan/captcha_solver.py`](../src/spider/antexiadan/captcha_solver.py)：`_estimate_distance_with_agent` 从直接调 `nest_ai_chat` 改为统一走 `ai.ask_vision`（滑块识图）
+  - [`src/config.py`](../src/config.py)：新增 `BANANA_AI_AK` / `BANANA_AI_API_BASE` / `BANANA_AI_TIMEOUT` / `BANANA_AI_TIMEOUT_MULTIMODAL`；Nest 配置项保留但注释改为「非 AI 用途」
+  - [`.env.example`](../.env.example)：新增 Banana Agent 配置段，Nest 段标注「AI 已迁移」
+  - [`src/ai/agent.py`](../src/ai/agent.py)：弃用注释从「转发至 nest_client」改为「转发至 Banana Agent」
+  - 新增 [`src/ai/test_banana_client.py`](../src/ai/test_banana_client.py)：29 项测试（离线解析 + 在线问答/多模态/流式/Agent），全部通过
+  - [`docs/ai/AI接口调用规范.md`](ai/AI接口调用规范.md)：§1 架构、§2 配置、§3 公共 API、§5 协议（Nest `/ai/chat` → Banana `/agent/ask/`）、§7 开发规范全部更新；**新增 §5.5「实测要点与避坑指南」**记录探测确认的接口行为
+- **保留**：`src/ai/client.py`（OpenAI 兼容直连，可选回退）、`src/integrations/nest_client.py`（其他用途）、`src/api/routes/ai_routes.py`（调用公共 API，签名不变，无需改动）
+- **影响范围**：所有 AI 调用点（`notify/filter.py` 的 `ask`、`inventory_sync_job.py` 的 `run_agent`、`captcha_solver.py` 的识图、`ai_routes` 的 HTTP 端点）自动走新接口，业务代码无需改动
+- **配置要求**：部署前在 `.env` 设置 `BANANA_AI_AK=ak_xxx`（用户提供），否则调用抛 `RuntimeError("BANANA_AI_AK 未配置…")`
+- **验证**：
+  - 离线测试：`_extract_text` 对 `{success,result}` / `{data}` / OpenAI `{choices}` / `success:false` 解析正确；`_image_to_data_url` 对 bytes/本地文件/远程 URL/data URL 处理正确；`banana_ask` 请求体构造（纯文本用 prompt/system，多模态用 images[{dataUrl}]，远程 URL 用 images[{url}]）正确
+  - 在线测试：纯文本问答、带 system、流式、run_agent、run_agent+url、多模态识图（bytes/文件/screenshot_b64）、AK 不泄露检查全部通过（29/29）
+  - 多模态传法经探测脚本确认：`images[].url` 只接受 http(s)，本地 base64 必须用 `images[].dataUrl`（或 `base64` 字段），`message` 数组（Nest OpenAI 风格）不被接受；结论已写入 [`docs/ai/AI接口调用规范.md` §5.5](ai/AI接口调用规范.md) 指导后续 AI 调用
+
+## 2026-08-04 - 新增《AI 接口调用规范》文档
+
+- **背景**：项目内 AI 调用分散在 `src/ai/__init__.py`（公共 API）、`src/ai/client.py`（OpenAI 兼容直连）、`src/integrations/nest_client.py`（Nest 网关）三处，新开发接口时缺少统一规范参照。
+- **产出**：新增 [`docs/ai/AI接口调用规范.md`](ai/AI接口调用规范.md)，覆盖以下内容：
+  - 两条调用路径（Nest 网关推荐 / OpenAI 兼容直连）与适用场景
+  - `.env` 配置项清单（`NEST_*` / `AI_*`）与鉴权优先级
+  - Python 公共 API（`ask` / `ask_vision` / `ask_stream` / `run_agent` / `run_agent_stream`）签名与用法
+  - HTTP API（`/api/ai/ask`、`/api/ai/run`、`/api/ai/run-stream`、`/api/ai/sessions`）请求/响应/错误码
+  - Nest `/ai/chat` 底层协议：鉴权流程、请求体（含多模态）、响应解析顺序、错误约定
+  - OpenAI 兼容直连 `LLMClient` 方法表
+  - **新增 AI 接口的开发规范**：实现层选择、命名签名、HTTP 路由、配置项、日志、测试、文档同步
+  - 完整调用示例（业务模块、多模态识图、HTTP 路由、前端 SSE）
+- **影响范围**：仅新增文档，未改动任何源码；后续新增 AI 接口请按 §7 规范执行。
+
 ## 2026-08-04 - 拼多多扫码：出现「扫码成功」仍跳回登录页
 
 - **日志证据**：曾打出「登录页已出现扫码成功提示」并 `goto /home`，随后 URL 变成 `login/?redirectUrl=.../home`，说明会话未真正建立就被拦回。

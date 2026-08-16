@@ -25,6 +25,8 @@
  *   - `window.__PDD_ERP_AUDIT_GOODS_CHECK_ORDER_NOS`：勾选指定订单的 checkbox（不影响数据抓取返回值）
  *     示例：window.__PDD_ERP_AUDIT_GOODS_CHECK_ORDER_NOS = ['260418-239463381311785', '260418-063648581173653']
  *     设为 true 时与 FILTER_ORDER_NOS 联动（即勾选过滤出来的订单）
+ *     对比：当前视口 `td[11]` 平台订单号 normalize 后与 Set 全等（去空白/零宽字符，不是模糊搜）。
+ *     虚拟列表：抓取滚动时同步勾选；未勾完再从顶补扫。触底看 scrollTop 是否还在动，避免 100 单时 DOM 未刷新被误判停掉。
  *   - `window.__PDD_ERP_AUDIT_GOODS_DO_AUDIT`：勾选后自动点击「审核」按钮提交审核，默认 false
  *     ⚠️ 设为 true 会真实提交审核，谨慎使用！
  *
@@ -71,7 +73,9 @@
 
   /** 订单号白名单（null = 不过滤，返回全量） */
   const filterOrderNos = Array.isArray(window.__PDD_ERP_AUDIT_GOODS_FILTER_ORDER_NOS)
-    ? new Set(window.__PDD_ERP_AUDIT_GOODS_FILTER_ORDER_NOS.map((s) => String(s).trim()))
+    ? new Set(
+        window.__PDD_ERP_AUDIT_GOODS_FILTER_ORDER_NOS.map((s) => normalizeOrderNo(s)).filter(Boolean)
+      )
     : null;
 
   /**
@@ -82,7 +86,7 @@
    */
   const checkOrderNosRaw = window.__PDD_ERP_AUDIT_GOODS_CHECK_ORDER_NOS;
   const checkOrderNos = Array.isArray(checkOrderNosRaw)
-    ? new Set(checkOrderNosRaw.map((s) => String(s).trim()))
+    ? new Set(checkOrderNosRaw.map((s) => normalizeOrderNo(s)).filter(Boolean))
     : checkOrderNosRaw === true && filterOrderNos
     ? filterOrderNos
     : null;
@@ -91,10 +95,24 @@
   const doAudit = !!window.__PDD_ERP_AUDIT_GOODS_DO_AUDIT;
 
   const log = [];
-  if (filterOrderNos) {
-    log.push(`订单号过滤模式：只抓 ${[...filterOrderNos].join(', ')}`);
-  }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function normalizeOrderNo(s) {
+    return String(s || '')
+      .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+      .replace(/\s+/g, '')
+      .replace(/[－—–]/g, '-')
+      .trim();
+  }
+
+  if (filterOrderNos) {
+    const nos = [...filterOrderNos];
+    log.push(
+      nos.length > 8
+        ? `订单号过滤模式：只抓 ${nos.length} 个`
+        : `订单号过滤模式：只抓 ${nos.join(', ')}`
+    );
+  }
 
   /* ─── 工具函数 ─── */
 
@@ -113,11 +131,11 @@
     if (!td) return '';
     // 优先取 button-link 内的 span 文本（最精确）
     const link = td.querySelector('[data-testid="beast-core-button-link"] span');
-    if (link) return link.textContent.trim();
+    if (link) return normalizeOrderNo(link.textContent);
     // 兜底：克隆后移除 style 节点再取 innerText
     const clone = td.cloneNode(true);
     clone.querySelectorAll('style').forEach((s) => s.remove());
-    return (clone.innerText || '').trim().split('\n')[0].trim();
+    return normalizeOrderNo((clone.innerText || '').split('\n')[0]);
   }
 
   /**
@@ -369,6 +387,52 @@
     return result;
   }
 
+  function getOrderNoFromRow(row) {
+    const tds = [...row.querySelectorAll('td')];
+    return getOrderNo(tds[ORDER_NO_TD_IDX]);
+  }
+
+  function visibleOrderNoKey() {
+    return [...document.querySelectorAll(ROW_SEL)].map(getOrderNoFromRow).join('|');
+  }
+
+  /**
+   * 当前视口行 vs 待勾选 Set：normalize 后全等才勾。命中且勾上后从 pending 删掉。
+   * 找不到 checkbox 的行先留在 pending，等下一屏虚拟列表重绘再试。
+   * 点击后重新查询 input，避免 React 换节点后仍拿旧 checked=false。
+   */
+  async function checkVisibleAgainstPending(pending, checkResult) {
+    let newlyOk = 0;
+    const allRows = [...document.querySelectorAll(ROW_SEL)];
+    for (const row of allRows) {
+      const orderNo = getOrderNoFromRow(row);
+      if (!orderNo || !pending.has(orderNo)) continue;
+
+      const label = row.querySelector('label[data-testid="beast-core-checkbox"]');
+      if (!label) continue;
+
+      const input = label.querySelector('input');
+      const isChecked = input
+        ? input.checked
+        : label.classList.contains('CBX_active_5-184-0');
+      if (!isChecked) {
+        label.click();
+        await sleep(300);
+      }
+      const labelAfter =
+        row.querySelector('label[data-testid="beast-core-checkbox"]') || label;
+      const inputAfter = labelAfter.querySelector('input');
+      const isCheckedAfter = inputAfter
+        ? inputAfter.checked
+        : labelAfter.classList.contains('CBX_active_5-184-0');
+      if (!isCheckedAfter) continue;
+      pending.delete(orderNo);
+      checkResult.push({ orderNo, ok: true, wasAlreadyChecked: isChecked });
+      newlyOk++;
+    }
+    return newlyOk;
+  }
+
   /* ─── 主流程 ─── */
 
   const tableRoot = document.querySelector(TABLE_ROOT_SEL);
@@ -390,6 +454,9 @@
   }
 
   const rowMap = new Map(); // key → { orderNo, goods }
+  let scrollEl = findTableBodyScrollEl(tableRoot);
+  const checkResult = [];
+  const pendingCheck = checkOrderNos ? new Set(checkOrderNos) : null;
 
   function mergeCurrentRows() {
     const rows = collectRowsFromDom();
@@ -405,37 +472,78 @@
     return added;
   }
 
+  function targetsComplete() {
+    const filterDone = !filterOrderNos || rowMap.size >= filterOrderNos.size;
+    const checkDone = !pendingCheck || pendingCheck.size === 0;
+    return filterDone && checkDone;
+  }
+
   if (!autoScroll) {
     /* 仅抓当前视口 */
     mergeCurrentRows();
+    if (pendingCheck) await checkVisibleAgainstPending(pendingCheck, checkResult);
     log.push(`静态模式：共抓到 ${rowMap.size} 条`);
   } else {
-    /* 自动滚动模式 */
-    const scrollEl = findTableBodyScrollEl(tableRoot);
+    /* 自动滚动模式：抓取同时勾选，避免 100 单只扫到首屏 */
     log.push(scrollEl ? `找到滚动层：${scrollEl.tagName}.${scrollEl.className.slice(0, 40)}` : '未找到独立滚动层，改用 wheel 广播');
 
-    // 先回顶
     if (scrollEl) scrollEl.scrollTop = 0;
     broadcastWheel(tableRoot, -9999);
     await sleep(pauseMs);
 
     mergeCurrentRows();
+    if (pendingCheck) {
+      const n = await checkVisibleAgainstPending(pendingCheck, checkResult);
+      if (n) log.push(`初始视口勾选 ${n} 条，剩余 ${pendingCheck.size}`);
+    }
     log.push(`初始视口：${rowMap.size} 条`);
 
     let staleRounds = 0;
+    let lastVisibleKey = visibleOrderNoKey();
     const viewportH = scrollEl ? scrollEl.clientHeight : window.innerHeight;
     const stepPx = Math.max(100, Math.round(viewportH * stepRatio));
 
     for (let step = 0; step < maxSteps; step++) {
-      // 滚动
-      if (scrollEl) {
-        scrollEl.scrollTop += stepPx;
+      if (targetsComplete()) {
+        log.push(`抓取/勾选目标已齐（step=${step}）`);
+        break;
       }
+
+      const beforeTop = scrollEl ? scrollEl.scrollTop : -1;
+      if (scrollEl) scrollEl.scrollTop += stepPx;
       broadcastWheel(tableRoot, stepPx);
       await sleep(pauseMs);
+      const afterTop = scrollEl ? scrollEl.scrollTop : -1;
+      const vk = visibleOrderNoKey();
+      const moved = scrollEl ? afterTop !== beforeTop : vk !== lastVisibleKey;
+      lastVisibleKey = vk;
 
       const added = mergeCurrentRows();
-      if (added === 0) {
+      if (pendingCheck) {
+        const n = await checkVisibleAgainstPending(pendingCheck, checkResult);
+        if (n) log.push(`step=${step + 1} 勾选 ${n} 条，剩余 ${pendingCheck.size}`);
+      }
+
+      if (targetsComplete()) {
+        log.push(`抓取/勾选目标已齐（step=${step + 1}）`);
+        break;
+      }
+
+      if (filterOrderNos || pendingCheck) {
+        // 白名单中间会隔很多非目标行，不能用「无新抓取」当触底
+        if (!moved) {
+          staleRounds++;
+          if (staleRounds >= 5) {
+            await sleep(Math.max(pauseMs, 800));
+            mergeCurrentRows();
+            if (pendingCheck) await checkVisibleAgainstPending(pendingCheck, checkResult);
+            log.push(`滚动触底（step=${step + 1}，scrollTop 连续未变）`);
+            break;
+          }
+        } else {
+          staleRounds = 0;
+        }
+      } else if (added === 0) {
         staleRounds++;
         if (staleRounds >= 3) {
           log.push(`连续 3 步无新数据，触底停止（step=${step + 1}）`);
@@ -446,51 +554,85 @@
       }
 
       if (step % 10 === 0) {
-        log.push(`step=${step + 1}，累计 ${rowMap.size} 条`);
+        log.push(`step=${step + 1}，累计 ${rowMap.size} 条` +
+          (pendingCheck ? `，待勾选 ${pendingCheck.size}` : ''));
       }
     }
 
     log.push(`滚动完成，共 ${rowMap.size} 条`);
-
-    // 恢复顶部
-    if (restoreScroll) {
-      if (scrollEl) scrollEl.scrollTop = 0;
-      broadcastWheel(tableRoot, -9999);
-    }
   }
 
   /* ─── 构建 rows ─── */
   const rows = [...rowMap.values()];
   log.push(`最终输出 ${rows.length} 条订单数据`);
 
-  /* ─── 勾选 checkbox ─── */
-  const checkResult = [];
-  if (checkOrderNos) {
-    log.push(`开始勾选：目标 ${checkOrderNos.size} 个订单号`);
-    const allRows = [...document.querySelectorAll(ROW_SEL)];
-    for (const row of allRows) {
-      const tds = [...row.querySelectorAll('td')];
-      const linkSpan = tds[ORDER_NO_TD_IDX] &&
-        tds[ORDER_NO_TD_IDX].querySelector('[data-testid="beast-core-button-link"] span');
-      const orderNo = linkSpan ? linkSpan.textContent.trim() : '';
-      if (!orderNo || !checkOrderNos.has(orderNo)) continue;
+  /* ─── 勾选补扫：抓取轮仍有剩余则从顶再滚一轮 ─── */
+  if (pendingCheck && pendingCheck.size) {
+    log.push(`补扫勾选：仍剩 ${pendingCheck.size} 个未勾`);
 
-      const label = row.querySelector('label[data-testid="beast-core-checkbox"]');
-      if (!label) {
-        checkResult.push({ orderNo, ok: false, reason: '未找到 checkbox label' });
-        continue;
-      }
-      // 用 input.checked 判断（比 class 名更可靠，class 名随版本可能变化）
-      const input = label.querySelector('input');
-      const isChecked = input ? input.checked : label.classList.contains('CBX_active_5-184-0');
-      if (!isChecked) {
-        label.click();
-        await sleep(200);
-      }
-      const isCheckedAfter = input ? input.checked : label.classList.contains('CBX_active_5-184-0');
-      checkResult.push({ orderNo, ok: isCheckedAfter, wasAlreadyChecked: isChecked });
+    if (autoScroll) {
+      if (!scrollEl) scrollEl = findTableBodyScrollEl(tableRoot);
+      if (scrollEl) scrollEl.scrollTop = 0;
+      broadcastWheel(tableRoot, -9999);
+      await sleep(pauseMs);
     }
-    log.push(`勾选完成：${checkResult.filter((r) => r.ok).length}/${checkOrderNos.size} 成功`);
+
+    let newlyOk = await checkVisibleAgainstPending(pendingCheck, checkResult);
+    if (newlyOk) log.push(`补扫初始视口勾选 ${newlyOk} 条，剩余 ${pendingCheck.size}`);
+
+    if (pendingCheck.size && autoScroll) {
+      const viewportH = scrollEl ? scrollEl.clientHeight : window.innerHeight;
+      const stepPx = Math.max(100, Math.round(viewportH * stepRatio));
+      let staleRounds = 0;
+      let lastVisibleKey = visibleOrderNoKey();
+
+      for (let step = 0; step < maxSteps && pendingCheck.size; step++) {
+        const beforeTop = scrollEl ? scrollEl.scrollTop : -1;
+        if (scrollEl) scrollEl.scrollTop += stepPx;
+        broadcastWheel(tableRoot, stepPx);
+        await sleep(pauseMs);
+        const afterTop = scrollEl ? scrollEl.scrollTop : -1;
+
+        newlyOk = await checkVisibleAgainstPending(pendingCheck, checkResult);
+        const vk = visibleOrderNoKey();
+        const moved = scrollEl ? afterTop !== beforeTop : vk !== lastVisibleKey;
+        if (newlyOk) {
+          log.push(`补扫 step=${step + 1} 勾选 ${newlyOk} 条，剩余 ${pendingCheck.size}`);
+          staleRounds = 0;
+        } else if (!moved) {
+          staleRounds++;
+          if (staleRounds >= 5) {
+            await sleep(Math.max(pauseMs, 800));
+            newlyOk = await checkVisibleAgainstPending(pendingCheck, checkResult);
+            log.push(`补扫触底（step=${step + 1}）` + (newlyOk ? `，又勾选 ${newlyOk}` : ''));
+            break;
+          }
+        } else {
+          staleRounds = 0;
+        }
+        lastVisibleKey = vk;
+      }
+    }
+  }
+
+  if (pendingCheck) {
+    for (const orderNo of pendingCheck) {
+      checkResult.push({
+        orderNo,
+        ok: false,
+        reason: autoScroll
+          ? '滚动全表后仍未在视口中找到该单号'
+          : '当前视口未找到该单号（AUTO_SCROLL=false）',
+      });
+    }
+    const okCount = checkResult.filter((r) => r.ok).length;
+    log.push(`勾选完成：${okCount}/${checkOrderNos.size} 成功` +
+      (pendingCheck.size ? `，未找到 ${pendingCheck.size} 个` : ''));
+  }
+
+  if (restoreScroll && autoScroll) {
+    if (scrollEl) scrollEl.scrollTop = 0;
+    broadcastWheel(tableRoot, -9999);
   }
 
   /* ─── 提交审核 ─── */

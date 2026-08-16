@@ -332,11 +332,20 @@ class Config:
     # 视觉识图模型（安特滑块等）；DMXAPI 可用 gpt-4o-mini / gemini-2.0-flash 等
     AI_VISION_MODEL = os.getenv('AI_VISION_MODEL', 'gpt-4o-mini').strip()
 
-    # Cursor SDK（已弃用，保留配置项避免旧 .env 报错；AI 统一走 Nest）
+    # Cursor SDK（已弃用，保留配置项避免旧 .env 报错；AI 统一走 Banana Agent）
     CURSOR_API_KEY = os.getenv('CURSOR_API_KEY', '').strip()
     CURSOR_MODEL = os.getenv('CURSOR_MODEL', 'composer-2.5').strip()
 
-    # Nest CMS REST（全项目 AI：/ai/chat、/ai/generate 等）
+    # Banana Agent（全项目 AI：ask / ask_vision / run_agent / 滑块识图 / 库存匹配）
+    # 一次问答模式，鉴权：Authorization: Bearer <AK>
+    BANANA_AI_AK = os.getenv('BANANA_AI_AK', '').strip()
+    BANANA_AI_API_BASE = os.getenv('BANANA_AI_API_BASE', '').strip().rstrip('/')
+    # 纯文本请求超时（秒）
+    BANANA_AI_TIMEOUT = int((os.getenv('BANANA_AI_TIMEOUT') or '120').strip() or '120')
+    # 多模态请求超时（秒）
+    BANANA_AI_TIMEOUT_MULTIMODAL = int((os.getenv('BANANA_AI_TIMEOUT_MULTIMODAL') or '300').strip() or '300')
+
+    # Nest CMS REST（保留：nest_client 其他用途；AI 已迁移至 Banana Agent）
     NEST_API_BASE = os.getenv('NEST_API_BASE', '').strip().rstrip('/')
     NEST_DEVICE_KEY = os.getenv('NEST_DEVICE_KEY', '').strip()
     NEST_USERNAME = os.getenv('NEST_USERNAME', '').strip()

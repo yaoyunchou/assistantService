@@ -1,7 +1,7 @@
 """
 已弃用：本地 Cursor SDK Agent。
 
-`run` / `run_stream` 转发至 `integrations.nest_client`；请优先 `from ai import run_agent`。
+`run` / `run_stream` 转发至 `ai.run_agent`（现走 Banana Agent /agent/ask/）；请优先 `from ai import run_agent`。
 """
 from __future__ import annotations
 
