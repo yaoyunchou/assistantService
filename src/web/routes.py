@@ -64,7 +64,22 @@ def register_web_routes(app, tool_manager: ToolManager):
         
         tool_info = tool.get_info()
         tools_info = tool_manager.get_tools_info()
-        return render_template(tool.get_template_name(), tool=tool_info, tools=tools_info, config=Config)
+        extra = {}
+        if tool_name == 'taobao':
+            from spider.taobao.config import TAOBAO_DATA_DIR, SUMMARY_EXCEL_NAME
+            extra['data_dir'] = str(TAOBAO_DATA_DIR)
+            extra['summary_excel'] = SUMMARY_EXCEL_NAME
+        elif tool_name == 'goofish':
+            from spider.goofish.config import GOOFISH_DATA_DIR, SUMMARY_EXCEL_NAME
+            extra['data_dir'] = str(GOOFISH_DATA_DIR)
+            extra['summary_excel'] = SUMMARY_EXCEL_NAME
+        return render_template(
+            tool.get_template_name(),
+            tool=tool_info,
+            tools=tools_info,
+            config=Config,
+            **extra,
+        )
     
     @app.route('/api/tools')
     def get_tools():

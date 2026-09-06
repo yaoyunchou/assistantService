@@ -50,7 +50,7 @@
 <div class="card">
     <h2 class="card-title">{{ tool.display_name }}</h2>
     <p class="card-desc">
-        数据目录：<code>C:\Users\yao\Desktop\work\电商数据\闲鱼</code>（汇总表 <code>闲鱼商品汇总.xlsx</code>）。<br>
+        数据目录：<code>{{ data_dir or '未配置（请设置 GOOFISH_DATA_DIR）' }}</code>（汇总表 <code>{{ summary_excel or '闲鱼商品汇总.xlsx' }}</code>）。<br>
         登录与发布在<strong>独立 Chromium 窗口</strong>中进行，与拼多多/淘宝共用同一浏览器进程，
         点击操作后会<strong>自动跳转到闲鱼后台</strong>。<br>
         <strong>重要</strong>：必须在如意助手弹出的 <strong>Chromium 窗口</strong>里登录，日常 Chrome 已登录不算数。

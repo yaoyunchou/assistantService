@@ -5,12 +5,17 @@
 """
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 from utils.path_helper import get_safe_data_path
 
-# ── 数据目录（总表 + 单品目录） ──────────────────────────────
-GOOFISH_DATA_DIR = Path(r'C:\Users\yao\Desktop\work\电商数据\闲鱼')
+# ── 数据目录（总表 + 单品目录）；Mac 等需通过 .env 设置 GOOFISH_DATA_DIR ──
+_DEFAULT_GOOFISH_DATA_DIR = (
+    r'C:\Users\yao\Desktop\work\电商数据\闲鱼' if sys.platform == 'win32' else ''
+)
+GOOFISH_DATA_DIR = Path(os.getenv('GOOFISH_DATA_DIR') or _DEFAULT_GOOFISH_DATA_DIR)
 SUMMARY_EXCEL_NAME = '闲鱼商品汇总.xlsx'
 PRODUCT_EXCEL_NAME = '商品信息.xlsx'
 

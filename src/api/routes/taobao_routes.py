@@ -55,9 +55,9 @@ def _prepare_taobao_browser(pool, *, open_url: str | None = None):
     from spider.taobao.config import CATEGORY_URL
     return prepare_taobao_browser(pool, open_url=open_url or CATEGORY_URL)
 
-# 保存根目录
-SAVE_ROOT = Path(r'C:\Users\yao\Desktop\work\电商数据\淘宝')
-SUMMARY_EXCEL = SAVE_ROOT / '淘宝商品汇总.xlsx'
+from spider.taobao.config import TAOBAO_DATA_DIR as SAVE_ROOT, SUMMARY_EXCEL_NAME
+
+SUMMARY_EXCEL = SAVE_ROOT / SUMMARY_EXCEL_NAME
 SUMMARY_MD = SAVE_ROOT / 'README.md'
 
 # 汇总 Excel 列头

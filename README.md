@@ -205,7 +205,8 @@ assistantService/
 
 ### 环境要求
 
-- Windows 10/11 (64位)
+- **Windows 桌面版**：Windows 10/11 (64位)
+- **Mac / Linux Web 控制版**：macOS 12+ 或主流 Linux，Python 3.10+ 推荐
 - Python 3.8 或更高版本
 
 ### 安装步骤
@@ -271,6 +272,8 @@ copy module_config.json.example module_config.json
 
 ### 运行应用
 
+**Windows 桌面版**（托盘 + 原生窗口）：
+
 ```bash
 python src/main.py
 ```
@@ -279,6 +282,36 @@ python src/main.py
 - 会在系统托盘显示图标
 - 自动打开窗口访问 `http://127.0.0.1:8889`
 - 可以通过托盘图标控制应用
+
+**Mac / Linux Web 控制版**（Flask + 系统浏览器，无托盘/pywebview）：
+
+```bash
+cd src
+python -m venv ../venv
+source ../venv/bin/activate   # Windows: ..\venv\Scripts\Activate.ps1
+pip install -r ../requirements.txt
+playwright install chromium
+cp ../.env.example ../.env    # 填入 Nest、飞书等
+
+# Mac 上使用淘宝/闲鱼模块时必填：
+export TAOBAO_DATA_DIR="$HOME/电商数据/淘宝"
+export GOOFISH_DATA_DIR="$HOME/电商数据/闲鱼"
+
+python web.py
+# 浏览器访问 http://127.0.0.1:8887（端口以 PORT / app_config.toml 为准）
+```
+
+说明：
+- 入口为 [`src/web.py`](src/web.py)，不依赖 Windows 注册表与 pywebview
+- Mac 可不安装 `pywebview`、`pystray`（若 `pip install -r requirements.txt` 报错，可跳过这两个包）
+- 拼多多等 Playwright 功能需先执行 `playwright install chromium`
+- `/health` 在非 Windows 上 `startup_enabled` 为 `false`（开机自启仅 Windows 支持）
+
+**开发模式**（热重载，端口 8886）：
+
+```bash
+cd src && python dev.py
+```
 
 ## 使用说明
 

@@ -51,7 +51,7 @@
 <div class="card">
     <h2 class="card-title">{{ tool.display_name }}</h2>
     <p class="card-desc">
-        数据目录：<code>C:\Users\yao\Desktop\work\电商数据\淘宝</code>。
+        数据目录：<code>{{ data_dir or '未配置（请设置 TAOBAO_DATA_DIR）' }}</code>。
         登录与上架会在<strong>独立 Chromium 窗口</strong>中进行。
         本工具与拼多多共用浏览器进程，但点击操作后会<strong>自动跳转到淘宝</strong>。<br>
         <strong>重要</strong>：必须在如意助手弹出的 <strong>Chromium 窗口</strong>里登录，你日常 Chrome 已登录不算数。

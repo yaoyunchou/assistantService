@@ -1,5 +1,18 @@
 # 变更日志
 
+## 2026-09-06 - Mac Web 控制版适配（web.py + 跨平台修复）
+
+- **背景**：在 `feature/mac` 分支上需要在 macOS 以纯 Web 方式运行（Flask + 系统浏览器），不依赖 pywebview / pystray / Windows 注册表。
+- **新增**：[`src/web.py`](../src/web.py) Web 控制版入口：Flask 线程 + 自动打开浏览器，禁用托盘、原生窗口、单实例锁、开机自启。
+- **跨平台**：
+  - [`src/utils/startup.py`](../src/utils/startup.py)：非 Windows 提供 no-op stub，解除 `health.py` import `winreg` 崩溃
+  - [`src/utils/browser_path.py`](../src/utils/browser_path.py)：支持 macOS `chrome-mac*` / `Chromium.app` 与 `~/Library/Caches/ms-playwright` 回退；支持 `PLAYWRIGHT_CHROME_EXECUTABLE_PATH`
+  - [`src/spider/query_manager.py`](../src/spider/query_manager.py)：Mac 使用 Macintosh User-Agent
+  - [`src/app.py`](../src/app.py)：Playwright 安装提示改为跨平台 `python -m playwright install chromium`
+- **电商数据目录**：[`taobao/config.py`](../src/spider/taobao/config.py)、[`goofish/config.py`](../src/spider/goofish/config.py) 支持 `.env` 的 `TAOBAO_DATA_DIR` / `GOOFISH_DATA_DIR`（Mac 必填）；[`taobao_routes.py`](../src/api/routes/taobao_routes.py) 复用 config 常量；工具页模板动态展示路径
+- **文档**：[`README.md`](../README.md) 新增 Mac Web 控制版章节；[`.env.example`](../.env.example) 补充数据目录说明
+- **Mac 启动**：`cd src && python web.py`；淘宝/闲鱼需配置 `TAOBAO_DATA_DIR`、`GOOFISH_DATA_DIR`；首次需 `playwright install chromium`
+
 ## 2026-08-06 - 拼多多桌面端 Cookie 复用调研（结论：不可行，保留代码默认关闭）
 
 - **背景**：用户希望复用拼多多桌面客户端（`C:\Program Files (x86)\pinduoduo\PddWorkbench.exe`，内嵌 Chromium）的登录态，让助手每次进 ERP 时免扫码。

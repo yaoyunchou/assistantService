@@ -94,11 +94,23 @@ class BrowserPool:
         chrome_executable_path = get_chrome_executable_path()
         user_data_dir = self._shared_user_data_dir
         user_data_dir.mkdir(parents=True, exist_ok=True)
+        if sys.platform == 'darwin':
+            user_agent = (
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/131.0.0.0 Safari/537.36'
+            )
+        else:
+            user_agent = (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/131.0.0.0 Safari/537.36'
+            )
         args = {
             'user_data_dir': str(user_data_dir),
             'headless': self.headless,
             'no_viewport': True,
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            'user_agent': user_agent,
             'locale': 'zh-CN',
             'timezone_id': 'Asia/Shanghai',
             'permissions': ['geolocation', 'notifications'],

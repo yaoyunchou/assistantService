@@ -6,7 +6,7 @@ import os
 import json
 from pathlib import Path
 
-# 全局变量：存储 chrome.exe 路径
+# 全局变量：存储 Chromium 可执行文件路径
 CHROME_EXECUTABLE_PATH = None
 
 
@@ -27,16 +27,46 @@ def _get_playwright_expected_revision() -> str | None:
 
 
 def _find_chrome_in_dir(chromium_dir: Path) -> str | None:
-    """在指定 chromium 目录中查找 chrome.exe，返回路径字符串或 None"""
-    candidates = [
-        chromium_dir / 'chrome-win64' / 'chrome.exe',
-        chromium_dir / 'chrome-win' / 'chrome.exe',
-        chromium_dir / 'chrome-headless-shell-win64' / 'chrome-headless-shell.exe',
-    ]
+    """在指定 chromium 目录中查找 Chromium 可执行文件，返回路径字符串或 None"""
+    if sys.platform == 'darwin':
+        candidates = [
+            chromium_dir / 'chrome-mac-arm64' / 'Chromium.app' / 'Contents' / 'MacOS' / 'Chromium',
+            chromium_dir / 'chrome-mac' / 'Chromium.app' / 'Contents' / 'MacOS' / 'Chromium',
+            chromium_dir / 'chrome-headless-shell-mac-arm64' / 'chrome-headless-shell',
+            chromium_dir / 'chrome-headless-shell-mac' / 'chrome-headless-shell',
+        ]
+    else:
+        candidates = [
+            chromium_dir / 'chrome-win64' / 'chrome.exe',
+            chromium_dir / 'chrome-win' / 'chrome.exe',
+            chromium_dir / 'chrome-headless-shell-win64' / 'chrome-headless-shell.exe',
+        ]
     for p in candidates:
         if p.exists():
             return str(p.resolve())
     return None
+
+
+def _flat_chrome_candidates(base_dir: Path) -> list[Path]:
+    """扁平布局下的 Chromium 路径候选"""
+    if sys.platform == 'darwin':
+        return [
+            base_dir / 'chrome-mac-arm64' / 'Chromium.app' / 'Contents' / 'MacOS' / 'Chromium',
+            base_dir / 'chrome-mac' / 'Chromium.app' / 'Contents' / 'MacOS' / 'Chromium',
+        ]
+    return [
+        base_dir / 'chrome-win64' / 'chrome.exe',
+        base_dir / 'chrome-win' / 'chrome.exe',
+    ]
+
+
+def _system_playwright_dir() -> Path:
+    """Playwright 默认浏览器缓存目录（按平台）"""
+    if sys.platform == 'darwin':
+        return Path.home() / 'Library' / 'Caches' / 'ms-playwright'
+    if sys.platform == 'win32':
+        return Path.home() / 'AppData' / 'Local' / 'ms-playwright'
+    return Path.home() / '.cache' / 'ms-playwright'
 
 
 def _search_chromium_in(base_dir: Path, expected_revision: str | None) -> str | None:
@@ -44,8 +74,8 @@ def _search_chromium_in(base_dir: Path, expected_revision: str | None) -> str | 
     在 base_dir 中按优先级查找 Chromium：
     1. 与 playwright 期望 revision 精确匹配的目录
     2. revision 最新的目录（数字最大）
-    3. 扁平布局（chrome-win64/chrome.exe）
-    返回找到的 chrome.exe 路径，同时设置 PLAYWRIGHT_BROWSERS_PATH。
+    3. 扁平布局
+    返回找到的可执行路径，同时设置 PLAYWRIGHT_BROWSERS_PATH。
     """
     if not base_dir.exists():
         return None
@@ -78,19 +108,26 @@ def _search_chromium_in(base_dir: Path, expected_revision: str | None) -> str | 
                 os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(base_dir.resolve())
                 return exe
 
-    # 扁平布局：playwright_drivers/chrome-win64/chrome.exe
-    for dirname in ('chrome-win64', 'chrome-win'):
-        flat = base_dir / dirname / 'chrome.exe'
+    for flat in _flat_chrome_candidates(base_dir):
         if flat.is_file():
             os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(base_dir.resolve())
-            return str(flat.resolve())  
+            return str(flat.resolve())
 
     return None
 
 
 def find_chrome_executable():
-    """查找 chrome.exe 路径，优先从 exe 同目录的 playwright_drivers 查找"""
+    """查找 Chromium 可执行路径，优先从 exe 同目录的 playwright_drivers 查找"""
     global CHROME_EXECUTABLE_PATH
+
+    env_override = (os.getenv('PLAYWRIGHT_CHROME_EXECUTABLE_PATH') or '').strip()
+    if env_override:
+        override_path = Path(env_override)
+        if override_path.is_file():
+            CHROME_EXECUTABLE_PATH = str(override_path.resolve())
+            print(f"[BrowserPath] [OK] 使用环境变量 PLAYWRIGHT_CHROME_EXECUTABLE_PATH: {CHROME_EXECUTABLE_PATH}")
+            return CHROME_EXECUTABLE_PATH
+        print(f"[BrowserPath] ⚠ PLAYWRIGHT_CHROME_EXECUTABLE_PATH 无效: {env_override}")
 
     if getattr(sys, 'frozen', False):
         exe_dir = Path(sys.executable).parent
@@ -114,7 +151,7 @@ def find_chrome_executable():
         return CHROME_EXECUTABLE_PATH
 
     # 2. 回退到系统 ms-playwright 目录
-    system_playwright = Path.home() / 'AppData' / 'Local' / 'ms-playwright'
+    system_playwright = _system_playwright_dir()
     print(f"[BrowserPath] 尝试系统 Playwright 目录: {system_playwright}")
     exe = _search_chromium_in(system_playwright, expected_revision)
     if exe:

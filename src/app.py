@@ -134,7 +134,7 @@ def init_browser_pool() -> Optional[BrowserPool]:
         if "Executable doesn't exist" in error_msg or "playwright" in error_msg.lower():
             print("错误：Playwright 浏览器驱动未安装")
             print("\n请运行以下命令安装浏览器驱动：")
-            print("  venv\\Scripts\\python.exe -m playwright install chromium")
+            print("  python -m playwright install chromium")
             print("或者：")
             print("  playwright install chromium")
         else:
